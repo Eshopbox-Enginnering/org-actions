@@ -1,0 +1,106 @@
+name: AI Code Review (Codex)
+
+on:
+  workflow_call:
+    inputs:
+      ai_model:
+        description: AI model to use
+        required: false
+        default: gpt-4o-mini
+        type: string
+      temperature:
+        description: Sampling temperature
+        required: false
+        default: "0.3"
+        type: string
+      approve_reviews:
+        description: Auto-approve if no issues
+        required: false
+        default: "false"
+        type: string
+      max_comments:
+        description: Max comments per run
+        required: false
+        default: "25"
+        type: string
+      project_context:
+        description: Short project context
+        required: false
+        default: "This is a Java Spring Boot backend project"
+        type: string
+      context_files:
+        description: Comma-separated files for extra context
+        required: false
+        default: "pom.xml,README.md"
+        type: string
+      exclude_patterns:
+        description: Glob patterns to exclude
+        required: false
+        default: "**/*.md,**/*.json,**/dist/**,**/target/**,**/build/**,**/*.class"
+        type: string
+      check_src_dir:
+        description: Directory to check for changes
+        required: false
+        default: "src/"
+        type: string
+    secrets:
+      AI_REVIEW_CODEX:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai_review:
+    name: AI Code Review
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if relevant source changed
+        id: changes
+        shell: bash
+        run: |
+          git fetch origin "${{ github.base_ref }}" --quiet
+          if git diff --quiet "origin/${{ github.base_ref }}" HEAD -- "${{ inputs.check_src_dir }}"; then
+            echo "no_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run AI Code Review
+        id: ai_review
+        if: steps.changes.outputs.no_changes == 'false'
+        uses: Eshopbox-Enginnering/ai-codereviewer@main
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_PROVIDER: openai
+          AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
+          AI_MODEL: ${{ inputs.ai_model }}
+          AI_TEMPERATURE: ${{ inputs.temperature }}
+          APPROVE_REVIEWS: ${{ inputs.approve_reviews }}
+          MAX_COMMENTS: ${{ inputs.max_comments }}
+          PROJECT_CONTEXT: ${{ inputs.project_context }}
+          CONTEXT_FILES: ${{ inputs.context_files }}
+          EXCLUDE_PATTERNS: ${{ inputs.exclude_patterns }}
+
+      - name: Fail if AI review posted issues
+        if: |
+          steps.changes.outputs.no_changes == 'false' &&
+          ( failure() ||
+            contains(steps.ai_review.outputs.log || '', 'insufficient_quota') ||
+            contains(steps.ai_review.outputs.log || '', 'RateLimitError') ||
+            contains(steps.ai_review.outputs.log || '', 'quota') ||
+            contains(steps.ai_review.outputs.log || '', 'error')
+          )
+        run: exit 1
+
+      - name: Skip log message
+        if: steps.changes.outputs.no_changes == 'true'
+        run: echo "✅ No relevant code changes — skipping AI review."

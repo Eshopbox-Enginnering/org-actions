@@ -1,0 +1,39 @@
+name: Java SonarQube Scan (Manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Maven Packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Run SonarQube Scanner via Maven
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          mvn clean install -DskipTests=true
+          mvn sonar:sonar \
+            -Dsonar.projectKey=$REPO_NAME \
+            -Dsonar.host.url=${{ vars.SONAR_HOST_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.sourceEncoding=UTF-8 \
+            -Dsonar.exclusions=**/target/**,**/test/**,**/*.md,**/*.json,**/generated-sources/**
