@@ -9,7 +9,7 @@ Centralized repository hosting reusable **GitHub Actions** and **workflows** for
 ## Repository Structure
 
 ```
-.github/                     # org-level repo named exactly ".github"
+.github/                     # org-level repo
 └─ workflows/                # reusable workflows (called via workflow_call)
    ├─ ai-code-review.yml
    ├─ check-commits-in-staging.yml
@@ -20,39 +20,108 @@ Centralized repository hosting reusable **GitHub Actions** and **workflows** for
 
 ---
 
-## Available Workflows
+## What Each Repo Must Add (caller workflows)
+
+Add the following YAML files to **every repository** that should use the org-level automations. These “caller” files trigger and delegate to the reusable workflows in `Eshopbox-Enginnering/org-actions`.
+
+> Replace `@master` with a tag like `@v1` once you create a stable release.
 
 ### 1) Codex AI Code Review
 
-* Runs AI-powered review on pull requests.
-* Skips when no relevant changes are detected under configured source directories.
-* Requires org secret: `AI_REVIEW_CODEX` (OpenAI API key).
+Create: `.github/workflows/ai-code-review.yml`
 
-### 2) Check Commits in Staging
+```yaml
+name: Codex AI Code Review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - 'feature/*'
+      - 'Feature/*'
+      - 'FEATURE/*'
+      - staging
+      - master
+      - main
 
-* Ensures all commits going into `master` or `main` are already present in `staging`.
-* Prevents bypassing the staging branch.
+jobs:
+  review:
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/ai-code-review.yml@master
+    permissions: inherit
+    secrets: inherit
+    with:
+      ai_model: gpt-4o-mini
+      temperature: "0.3"
+      approve_reviews: "false"
+      max_comments: "25"
+      project_context: "This is a Java Spring Boot backend project"
+      context_files: "pom.xml,README.md"
+      exclude_patterns: "**/*.md,**/*.json,**/dist/**,**/target/**,**/build/**,**/*.class"
+      check_src_dir: "src/"
+```
 
-### 3) Sonar Java
-
-* Runs a SonarQube scan for Java projects.
-* Uses Java 17 and Maven with dependency caching.
-* Requires org secrets: `SONAR_HOST_URL`, `SONAR_TOKEN`.
+**Required org secret:** `AI_REVIEW_CODEX`
 
 ---
 
-## Permissions & Security
+### 2) Check PR Commits Exist in `staging`
 
-* Use `permissions: inherit` in caller workflows and configure least-privilege at the repo level.
-* Store required secrets once at the **org level** (`AI_REVIEW_CODEX`, `SONAR_TOKEN`, `SONAR_HOST_URL`).
-* Restrict who can edit this org-level repo since changes impact all consuming repos.
+Create: `.github/workflows/check-commits-in-staging.yml`
+
+```yaml
+name: check-commits-in-staging
+on:
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  check:
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/check-commits-in-staging.yml@master
+    permissions: read-all
+    with:
+      compare_branch: staging
+```
+
+**Ruleset:** Target branches `master` and `main`, and **Require status checks to pass** → add `check-commits-in-staging` (exact job name shown on PRs).
 
 ---
 
-## Versioning Guidance
+### 3) Sonar Java (Manual Scan)
 
-* Pin to a stable tag (e.g., `@v1`) once workflows stabilize.
-* Use branch protection and required checks to enforce adoption across repos.
+Create: `.github/workflows/sonar-java.yml`
+
+```yaml
+name: SonarQube Scan (Java)
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_key:
+        description: "Sonar project key (optional)"
+        required: false
+      maven_args:
+        description: "Extra Maven args (optional)"
+        required: false
+
+jobs:
+  sonar:
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/sonar-java.yml@master
+    permissions: read-all
+    secrets: inherit
+    with:
+      project_key: ${{ inputs.project_key }}
+      maven_args: ${{ inputs.maven_args }}
+```
+
+**Required org secrets:** `SONAR_HOST_URL`, `SONAR_TOKEN`
+
+---
+
+## Notes & Recommendations
+
+* **Secrets at org level:** `AI_REVIEW_CODEX`, `SONAR_HOST_URL`, `SONAR_TOKEN`.
+* **Permissions:** prefer `permissions: inherit` and configure least-privilege per repo.
+* **Ruleset:** set target branches to `master` and `main`; require the status check from the staging gate job.
+* **Versioning:** once stable, tag this repo and switch callers to `@v1`.
 
 ---
 
