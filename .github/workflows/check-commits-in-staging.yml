@@ -54,6 +54,7 @@ jobs:
         if: failure() && steps.verify.outputs.pr_commits != ''
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.PR_COMMENT_TOKEN || github.token }}
           script: |
             const missing = `${{ steps.verify.outputs.pr_commits }}`;
             const compare = process.env.COMPARE;
