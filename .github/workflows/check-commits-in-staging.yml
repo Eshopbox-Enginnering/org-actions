@@ -32,6 +32,7 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
           COMPARE: ${{ inputs.compare_branch || 'staging' }}
+          REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
@@ -42,9 +43,14 @@ jobs:
 
           if [ -n "${PR_COMMITS:-}" ]; then
             echo "::error::❌ The following commits are not in ${COMPARE}:"
-            echo "$PR_COMMITS" | sed 's/^/ - /'
 
-            # set multi-line output
+            while IFS= read -r commit; do
+              SHORT_SHA=$(echo "$commit" | cut -c1-7)
+              URL="https://github.com/$REPO/commit/$commit"
+              echo "::error file=Commit::$SHORT_SHA::Missing in $COMPARE → $URL"
+            done <<< "$PR_COMMITS"
+
+            # keep raw SHAs in the output
             {
               echo "pr_commits<<EOF"
               echo "$PR_COMMITS"
