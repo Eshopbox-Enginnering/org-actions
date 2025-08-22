@@ -1,0 +1,59 @@
+name: Block WIP to Feature PRs Over 200 Lines
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches:
+      - 'feature/*'
+      - 'Feature/*'
+      - 'FEATURE/*'
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  restrict-large-wip-pr:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt update
+          sudo apt install -y gh jq
+
+      - name: Check WIP source to Feature target PR size
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          HEAD_BRANCH=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH")
+          BASE_BRANCH=$(jq -r .pull_request.base.ref "$GITHUB_EVENT_PATH")
+          echo "Source branch: $HEAD_BRANCH"
+          echo "Target branch: $BASE_BRANCH"
+
+          HEAD_BRANCH_LOWER=$(echo "$HEAD_BRANCH" | tr '[:upper:]' '[:lower:]')
+          BASE_BRANCH_LOWER=$(echo "$BASE_BRANCH" | tr '[:upper:]' '[:lower:]')
+
+          if [[ "$HEAD_BRANCH_LOWER" == wip/* && "$BASE_BRANCH_LOWER" == feature/* ]]; then
+            echo "WIP → Feature PR detected. Checking changed lines..."
+            git fetch origin $BASE_BRANCH
+            CHANGED_LINES=$(git diff --numstat origin/$BASE_BRANCH | \
+            grep -vE '\.spec\.ts$|\.stories\.ts$|\.md$|\.lock$|\.yml$|\.yaml$|\.json$' | \
+            awk '{added += $1; deleted += $2} END {print added + deleted}')
+            echo "Total changed lines: $CHANGED_LINES"
+
+            pr_number=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
+            repo="${{ github.repository }}"
+
+            if [ "$CHANGED_LINES" -gt 200 ]; then
+              echo "PR rejected: WIP → Feature PR exceeds 200 lines."
+              gh pr comment "$pr_number" --repo "$repo" --body "🚫 PR blocked: WIP → Feature PR exceeds 200 lines. Total changed lines: **$CHANGED_LINES**."
+              exit 1
+            else
+              echo "PR allowed: Line count within limit."
+              gh pr comment "$pr_number" --repo "$repo" --body "✅ WIP → Feature PR allowed. Total changed lines: **$CHANGED_LINES**."
+            fi
+          else
+            echo "Not a WIP → Feature PR. Skipping line count check."
+          fi
