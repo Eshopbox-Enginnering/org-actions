@@ -17,7 +17,7 @@ on:
 
 jobs:
   check-commits:
-    if: ${{ contains(fromJson('["master","main"]'), github.base_ref) }}
+    if: ${{ contains('master,main', github.base_ref) }}
     runs-on: ubuntu-latest
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
@@ -38,25 +38,38 @@ jobs:
           set -euo pipefail
           echo "Base: $BASE | Compare: $COMPARE"
           git fetch origin "$COMPARE" --quiet
+          git fetch origin "$BASE" --quiet
 
-          PR_COMMITS=$(git log "origin/${COMPARE}..HEAD" --pretty=format:"%H" || true)
+          # Get only PR commits (from base..head)
+          PR_COMMITS=$(git log origin/${BASE}..HEAD --pretty=format:"%H" || true)
 
-          if [ -n "${PR_COMMITS:-}" ]; then
+          echo "Commits in PR:"
+          echo "$PR_COMMITS"
+
+          MISSING=""
+          for commit in $PR_COMMITS; do
+            if ! git branch --remotes --contains "$commit" | grep -q "origin/${COMPARE}"; then
+              MISSING+="$commit"$'\n'
+            fi
+          done
+
+          if [ -n "${MISSING:-}" ]; then
             echo "::error::❌ The following commits are not in ${COMPARE}:"
 
             while IFS= read -r commit; do
               SHORT_SHA=$(echo "$commit" | cut -c1-7)
               URL="https://github.com/$REPO/commit/$commit"
               echo "::error file=Commit::$SHORT_SHA::Missing in $COMPARE → $URL"
-            done <<< "$PR_COMMITS"
+            done <<< "$MISSING"
 
+            # keep raw SHAs in the output
             {
               echo "pr_commits<<EOF"
-              echo "$PR_COMMITS"
+              echo "$MISSING"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
 
             exit 1
           else
-            echo "✅ All commits are present in ${COMPARE}"
+            echo "✅ All PR commits are already in ${COMPARE}"
           fi
