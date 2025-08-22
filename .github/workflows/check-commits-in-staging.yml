@@ -12,12 +12,21 @@ on:
       pr_commits:
         description: "List of commits missing in compare branch"
         value: ${{ jobs.check-commits.outputs.pr_commits }}
+
   pull_request:
-    branches: [ master, main ]
+    branches:
+      - main
+      - master
+      - Master
+      - Main
+
+  push:
+    branches:
+      - staging
 
 jobs:
   check-commits:
-    if: ${{ contains('master,main', github.base_ref) }}
+    if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
@@ -31,19 +40,20 @@ jobs:
         name: Verify all PR commits exist in compare branch
         env:
           BASE: ${{ github.base_ref }}
+          SOURCE: ${{ github.event.pull_request.head.ref }}
           COMPARE: ${{ inputs.compare_branch || 'staging' }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Base: $BASE | Compare: $COMPARE"
+          echo "Base: $BASE | Source: $SOURCE | Compare: $COMPARE"
           git fetch origin "$COMPARE" --quiet
-          git fetch origin "$BASE" --quiet
+          git fetch origin "$SOURCE" --quiet
 
-          # Get only PR commits (from base..head)
-          PR_COMMITS=$(git log origin/${BASE}..HEAD --pretty=format:"%H" || true)
+          # Get commits unique to source branch compared to staging
+          PR_COMMITS=$(git log origin/${COMPARE}..origin/${SOURCE} --pretty=format:"%H" || true)
 
-          echo "Commits in PR:"
+          echo "Commits in PR source branch not in $COMPARE yet:"
           echo "$PR_COMMITS"
 
           MISSING=""
@@ -54,16 +64,13 @@ jobs:
           done
 
           if [ -n "${MISSING:-}" ]; then
-            # Print header ONCE before listing commits
             echo "::error::❌ The following commits are not in ${COMPARE}:"
-
             while IFS= read -r commit; do
               SHORT_SHA=$(echo "$commit" | cut -c1-7)
               URL="https://github.com/$REPO/commit/$commit"
               echo "::error file=Commit::$SHORT_SHA::${SHORT_SHA} missing in $COMPARE → $URL"
             done <<< "$MISSING"
 
-            # keep raw SHAs in the output
             {
               echo "pr_commits<<EOF"
               echo "$MISSING"
