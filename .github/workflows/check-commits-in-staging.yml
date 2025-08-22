@@ -41,14 +41,15 @@ jobs:
           PR_COMMITS=$(git log "origin/${COMPARE}..HEAD" --pretty=format:"%H" || true)
 
           if [ -n "${PR_COMMITS:-}" ]; then
-            echo "::error::These commits are not in ${COMPARE}:"
-            while IFS= read -r commit; do
-              echo "::error::Commit missing in ${COMPARE}: $commit"
-            done <<< "$PR_COMMITS"
+            echo "::error::❌ The following commits are not in ${COMPARE}:"
+            echo "$PR_COMMITS" | sed 's/^/ - /'
 
-            echo "pr_commits<<EOF" >> $GITHUB_OUTPUT
-            echo "$PR_COMMITS" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
+            # set multi-line output
+            {
+              echo "pr_commits<<EOF"
+              echo "$PR_COMMITS"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
 
             exit 1
           else
