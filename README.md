@@ -45,7 +45,7 @@ on:
 
 jobs:
   review:
-    uses: Eshopbox-Enginnering/org-actions/.github/workflows/ai-code-review.yml@master
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/ai-code-review.yml@main
     permissions: inherit
     secrets: inherit
     with:
@@ -75,7 +75,7 @@ on:
 
 jobs:
   check:
-    uses: Eshopbox-Enginnering/org-actions/.github/workflows/check-commits-in-staging.yml@master
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/check-commits-in-staging.yml@main
     permissions: read-all
     with:
       compare_branch: staging
@@ -104,7 +104,7 @@ on:
 
 jobs:
   sonar:
-    uses: Eshopbox-Enginnering/org-actions/.github/workflows/sonar-java.yml@master
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/sonar-java.yml@main
     permissions: read-all
     secrets: inherit
     with:

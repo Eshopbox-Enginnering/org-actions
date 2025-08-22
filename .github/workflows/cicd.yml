@@ -1,0 +1,11 @@
+name: check-commits-in-staging
+on:
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  check:
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/check-commits-in-staging.yml@main
+    permissions: read-all
+    with:
+      compare_branch: staging
