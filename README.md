@@ -4,6 +4,7 @@
 
 Centralized repository hosting reusable **GitHub Actions** and **workflows** for the Eshopbox organization. Use these to ensure consistent automation, faster onboarding, and easier maintenance across all repositories.
 
+Test code
 ---
 
 ## Repository Structure
