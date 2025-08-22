@@ -17,7 +17,7 @@ on:
 
 jobs:
   check-commits:
-    if: ${{ contains('master,main', github.base_ref) }}
+    if: ${{ contains(fromJson('["master","main"]'), github.base_ref) }}
     runs-on: ubuntu-latest
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
@@ -50,7 +50,6 @@ jobs:
               echo "::error file=Commit::$SHORT_SHA::Missing in $COMPARE → $URL"
             done <<< "$PR_COMMITS"
 
-            # keep raw SHAs in the output
             {
               echo "pr_commits<<EOF"
               echo "$PR_COMMITS"
