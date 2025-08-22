@@ -1,10 +1,8 @@
 # Eshopbox Org-Level Actions & Reusable Workflows
 
-> Jira: [DEVOPS-2719](https://auperator.atlassian.net/browse/DEVOPS-2719)
+> Jira: https://auperator.atlassian.net/browse/DEVOPS-2670 || https://auperator.atlassian.net/browse/DEVOPS-2719
 
 Centralized repository hosting reusable **GitHub Actions** and **workflows** for the Eshopbox organization. Use these to ensure consistent automation, faster onboarding, and easier maintenance across all repositories.
-
-// This is testing dummy line for commit validation
 
 ---
 
@@ -28,7 +26,7 @@ Add the following YAML files to **every repository** that should use the org-lev
 
 > Replace `@master` with a tag like `@v1` once you create a stable release.
 
-### 1) Codex AI Code Review
+### 1) Codex AI Code Review || https://auperator.atlassian.net/browse/DEVOPS-2670
 
 Create: `.github/workflows/ai-code-review.yml`
 
@@ -65,7 +63,7 @@ jobs:
 
 ---
 
-### 2) Check PR Commits Exist in `staging`
+### 2) Check PR Commits Exist in `staging` || https://auperator.atlassian.net/browse/DEVOPS-2687
 
 Create: `.github/workflows/check-commits-in-staging.yml`
 
@@ -87,7 +85,7 @@ jobs:
 
 ---
 
-### 3) Sonar Java (Manual Scan)
+### 3) Sonar Java (Manual Scan) || https://auperator.atlassian.net/browse/DEVOPS-2686
 
 Create: `.github/workflows/sonar-java.yml`
 
