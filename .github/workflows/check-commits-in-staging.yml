@@ -47,17 +47,21 @@ jobs:
         run: |
           set -euo pipefail
           echo "Base: $BASE | Source: $SOURCE | Compare: $COMPARE"
-          git fetch origin "$COMPARE" --quiet
-          git fetch origin "$SOURCE" --quiet
+          git fetch origin "$COMPARE" --quiet || true
+          git fetch origin "$SOURCE" --quiet || true
 
-          # Get commits unique to source branch compared to staging
-          PR_COMMITS=$(git log origin/${COMPARE}..origin/${SOURCE} --pretty=format:"%H" || true)
+          # Get commits unique to source branch compared to staging (remove blanks)
+          PR_COMMITS=$(git log origin/${COMPARE}..origin/${SOURCE} --pretty=format:"%H" | grep -v '^$' || true)
 
           echo "Commits in PR source branch not in $COMPARE yet:"
           echo "$PR_COMMITS"
 
           MISSING=""
           for commit in $PR_COMMITS; do
+            # Skip if empty
+            if [ -z "$commit" ]; then
+              continue
+            fi
             if ! git branch --remotes --contains "$commit" | grep -q "origin/${COMPARE}"; then
               MISSING+="$commit"$'\n'
             fi
@@ -66,6 +70,7 @@ jobs:
           if [ -n "${MISSING:-}" ]; then
             echo "::error::❌ The following commits are not in ${COMPARE}:"
             while IFS= read -r commit; do
+              [ -z "$commit" ] && continue
               SHORT_SHA=$(echo "$commit" | cut -c1-7)
               URL="https://github.com/$REPO/commit/$commit"
               echo "::error file=Commit::$SHORT_SHA::${SHORT_SHA} missing in $COMPARE → $URL"
