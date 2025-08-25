@@ -1,5 +1,4 @@
-# .github/workflows/ai-codereview.yml
-name: Codex AI Code Review
+name: Codex AI Code Review (Angular)
 
 on:
   workflow_call: {}
