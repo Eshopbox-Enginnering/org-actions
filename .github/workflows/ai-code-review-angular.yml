@@ -1,21 +1,13 @@
 name: Codex AI Code Review (Angular)
 
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
-    branches:
-      - 'feature/*'
-      - 'Feature/*'
-      - 'FEATURE/*'
-      - 'staging'
-      - 'main'
+  workflow_call: {}
 
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  # AI Code Review Job
   ai_review:
     name: AI Code Review (GPT-4o-mini)
     if: ${{ !github.event.pull_request.draft }}
@@ -37,6 +29,16 @@ jobs:
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Get changed files list
+        if: steps.changes.outputs.no_changes == 'false'
+        id: files
+        run: |
+          files=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/ \
+            | grep -v -E '\.lock$|\.json$|\.md$|\.spec.ts$|\.ya?ml$|\.svg$|\.png$|\.jpg$|\.jpeg$|\.gif$|\.mp4$|dist/')
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$files" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Run AI Code Review
         if: steps.changes.outputs.no_changes == 'false'
         uses: Eshopbox-Enginnering/ai-codereviewer@main
@@ -52,9 +54,10 @@ jobs:
             This is an Angular (TypeScript) monorepo.
             - Angular 9.1 with SCSS
             - Uses NGRX, Angular Material
-            - Avoid inline styles;
+            - Avoid inline styles
             - Ensure a11y compliance and performance best practices
-          EXCLUDE_PATTERNS: '**/*.lock,**/*.json,**/*.md,**/dist/**,**/*.spec.ts,**/*.yml,**/*.yaml'
+          EXCLUDE_PATTERNS: '**/*.lock,**/*.json,**/*.md,**/dist/**,**/*.spec.ts,**/*.yml,**/*.yaml,**/*.svg,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.mp4'
+          CHUNK_SIZE: 50
 
       - name: Fail if AI review posted issues
         if: |
