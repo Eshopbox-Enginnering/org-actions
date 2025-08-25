@@ -1,0 +1,33 @@
+name: Angular SonarQube Scan (Manual)
+
+on:
+  workflow_dispatch: # Run manually
+
+jobs:
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 14
+
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Run SonarQube Scanner
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          sonar-scanner \
+            -Dsonar.projectKey=$REPO_NAME \
+            -Dsonar.sources=src/app \
+            -Dsonar.host.url=${{ vars.SONAR_HOST_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.exclusions=**/node_modules/**,**/test/**,**/*.spec.ts,**/legacy/**,**/dist/**,**/coverage/**,**/*.js,**/*.d.ts \
+            -Dsonar.typescript.lcov.reportPaths=coverage/lcov.info \
+            -Dsonar.sourceEncoding=UTF-8
