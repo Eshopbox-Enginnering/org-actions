@@ -4,9 +4,12 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
     branches:
-      - 'feature/*'
-      - 'Feature/*'
-      - 'FEATURE/*'
+      # - 'feature/*'
+      # - 'Feature/*'
+      # - 'FEATURE/*'
+      - 'wip/*'
+      - 'Wip/*'
+      - 'WIP/*'
 
 jobs:
   restrict-large-wip-pr:
