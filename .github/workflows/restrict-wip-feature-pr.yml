@@ -8,10 +8,6 @@ on:
       - 'Feature/*'
       - 'FEATURE/*'
 
-# permissions:
-#   pull-requests: write
-#   contents: read
-
 jobs:
   restrict-large-wip-pr:
     runs-on: ubuntu-latest
@@ -24,8 +20,6 @@ jobs:
           sudo apt install -y gh jq
 
       - name: Check WIP source to Feature target PR size
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           HEAD_BRANCH=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH")
           BASE_BRANCH=$(jq -r .pull_request.base.ref "$GITHUB_EVENT_PATH")
@@ -39,21 +33,16 @@ jobs:
             echo "WIP → Feature PR detected. Checking changed lines..."
             git fetch origin $BASE_BRANCH
             CHANGED_LINES=$(git diff --numstat origin/$BASE_BRANCH | \
-            grep -vE '\.spec\.ts$|\.stories\.ts$|\.md$|\.lock$|\.yml$|\.yaml$|\.json$' | \
-            awk '{added += $1; deleted += $2} END {print added + deleted}')
+              grep -vE '\.spec\.ts$|\.stories\.ts$|\.md$|\.lock$|\.yml$|\.yaml$|\.json$' | \
+              awk '{added += $1; deleted += $2} END {print added + deleted}')
             echo "Total changed lines: $CHANGED_LINES"
 
-            pr_number=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
-            repo="${{ github.repository }}"
-
             if [ "$CHANGED_LINES" -gt 200 ]; then
-              echo "PR rejected: WIP → Feature PR exceeds 200 lines."
-              gh pr comment "$pr_number" --repo "$repo" --body "🚫 PR blocked: WIP → Feature PR exceeds 200 lines. Total changed lines: **$CHANGED_LINES**."
+              echo "::error title=PR too large::🚫 WIP → Feature PR exceeds 200 lines (changed: $CHANGED_LINES)."
               exit 1
             else
-              echo "PR allowed: Line count within limit."
-              gh pr comment "$pr_number" --repo "$repo" --body "✅ WIP → Feature PR allowed. Total changed lines: **$CHANGED_LINES**."
+              echo "::notice title=PR allowed::✅ WIP → Feature PR within limit ($CHANGED_LINES changed lines)."
             fi
           else
-            echo "Not a WIP → Feature PR. Skipping line count check."
+            echo "::notice title=Skipped::Not a WIP → Feature PR. Skipping line count check."
           fi
