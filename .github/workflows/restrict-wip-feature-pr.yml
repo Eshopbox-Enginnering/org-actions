@@ -8,9 +8,9 @@ on:
       - 'Feature/*'
       - 'FEATURE/*'
 
-permissions:
-  pull-requests: write
-  contents: read
+# permissions:
+#   pull-requests: write
+#   contents: read
 
 jobs:
   restrict-large-wip-pr:
