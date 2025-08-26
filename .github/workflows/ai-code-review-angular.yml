@@ -9,9 +9,9 @@ permissions:
 
 jobs:
   ai_review:
-    name: AI Code Review (GPT-4o-mini)
+    name: AI Code Review (GPT-5)
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout PR code
@@ -46,7 +46,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER: 'openai'
           AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL: 'gpt-4o-mini'
+          AI_MODEL: 'gpt-5'
           AI_TEMPERATURE: 0.3
           APPROVE_REVIEWS: false
           MAX_COMMENTS: 15
