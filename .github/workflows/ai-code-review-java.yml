@@ -43,7 +43,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER: "openai"
           AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL: "gpt-4o-mini"
+          AI_MODEL: "gpt-5"
           AI_TEMPERATURE: 0.3
           APPROVE_REVIEWS: false
           MAX_COMMENTS: 25
