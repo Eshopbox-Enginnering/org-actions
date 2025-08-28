@@ -1,7 +1,8 @@
+# Reusable workflow (single source of truth). No inputs; all config centralized here.
 name: Codex AI Code Review (Angular)
 
 on:
-  workflow_call: {}
+  workflow_call: {}  # required to allow cross-repo `uses:`
 
 permissions:
   contents: read
@@ -9,9 +10,24 @@ permissions:
 
 jobs:
   ai_review:
-    name: AI Code Review (GPT-5)
-    if: ${{ !github.event.pull_request.draft }}
+    name: AI Code Review
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
+
+    env:
+      AI_PROVIDER: openai
+      AI_MODEL: gpt-4.1
+      AI_TEMPERATURE: "0.3"
+      MAX_COMMENTS: "15"
+      APPROVE_REVIEWS: "false"
+      EXCLUDE_PATTERNS: '**/*.lock,**/*.json,**/*.md,**/dist/**,**/*.spec.ts,**/*.yml,**/*.yaml,**/*.svg,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.mp4'
+      PROJECT_CONTEXT: |
+        This is an Angular (TypeScript) monorepo.
+        - Angular 9.1 with SCSS
+        - Uses NGRX, Angular Material
+        - Avoid inline styles
+        - Ensure a11y compliance and performance best practices
+      CHUNK_SIZE: "50"
 
     steps:
       - name: Checkout PR code
@@ -22,14 +38,14 @@ jobs:
       - name: Check if relevant source code changed
         id: changes
         run: |
-          git fetch origin ${{ github.base_ref }} --quiet
+          git fetch origin ${{ github.base_ref }} --quiet || true
           if git diff --quiet origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Get changed files list
+      - name: Get changed files list (filtered)
         if: steps.changes.outputs.no_changes == 'false'
         id: files
         run: |
@@ -41,23 +57,19 @@ jobs:
 
       - name: Run AI Code Review
         if: steps.changes.outputs.no_changes == 'false'
+        id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER: 'openai'
-          AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL: 'gpt-5'
-          AI_TEMPERATURE: 0.3
-          APPROVE_REVIEWS: false
-          MAX_COMMENTS: 15
-          PROJECT_CONTEXT: |
-            This is an Angular (TypeScript) monorepo.
-            - Angular 9.1 with SCSS
-            - Uses NGRX, Angular Material
-            - Avoid inline styles
-            - Ensure a11y compliance and performance best practices
-          EXCLUDE_PATTERNS: '**/*.lock,**/*.json,**/*.md,**/dist/**,**/*.spec.ts,**/*.yml,**/*.yaml,**/*.svg,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.mp4'
-          CHUNK_SIZE: 50
+          AI_PROVIDER: ${{ env.AI_PROVIDER }}
+          AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}  # org-level secret
+          AI_MODEL: ${{ env.AI_MODEL }}
+          AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
+          APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
+          MAX_COMMENTS: ${{ env.MAX_COMMENTS }}
+          PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
+          EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
+          CHUNK_SIZE: ${{ env.CHUNK_SIZE }}
 
       - name: Fail if AI review posted issues
         if: |
