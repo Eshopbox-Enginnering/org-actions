@@ -58,7 +58,7 @@ jobs:
       - name: Run AI Code Review
         if: steps.changes.outputs.no_changes == 'false'
         id: ai_review
-        uses: Eshopbox-Enginnering/ai-codereviewer@v1
+        uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER: ${{ env.AI_PROVIDER }}
