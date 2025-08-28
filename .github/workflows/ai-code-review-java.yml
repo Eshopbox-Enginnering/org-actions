@@ -1,24 +1,36 @@
 name: Codex AI Code Review (Java)
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
-    branches:
-      - 'feature/*'
-      - 'Feature/*'
-      - 'FEATURE/*'
-      - 'staging'
-      - 'main'
+  workflow_call: {}  # required to allow cross-repo `uses:`
 
 permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: ai-review-java-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   ai_review:
-    name: AI Code Review (GPT-5)
-    if: ${{ !github.event.pull_request.draft }}
+    name: AI Code Review
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
+
+    env:
+      AI_PROVIDER: openai
+      AI_MODEL: gpt-4.1
+      AI_TEMPERATURE: "0.3"
+      MAX_COMMENTS: "15"
+      APPROVE_REVIEWS: "false"
+      EXCLUDE_PATTERNS: '**/*.md,**/*.json,**/target/**,**/build/**,**/*.class,**/*.log'
+      PROJECT_CONTEXT: |
+        This is a Java Spring Boot backend service (Maven).
+        - Enforce null-safety, proper exception handling, and logging best practices (no PII/credentials).
+        - Prefer constructor injection; avoid field injection.
+        - Validate inputs at boundaries; use Bean Validation where appropriate.
+        - Ensure thread-safety and performance for hot paths.
+        - Unit/integration tests should be fast and isolated.
 
     steps:
       - name: Checkout PR code
@@ -26,30 +38,41 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if Java source code changed
+      - name: Check if relevant source code changed
         id: changes
         run: |
-          git fetch origin ${{ github.base_ref }} --quiet
-          if git diff --quiet origin/${{ github.base_ref }} HEAD -- src/; then
+          git fetch origin ${{ github.base_ref }} --quiet || true
+          if git diff --quiet origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Get changed files list (filtered)
+        if: steps.changes.outputs.no_changes == 'false'
+        id: files
+        run: |
+          files=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/ \
+            | grep -v -E '\.lock$|\.json$|\.md$|\.spec.ts$|\.ya?ml$|\.svg$|\.png$|\.jpg$|\.jpeg$|\.gif$|\.mp4$|dist/')
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$files" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Run AI Code Review
         if: steps.changes.outputs.no_changes == 'false'
-        uses: Eshopbox-Enginnering/ai-codereviewer@main  # Your forked version
+        id: ai_review
+        uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER: "openai"
+          AI_PROVIDER: ${{ env.AI_PROVIDER }}
           AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL: "gpt-5"
-          AI_TEMPERATURE: 0.3
-          APPROVE_REVIEWS: false
-          MAX_COMMENTS: 25
-          PROJECT_CONTEXT: "This is a Java Spring Boot backend project"
-          CONTEXT_FILES: "pom.xml,README.md"
-          EXCLUDE_PATTERNS: "**/*.md,**/*.json,**/dist/**,**/target/**,**/build/**,**/*.class"
+          AI_MODEL: ${{ env.AI_MODEL }}
+          AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
+          APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
+          MAX_COMMENTS: ${{ env.MAX_COMMENTS }}
+          PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
+          EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
+          CONTEXT_FILES: ${{ steps.files.outputs.files }}   # only your filtered changed files
 
       - name: Fail if AI review posted issues
         if: |
@@ -65,4 +88,4 @@ jobs:
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
-        run: echo "✅ No relevant Java code changes — skipping AI review."
+        run: echo "✅ No code changes in src/libs/apps — skipping AI review."
