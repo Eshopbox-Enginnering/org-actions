@@ -27,7 +27,6 @@ jobs:
         - Uses NGRX, Angular Material
         - Avoid inline styles
         - Ensure a11y compliance and performance best practices
-      CHUNK_SIZE: "50"
 
     steps:
       - name: Checkout PR code
@@ -62,14 +61,14 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER: ${{ env.AI_PROVIDER }}
-          AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}  # org-level secret
+          AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
           AI_MODEL: ${{ env.AI_MODEL }}
           AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
           APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
           MAX_COMMENTS: ${{ env.MAX_COMMENTS }}
           PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
           EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
-          CHUNK_SIZE: ${{ env.CHUNK_SIZE }}
+          CONTEXT_FILES: ${{ steps.files.outputs.files }}   # only your filtered changed files
 
       - name: Fail if AI review posted issues
         if: |
