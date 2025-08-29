@@ -1,51 +1,61 @@
-name: Block WIP to Feature PRs Over 200 Lines
-
+name: Reusable • Block WIP → Feature ≤200 lines
 on:
-  workflow_call: {}
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
-    branches:
-      # - 'feature/*'
-      # - 'Feature/*'
-      # - 'FEATURE/*'
-      - 'wip/**'
-      - 'Wip/**'
-      - 'WIP/**'
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   restrict-large-wip-pr:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
 
       - name: Install GitHub CLI
+        shell: bash
         run: |
-          sudo apt update
-          sudo apt install -y gh jq
+          sudo apt-get update -y
+          sudo apt-get install -y gh jq
 
-      - name: Check WIP source to Feature target PR size
+      - name: Enforce WIP → Feature ≤200 lines
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
           HEAD_BRANCH=$(jq -r .pull_request.head.ref "$GITHUB_EVENT_PATH")
           BASE_BRANCH=$(jq -r .pull_request.base.ref "$GITHUB_EVENT_PATH")
-          echo "Source branch: $HEAD_BRANCH"
-          echo "Target branch: $BASE_BRANCH"
+          echo "Source (head): $HEAD_BRANCH"
+          echo "Target (base): $BASE_BRANCH"
 
-          HEAD_BRANCH_LOWER=$(echo "$HEAD_BRANCH" | tr '[:upper:]' '[:lower:]')
-          BASE_BRANCH_LOWER=$(echo "$BASE_BRANCH" | tr '[:upper:]' '[:lower:]')
+          hb_l=$(echo "$HEAD_BRANCH" | tr '[:upper:]' '[:lower:]')
+          bb_l=$(echo "$BASE_BRANCH" | tr '[:upper:]' '[:lower:]')
 
-          if [[ "$HEAD_BRANCH_LOWER" == wip/* && "$BASE_BRANCH_LOWER" == feature/* ]]; then
+          if [[ "$hb_l" == wip/* && "$bb_l" == feature/* ]]; then
             echo "WIP → Feature PR detected. Checking changed lines..."
-            git fetch origin $BASE_BRANCH
-            CHANGED_LINES=$(git diff --numstat origin/$BASE_BRANCH | \
-              grep -vE '\.spec\.ts$|\.stories\.ts$|\.md$|\.lock$|\.yml$|\.yaml$|\.json$' | \
-              awk '{added += $1; deleted += $2} END {print added + deleted}')
-            echo "Total changed lines: $CHANGED_LINES"
+            git fetch origin "$BASE_BRANCH" --depth=1 || true
+
+            EXCLUDE_REGEX='(^src/test/)|(/src/test/)|(^dist/)|(^build/)|(^target/)|(^out/)|(^coverage/)|(^storybook-static/)|(\.spec\.ts$)|(\.stories\.ts$)|([Tt]est\.java$)|([Ii][Tt]\.java$)|(\.lock$)|(package-lock\.json$)|(yarn\.lock$)|(pnpm-lock\.yaml$)|(\.md$)|(\.ya?ml$)|(\.json$)'
+
+            CHANGED_LINES=$(git diff --numstat "origin/$BASE_BRANCH...HEAD" \
+              | grep -vE "${EXCLUDE_REGEX}" \
+              | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {a+=$1; d+=$2} END {print (a+d)+0}')
+
+            echo "Total changed lines (after exclusions): $CHANGED_LINES"
+
+            pr_number=$(jq -r .pull_request.number "$GITHUB_EVENT_PATH")
+            repo="${{ github.repository }}"
 
             if [ "$CHANGED_LINES" -gt 200 ]; then
-              echo "::error title=PR too large::🚫 WIP → Feature PR exceeds 200 lines (changed: $CHANGED_LINES)."
+              echo "::error title=PR too large::WIP → Feature exceeds 200 lines (changed: ${CHANGED_LINES})."
+              gh pr comment "$pr_number" --repo "$repo" --body "🚫 **Blocked**: WIP → Feature PR exceeds **200** lines.\n\nChanged lines: **${CHANGED_LINES}**"
               exit 1
             else
-              echo "::notice title=PR allowed::✅ WIP → Feature PR within limit ($CHANGED_LINES changed lines)."
+              echo "::notice title=PR allowed::Within limit (${CHANGED_LINES} ≤ 200)."
+              gh pr comment "$pr_number" --repo "$repo" --body "✅ **Allowed**: WIP → Feature PR within limit.\n\nChanged lines: **${CHANGED_LINES}** (threshold: 200)"
             fi
           else
             echo "::notice title=Skipped::Not a WIP → Feature PR. Skipping line count check."
