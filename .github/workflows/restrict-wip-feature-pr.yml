@@ -51,11 +51,11 @@ jobs:
 
             if [ "$CHANGED_LINES" -gt 200 ]; then
               echo "::error title=PR too large::WIP → Feature exceeds 200 lines (changed: ${CHANGED_LINES})."
-              gh pr comment "$pr_number" --repo "$repo" --body "🚫 **Blocked**: WIP → Feature PR exceeds **200** lines.\n\nChanged lines: **${CHANGED_LINES}**"
+              gh pr comment "$pr_number" --repo "$repo" --body "🚫 **Blocked**: WIP → Feature PR exceeds 200 lines. Changed lines: **$CHANGED_LINES**"
               exit 1
             else
               echo "::notice title=PR allowed::Within limit (${CHANGED_LINES} ≤ 200)."
-              gh pr comment "$pr_number" --repo "$repo" --body "✅ **Allowed**: WIP → Feature PR within limit.\n\nChanged lines: **${CHANGED_LINES}** (threshold: 200)"
+              gh pr comment "$pr_number" --repo "$repo" --body "✅ **Allowed**: WIP → Feature PR within limit. Changed lines: **$CHANGED_LINES** (threshold: 200)"
             fi
           else
             echo "::notice title=Skipped::Not a WIP → Feature PR. Skipping line count check."
