@@ -1,15 +1,16 @@
 name: Block WIP to Feature PRs Over 200 Lines
 
 on:
+  workflow_call: {}
   pull_request:
     types: [opened, edited, synchronize, reopened]
     branches:
       # - 'feature/*'
       # - 'Feature/*'
       # - 'FEATURE/*'
-      - 'wip/*'
-      - 'Wip/*'
-      - 'WIP/*'
+      - 'wip/**'
+      - 'Wip/**'
+      - 'WIP/**'
 
 jobs:
   restrict-large-wip-pr:
