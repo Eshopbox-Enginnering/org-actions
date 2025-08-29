@@ -88,4 +88,4 @@ jobs:
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
-        run: echo "✅ No code changes in src/libs/apps — skipping AI review."
+        run: echo "✅ No relevant Java code changes — skipping AI review."
