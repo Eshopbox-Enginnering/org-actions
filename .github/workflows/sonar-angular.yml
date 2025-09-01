@@ -19,7 +19,7 @@ jobs:
           node-version: 14
 
       - name: Install Dependencies
-        run: npm install --legacy-peer-deps
+        run: npm install --legacy-peer-deps --unsafe-perm=true
 
       - name: Run SonarQube Scanner
         run: |
