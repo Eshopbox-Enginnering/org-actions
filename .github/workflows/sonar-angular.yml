@@ -1,7 +1,8 @@
 name: Angular SonarQube Scan (Manual)
 
 on:
-  workflow_dispatch: # Run manually
+  workflow_call:  # Allow as reusable workflow
+  workflow_dispatch:  # Allow manual run
 
 jobs:
   sonarqube:
