@@ -1,7 +1,7 @@
 name: Codex AI Code Review (Java)
 
 on:
-  workflow_call: {}  # required to allow cross-repo `uses:`
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -19,30 +19,35 @@ jobs:
 
     env:
       AI_PROVIDER: openai
-      AI_MODEL: gpt-4.1
       AI_TEMPERATURE: "0.3"
       MAX_COMMENTS: "15"
       APPROVE_REVIEWS: "false"
-      EXCLUDE_PATTERNS: '**/*.md,**/*.json,**/target/**,**/build/**,**/*.class,**/*.log'
+      # Tighten excludes for Java repos
+      EXCLUDE_PATTERNS: >-
+        **/*.md,**/*.json,**/target/**,**/build/**,**/*.class,**/*.log,
+        **/.mvn/wrapper/**,**/gradle/wrapper/**,**/generated-sources/**,**/build/generated/**,
+        **/*.jar,**/*.war,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.svg,**/*.mp4
       PROJECT_CONTEXT: |
-        This is a Java Spring Boot backend service (Maven).
-        - Enforce null-safety, proper exception handling, and logging best practices (no PII/credentials).
-        - Prefer constructor injection; avoid field injection.
-        - Validate inputs at boundaries; use Bean Validation where appropriate.
-        - Ensure thread-safety and performance for hot paths.
-        - Unit/integration tests should be fast and isolated.
+        Java Spring Boot service (Maven).
+        - Constructor injection; validate inputs.
+        - Handle exceptions carefully; avoid logging secrets/PII.
+        - Thread-safety & perf in hot paths.
+        - Fast, isolated tests.
+
+      # NEW: caps to avoid TPM overflow (~4 chars ≈ 1 token)
+      MAX_TOTAL_BYTES: "120000"   # ~30k tokens total across files
+      MAX_FILE_BYTES:  "30000"    # skip any single file >30k chars
 
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Check if relevant source code changed
         id: changes
         run: |
           git fetch origin ${{ github.base_ref }} --quiet || true
-          if git diff --quiet origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/; then
+          if git diff --quiet origin/${{ github.base_ref }} HEAD -- src/main/java/ src/test/java/ src/main/resources/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
@@ -52,27 +57,67 @@ jobs:
         if: steps.changes.outputs.no_changes == 'false'
         id: files
         run: |
-          files=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/ \
-            | grep -v -E '\.lock$|\.json$|\.md$|\.spec.ts$|\.ya?ml$|\.svg$|\.png$|\.jpg$|\.jpeg$|\.gif$|\.mp4$|dist/')
+          git diff --name-only origin/${{ github.base_ref }} HEAD -- src/main/java/ src/test/java/ src/main/resources/ \
+          | grep -v -E '\.lock$|\.json$|\.md$|\.ya?ml$|\.svg$|\.png$|\.jpe?g$|\.gif$|\.mp4$|^target/|^build/' \
+          > files.txt
           echo "files<<EOF" >> $GITHUB_OUTPUT
-          echo "$files" >> $GITHUB_OUTPUT
+          cat files.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Run AI Code Review
+      - name: Trim files to stay under model limits
         if: steps.changes.outputs.no_changes == 'false'
+        id: trim
+        env:
+          MAX_TOTAL_BYTES: ${{ env.MAX_TOTAL_BYTES }}
+          MAX_FILE_BYTES:  ${{ env.MAX_FILE_BYTES }}
+        run: |
+          set -euo pipefail
+          total=0
+          out=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            # skip deleted/renamed files that don't exist at HEAD
+            [ -f "$f" ] || continue
+            sz=$(wc -c <"$f" | tr -d ' ')
+            # skip any single huge file
+            if [ "$sz" -gt "$MAX_FILE_BYTES" ]; then
+              echo "⏭️  Skipping $f (size $sz > $MAX_FILE_BYTES)"
+              continue
+            fi
+            if [ $((total + sz)) -gt "$MAX_TOTAL_BYTES" ]; then
+              echo "⛔ Reached cap ${MAX_TOTAL_BYTES} bytes; stopping selection."
+              break
+            fi
+            out="${out}${f}\n"
+            total=$((total + sz))
+          done < <(printf "%s\n" "${{ steps.files.outputs.files }}")
+
+          {
+            echo "files<<EOF"
+            printf "%b" "$out"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Selected bytes: $total"
+          if [ -z "$out" ]; then
+            echo "::warning::No files selected after trimming; AI step will be skipped."
+          fi
+
+      - name: Run AI Code Review
+        if: steps.changes.outputs.no_changes == 'false' && steps.trim.outputs.files != ''
         id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER: ${{ env.AI_PROVIDER }}
-          AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL: ${{ env.AI_MODEL }}
+          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          AI_PROVIDER:    ${{ env.AI_PROVIDER }}
+          AI_API_KEY:     ${{ secrets.AI_REVIEW_CODEX }}
+          AI_MODEL:       ${{ vars.AI_MODEL }}
           AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
           APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
-          MAX_COMMENTS: ${{ env.MAX_COMMENTS }}
+          MAX_COMMENTS:   ${{ env.MAX_COMMENTS }}
           PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
           EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
-          CONTEXT_FILES: ${{ steps.files.outputs.files }}   # only your filtered changed files
+          CONTEXT_FILES:  ${{ steps.trim.outputs.files }}
 
       - name: Fail if AI review posted issues
         if: |
