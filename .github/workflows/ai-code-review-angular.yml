@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-java-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ai-review-angular-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -31,6 +31,10 @@ jobs:
         - Avoid inline styles
         - Ensure a11y compliance and performance best practices
 
+      # === Token-safety caps (approx; ~4 chars ≈ 1 token) ===
+      MAX_TOTAL_BYTES: "120000"   # cap total bytes sent across all files (~30k tokens)
+      MAX_FILE_BYTES:  "30000"    # skip any single file >30k bytes
+
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
@@ -51,27 +55,66 @@ jobs:
         if: steps.changes.outputs.no_changes == 'false'
         id: files
         run: |
-          files=$(git diff --name-only origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/ \
-            | grep -v -E '\.lock$|\.json$|\.md$|\.spec.ts$|\.ya?ml$|\.svg$|\.png$|\.jpg$|\.jpeg$|\.gif$|\.mp4$|dist/')
+          git diff --name-only origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/ \
+          | grep -v -E '\.lock$|\.json$|\.md$|\.spec\.ts$|\.ya?ml$|\.svg$|\.png$|\.jpe?g$|\.gif$|\.mp4$|(^|/)dist/' \
+          > files.txt
+
           echo "files<<EOF" >> $GITHUB_OUTPUT
-          echo "$files" >> $GITHUB_OUTPUT
+          cat files.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Run AI Code Review
+      - name: Trim files to stay under model limits
         if: steps.changes.outputs.no_changes == 'false'
+        id: trim
+        env:
+          MAX_TOTAL_BYTES: ${{ env.MAX_TOTAL_BYTES }}
+          MAX_FILE_BYTES:  ${{ env.MAX_FILE_BYTES }}
+        run: |
+          set -euo pipefail
+          total=0
+          out=""
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            [ -f "$f" ] || continue
+            sz=$(wc -c <"$f" | tr -d ' ')
+            if [ "$sz" -gt "$MAX_FILE_BYTES" ]; then
+              echo "⏭️  Skipping $f (size $sz > $MAX_FILE_BYTES)"
+              continue
+            fi
+            if [ $((total + sz)) -gt "$MAX_TOTAL_BYTES" ]; then
+              echo "⛔ Reached cap ${MAX_TOTAL_BYTES} bytes; stopping selection."
+              break
+            fi
+            out="${out}${f}\n"
+            total=$((total + sz))
+          done < <(printf "%s\n" "${{ steps.files.outputs.files }}")
+
+          {
+            echo "files<<EOF"
+            printf "%b" "$out"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Selected bytes: $total"
+          if [ -z "$out" ]; then
+            echo "::warning::No files selected after trimming; AI step will be skipped."
+          fi
+
+      - name: Run AI Code Review
+        if: steps.changes.outputs.no_changes == 'false' && steps.trim.outputs.files != ''
         id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER: ${{ env.AI_PROVIDER }}
-          AI_API_KEY: ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL: ${{ vars.AI_MODEL }}
+          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          AI_PROVIDER:    ${{ env.AI_PROVIDER }}
+          AI_API_KEY:     ${{ secrets.AI_REVIEW_CODEX }}
+          AI_MODEL:       ${{ vars.AI_MODEL }}
           AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
           APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
-          MAX_COMMENTS: ${{ env.MAX_COMMENTS }}
+          MAX_COMMENTS:   ${{ env.MAX_COMMENTS }}
           PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
           EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
-          CONTEXT_FILES: ${{ steps.files.outputs.files }}   # only your filtered changed files
+          CONTEXT_FILES:  ${{ steps.trim.outputs.files }}
 
       - name: Fail if AI review posted issues
         if: |
