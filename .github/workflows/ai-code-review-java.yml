@@ -142,10 +142,10 @@ jobs:
           AI_API_KEY:     ${{ secrets.AI_REVIEW_CODEX }}
           AI_MODEL:       ${{ steps.preflight.outputs.selected_model }}
           AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
-          APPROVE_REVIEWS:${{ env.APPROVE_REVIEWS }}
+          APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
           MAX_COMMENTS:   ${{ env.MAX_COMMENTS }}
-          PROJECT_CONTEXT:${{ env.PROJECT_CONTEXT }}
-          EXCLUDE_PATTERNS:${{ env.EXCLUDE_PATTERNS }}
+          PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
+          EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
 
       - name: Skip AI (payload too large)
         if: steps.preflight.outputs.run_ai != 'true'
