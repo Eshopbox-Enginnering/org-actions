@@ -69,7 +69,7 @@ jobs:
           cat files.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Preflight: estimate token load and choose model
+      - name: Preflight estimate token load and choose model
         if: steps.changes.outputs.no_changes == 'false'
         id: preflight
         env:
