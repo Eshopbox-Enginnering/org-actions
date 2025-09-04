@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-angular-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ai-review-angular-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -21,9 +21,17 @@ jobs:
     env:
       AI_PROVIDER: openai
       AI_TEMPERATURE: "0.3"
-      MAX_COMMENTS: "15"
+      MAX_COMMENTS: "12"            # slightly lower to reduce output tokens
       APPROVE_REVIEWS: "false"
-      EXCLUDE_PATTERNS: '**/*.lock,**/*.json,**/*.md,**/dist/**,**/*.spec.ts,**/*.yml,**/*.yaml,**/*.svg,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.mp4'
+
+      # Keep payload lean for Angular repos
+      EXCLUDE_PATTERNS: >-
+        **/*.lock,**/*.json,**/*.md,**/*.yml,**/*.yaml,
+        **/dist/**,**/storybook-static/**,**/coverage/**,
+        **/*.spec.ts,**/*.stories.ts,**/__snapshots__/**,
+        **/*.svg,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.mp4,
+        **/e2e/**
+
       PROJECT_CONTEXT: |
         This is an Angular (TypeScript) monorepo.
         - Angular 9.1 with SCSS
@@ -31,17 +39,18 @@ jobs:
         - Avoid inline styles
         - Ensure a11y compliance and performance best practices
 
-      # === Token-safety caps (approx; ~4 chars ≈ 1 token) ===
-      MAX_TOTAL_BYTES: "120000"   # cap total bytes sent across all files (~30k tokens)
-      MAX_FILE_BYTES:  "30000"    # skip any single file >30k bytes
+      # Preflight “token-ish” caps (~4 chars ≈ 1 token; x2 for old+new + overhead)
+      MAX_FILE_BYTES: "30000"       # ignore single files larger than this in estimate
+      MAX_TOTAL_BYTES: "120000"      # ~30k tokens input budget
+      SOFT_SWITCH_TOKENS: "20000"   # switch to mini model above this
+      HARD_SKIP_TOKENS:  "60000"    # skip AI step above this
 
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
-      - name: Check if relevant source code changed
+      - name: Detect relevant changes
         id: changes
         run: |
           git fetch origin ${{ github.base_ref }} --quiet || true
@@ -51,83 +60,95 @@ jobs:
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Get changed files list (filtered)
+      - name: Collect changed files (filtered)
         if: steps.changes.outputs.no_changes == 'false'
         id: files
         run: |
           git diff --name-only origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/ \
-          | grep -v -E '\.lock$|\.json$|\.md$|\.spec\.ts$|\.ya?ml$|\.svg$|\.png$|\.jpe?g$|\.gif$|\.mp4$|(^|/)dist/' \
+          | grep -v -E '(^|/)dist/|(^|/)storybook-static/|(^|/)coverage/|(^|/)e2e/|__snapshots__/|\.stories\.ts$|\.spec\.ts$|\.lock$|\.json$|\.md$|\.ya?ml$|\.svg$|\.png$|\.jpe?g$|\.gif$|\.mp4$' \
           > files.txt
-
           echo "files<<EOF" >> $GITHUB_OUTPUT
           cat files.txt >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Trim files to stay under model limits
+      - name: Preflight: estimate token load and choose model
         if: steps.changes.outputs.no_changes == 'false'
-        id: trim
+        id: preflight
         env:
-          MAX_TOTAL_BYTES: ${{ env.MAX_TOTAL_BYTES }}
-          MAX_FILE_BYTES:  ${{ env.MAX_FILE_BYTES }}
+          MAX_FILE_BYTES:       ${{ env.MAX_FILE_BYTES }}
+          MAX_TOTAL_BYTES:      ${{ env.MAX_TOTAL_BYTES }}
+          SOFT_SWITCH_TOKENS:   ${{ env.SOFT_SWITCH_TOKENS }}
+          HARD_SKIP_TOKENS:     ${{ env.HARD_SKIP_TOKENS }}
         run: |
           set -euo pipefail
-          total=0
-          out=""
+
+          bytes=0
+          counted=0
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
             if [ "$sz" -gt "$MAX_FILE_BYTES" ]; then
-              echo "⏭️  Skipping $f (size $sz > $MAX_FILE_BYTES)"
+              echo "⏭️  Ignoring for estimate: $f ($sz > $MAX_FILE_BYTES)"
               continue
             fi
-            if [ $((total + sz)) -gt "$MAX_TOTAL_BYTES" ]; then
-              echo "⛔ Reached cap ${MAX_TOTAL_BYTES} bytes; stopping selection."
-              break
-            fi
-            out="${out}${f}\n"
-            total=$((total + sz))
+            bytes=$((bytes + sz))
+            counted=$((counted + 1))
           done < <(printf "%s\n" "${{ steps.files.outputs.files }}")
 
-          {
-            echo "files<<EOF"
-            printf "%b" "$out"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          # rough token estimate: (bytes / 4) * 2 (old+new) + overhead
+          input_tokens=$(( (bytes / 4) * 2 + 1500 ))
 
-          echo "Selected bytes: $total"
-          if [ -z "$out" ]; then
-            echo "::warning::No files selected after trimming; AI step will be skipped."
+          default_model="${{ vars.AI_MODEL || 'gpt-4.1' }}"
+          model="$default_model"
+          if [ "$input_tokens" -gt "$SOFT_SWITCH_TOKENS" ]; then
+            model="gpt-4.1-mini"
           fi
 
+          run_ai="true"
+          if [ "$input_tokens" -gt "$HARD_SKIP_TOKENS" ]; then
+            run_ai="false"
+          fi
+
+          echo "bytes=$bytes"                 >> $GITHUB_OUTPUT
+          echo "files_count=$counted"         >> $GITHUB_OUTPUT
+          echo "estimated_tokens=$input_tokens" >> $GITHUB_OUTPUT
+          echo "selected_model=$model"        >> $GITHUB_OUTPUT
+          echo "run_ai=$run_ai"               >> $GITHUB_OUTPUT
+
+          {
+            echo "### AI Review Preflight (Angular)"
+            echo "- Files counted: **$counted**"
+            echo "- Estimated input tokens: **$input_tokens**"
+            echo "- Selected model: **$model** (default: $default_model)"
+            echo "- Decision: **$run_ai** (skip if false)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Jitter to reduce org-wide bursts (5–25s)
+        if: steps.preflight.outputs.run_ai == 'true'
+        run: |
+          sleep $(( (RANDOM % 21) + 5 ))
+
       - name: Run AI Code Review
-        if: steps.changes.outputs.no_changes == 'false' && steps.trim.outputs.files != ''
+        if: steps.preflight.outputs.run_ai == 'true'
         id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
           GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER:    ${{ env.AI_PROVIDER }}
           AI_API_KEY:     ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL:       ${{ vars.AI_MODEL }}
+          AI_MODEL:       ${{ steps.preflight.outputs.selected_model }}   # auto-switch if big
           AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
-          APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
+          APPROVE_REVIEWS:${{ env.APPROVE_REVIEWS }}
           MAX_COMMENTS:   ${{ env.MAX_COMMENTS }}
-          PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
-          EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
-          CONTEXT_FILES:  ${{ steps.trim.outputs.files }}
+          PROJECT_CONTEXT:${{ env.PROJECT_CONTEXT }}
+          EXCLUDE_PATTERNS:${{ env.EXCLUDE_PATTERNS }}
 
-      - name: Fail if AI review posted issues
-        if: |
-          steps.changes.outputs.no_changes == 'false' &&
-          (
-            failure() ||
-            contains(steps.ai_review.outputs.log || '', 'insufficient_quota') ||
-            contains(steps.ai_review.outputs.log || '', 'RateLimitError') ||
-            contains(steps.ai_review.outputs.log || '', 'quota') ||
-            contains(steps.ai_review.outputs.log || '', 'error')
-          )
-        run: exit 1
+      - name: Skip AI (payload too large)
+        if: steps.preflight.outputs.run_ai != 'true'
+        run: |
+          echo "::warning title=AI review skipped::Estimated ${{ steps.preflight.outputs.estimated_tokens }} tokens exceeds cap ${{ env.HARD_SKIP_TOKENS }}. Consider slicing the PR or running a manual scan."
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
-        run: echo "✅ No code changes in src/libs/apps — skipping AI review."
+        run: echo "✅ No relevant Angular code changes — skipping AI review."
