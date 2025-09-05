@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   restrict-large-wip-pr:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       # Normal cap
       MAX_CHANGED_LINES: "200"
