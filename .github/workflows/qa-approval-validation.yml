@@ -1,0 +1,66 @@
+name: QA Approval Check
+
+on:
+  pull_request:
+    branches:
+      - main
+      - Master
+      - master
+    types:
+      - opened
+      - reopened
+      - synchronize
+  pull_request_review:
+    types:
+      - submitted
+
+jobs:
+  require-qa-approval:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check for QA team approval
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.ORG_TOKEN }}
+        script: |
+          const org = "Eshopbox-Enginnering";
+          const teamSlug = "qa";
+          const { repo, number } = context.issue;
+    
+          const reviews = await github.rest.pulls.listReviews({
+            owner: org,
+            repo,
+            pull_number: number
+          });
+    
+          const query = `
+            query($org: String!, $team: String!) {
+              organization(login: $org) {
+                team(slug: $team) {
+                  members(first: 100) {
+                    nodes {
+                      login
+                    }
+                  }
+                }
+              }
+            }`;
+    
+          const result = await github.graphql(query, { org, team: teamSlug });
+    
+          if (!result.organization.team) {
+            core.setFailed("❌ Could not fetch team members. Check token permissions (need read:org).");
+            return;
+          }
+    
+          const qaLogins = result.organization.team.members.nodes.map(m => m.login);
+    
+          const approvedByQA = reviews.data.some(
+            r => r.state === "APPROVED" && qaLogins.includes(r.user.login)
+          );
+    
+          if (!approvedByQA) {
+            core.setFailed("❌ PR must be approved by a QA team member before merging.");
+          } else {
+            core.info("✅ QA approval detected, check passed.");
+          }
