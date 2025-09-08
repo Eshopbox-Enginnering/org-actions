@@ -22,19 +22,21 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const { owner, repo, number } = context.issue;
+            const org = "Eshopbox-Enginnering";   // 👈 exact org slug
+            const teamSlug = "qa";                // 👈 team slug from URL
+            const { repo, number } = context.issue;
 
-            // Get all reviews on this PR
+            // Get all reviews
             const reviews = await github.rest.pulls.listReviews({
-              owner,
+              owner: org,
               repo,
               pull_number: number
             });
 
-            // Get all QA team members
+            // Get QA team members
             const teamMembers = await github.rest.teams.listMembersInOrg({
-              org: owner,
-              team_slug: "qa"   // org QA team name
+              org,
+              team_slug: teamSlug
             });
 
             const qaLogins = teamMembers.data.map(m => m.login);
@@ -43,7 +45,11 @@ jobs:
             const approvedByQA = reviews.data.some(
               r => r.state === "APPROVED" && qaLogins.includes(r.user.login)
             );
+
             if (!approvedByQA) {
+              if (reviews.data.length === 0) {
+                core.notice("ℹ️ No reviews yet, waiting for QA approval.");
+              }
               core.setFailed("❌ PR must be approved by a QA team member before merging.");
             } else {
               core.info("✅ QA approval detected, check passed.");
