@@ -34,7 +34,7 @@ jobs:
             // Get all QA team members
             const teamMembers = await github.rest.teams.listMembersInOrg({
               org: owner,
-              team_slug: "QA"   // org QA team name
+              team_slug: "qa"   // org QA team name
             });
 
             const qaLogins = teamMembers.data.map(m => m.login);
