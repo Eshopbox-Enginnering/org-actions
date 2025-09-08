@@ -1,4 +1,4 @@
-name: QA Approval Check
+name: QA Approval Check (Main) PR
 
 on:
   pull_request:
