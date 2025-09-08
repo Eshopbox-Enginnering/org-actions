@@ -21,6 +21,7 @@ jobs:
     - name: Check for QA team approval
       uses: actions/github-script@v7
       with:
+        github-token: ${{ secrets.ORG_TOKEN }}
         script: |
           const org = "Eshopbox-Enginnering";
           const teamSlug = "qa";
@@ -32,12 +33,11 @@ jobs:
             pull_number: number
           });
     
-          // GraphQL query for team members
           const query = `
-            query($org: String!, $team: String!, $first: Int!) {
+            query($org: String!, $team: String!) {
               organization(login: $org) {
                 team(slug: $team) {
-                  members(first: $first) {
+                  members(first: 100) {
                     nodes {
                       login
                     }
@@ -46,11 +46,12 @@ jobs:
               }
             }`;
     
-          const result = await github.graphql(query, {
-            org,
-            team: teamSlug,
-            first: 100
-          });
+          const result = await github.graphql(query, { org, team: teamSlug });
+    
+          if (!result.organization.team) {
+            core.setFailed("❌ Could not fetch team members. Check token permissions (need read:org).");
+            return;
+          }
     
           const qaLogins = result.organization.team.members.nodes.map(m => m.login);
     
@@ -59,9 +60,6 @@ jobs:
           );
     
           if (!approvedByQA) {
-            if (reviews.data.length === 0) {
-              core.notice("ℹ️ No reviews yet, waiting for QA approval.");
-            }
             core.setFailed("❌ PR must be approved by a QA team member before merging.");
           } else {
             core.info("✅ QA approval detected, check passed.");
