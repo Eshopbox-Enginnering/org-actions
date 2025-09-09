@@ -3,7 +3,7 @@ name: QA Approval Check
 on:
   pull_request:
     branches:
-      - main
+      # - main
       - Master
       - master
     types:
