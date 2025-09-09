@@ -23,6 +23,9 @@ Centralized repository hosting reusable **GitHub Actions** and **workflows** for
 ```
 
 ---
+For all production (main) branch PR, Atleast one CODEOWNER must approve them for merge
+CODEOWNERS: * @Eshopbox-Enginnering/qa
+---
 
 ## What Each Repo Must Add (caller workflows)
 
