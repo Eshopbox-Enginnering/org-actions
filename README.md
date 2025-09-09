@@ -11,9 +11,13 @@ Centralized repository hosting reusable **GitHub Actions** and **workflows** for
 ```
 .github/                     # org-level repo
 └─ workflows/                # reusable workflows (called via workflow_call)
-   ├─ ai-code-review.yml
-   ├─ check-commits-in-staging.yml
-   └─ sonar-java.yml
+   ├─ ai-code-review-angular.yml || DEVOPS-26793
+   ├─ ai-code-review-java.yml || DEVOPS-26793
+   ├─ check-commits-in-staging.yml || DEVOPS-2687
+   ├─ qa-approval-validation.yml || DEVOPS-2732
+   ├─ restrict-wip-feature-pr.yml || DEVOPS-2715
+   ├─ sonar-angular.yml|| DEVOPS-26864
+   └─ sonar-java.yml || DEVOPS-26864
 └─ CODEOWNERS
 └─ README.md
 ```
