@@ -13,6 +13,7 @@ concurrency:
 jobs:
   restrict-large-wip-pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       # Normal cap
       MAX_CHANGED_LINES: "200"
