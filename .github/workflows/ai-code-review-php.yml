@@ -1,4 +1,4 @@
-name: Codex AI Code Review (Java)
+name: Codex AI Code Review (PHP)
 
 on:
   workflow_call: {}
@@ -9,7 +9,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-java-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ai-review-php-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -26,19 +26,21 @@ jobs:
       APPROVE_REVIEWS: "false"
 
       EXCLUDE_PATTERNS: >-
-        **/*.md,**/*.json,**/target/**,**/build/**,**/*.class,**/*.log,
-        **/.mvn/wrapper/**,**/gradle/wrapper/**,**/generated-sources/**,**/build/generated/**,
-        **/*.jar,**/*.war,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.svg,**/*.mp4,
-        **/src/test/**,**/*Test.java,**/*IT.java
+        **/*.md,**/*.json,**/*.lock,**/*.yml,**/*.yaml,
+        **/vendor/**,**/storage/**,**/cache/**,**/logs/**,
+        **/tests/**,**/*Test.php,**/*Spec.php,
+        **/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.svg,**/*.mp4
 
       PROJECT_CONTEXT: |
-        Java Spring Boot service (Maven).
-        - Constructor injection; validate inputs.
-        - Handle exceptions carefully; avoid logging secrets/PII.
-        - Thread-safety & performance in hot paths.
-        - Fast, isolated tests.
+        This is a PHP (Laravel/Symfony style) backend project.
+        - Use dependency injection and service containers properly.
+        - Validate and sanitize user inputs carefully.
+        - Avoid leaking secrets in logs.
+        - Ensure SQL queries are parameterized.
+        - Pay attention to performance in middleware and hot paths.
+        - Write unit and feature tests.
 
-      MAX_FILE_BYTES: "20000"   # 20 KB cutoff
+      MAX_FILE_BYTES: "25000"   # 25 KB cutoff
 
     steps:
       - name: Checkout PR code
@@ -49,7 +51,7 @@ jobs:
         id: changes
         run: |
           git fetch origin ${{ github.base_ref }} --quiet || true
-          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/main/resources/; then
+          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- app/ src/ config/ public/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
@@ -64,7 +66,7 @@ jobs:
           counted=0
           large=false
 
-          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/main/resources/); do
+          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- app/ src/ config/ public/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
             if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
@@ -88,7 +90,7 @@ jobs:
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
 
           {
-            echo "### AI Review Preflight"
+            echo "### AI Review Preflight (PHP)"
             echo "- Files counted: **$counted**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -114,4 +116,4 @@ jobs:
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
-        run: echo "✅ No relevant Java code changes — skipping AI review."
+        run: echo "✅ No relevant PHP code changes — skipping AI review."
