@@ -60,17 +60,19 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-      
+    
           # ✅ Ensure the base branch exists locally
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
       
           : > payload.txt
           counted=0
           large=false
+          total_bytes=0
       
           for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
+            total_bytes=$((total_bytes + sz))
             if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
               echo "### Diff for $f" >> payload.txt
               git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
@@ -82,7 +84,11 @@ jobs:
             counted=$((counted + 1))
           done
       
-          if [ "$large" = "true" ]; then
+          # Rough estimate of total tokens
+          estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
+      
+          # ✅ Decide model based on size of entire PR, not just per-file
+          if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
             model="${{ vars.AI_MODEL_4 }}"
@@ -90,13 +96,15 @@ jobs:
       
           echo "selected_model=$model" >> $GITHUB_OUTPUT
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
+          echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
       
           {
-            echo "### AI Review Preflight (JAVA)"
+            echo "### AI Review Preflight (Angular)"
             echo "- Files counted: **$counted**"
+            echo "- Estimated tokens: **$estimated_tokens**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
-
+            
       - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
         run: sleep $(( (RANDOM % 21) + 5 ))
