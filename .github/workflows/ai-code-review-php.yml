@@ -94,7 +94,7 @@ jobs:
             echo "files_count=$counted"  >> $GITHUB_OUTPUT
         
             {
-              echo "### AI Review Preflight (Angular)"
+              echo "### AI Review Preflight (PHP)"
               echo "- Files counted: **$counted**"
               echo "- Selected model: **$model**"
             } >> "$GITHUB_STEP_SUMMARY"

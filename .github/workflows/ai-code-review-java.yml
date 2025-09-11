@@ -92,11 +92,11 @@ jobs:
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
       
           {
-            echo "### AI Review Preflight (Angular)"
+            echo "### AI Review Preflight (JAVA)"
             echo "- Files counted: **$counted**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
-           
+
       - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
         run: sleep $(( (RANDOM % 21) + 5 ))
