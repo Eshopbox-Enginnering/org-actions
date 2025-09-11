@@ -2,6 +2,7 @@ name: Reusable • Block WIP → Feature ≤200 lines
 
 on:
   workflow_call:
+  workflow_dispatch:  # Allow manual run
 
 permissions:
   contents: read
