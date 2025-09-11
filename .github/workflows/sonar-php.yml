@@ -1,0 +1,45 @@
+name: PHP SonarQube Scan (Manual)
+
+on:
+  workflow_call:  # Allow as reusable workflow
+  workflow_dispatch:  # Allow manual run
+
+jobs:
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+          tools: composer
+
+      - name: Cache Composer Packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.composer/cache
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
+
+      - name: Install Dependencies
+        run: composer install --no-progress --prefer-dist --no-interaction
+
+      - name: Setup SonarScanner
+        uses: sonarsource/sonarcloud-github-action@v2
+        with:
+          args: >
+            -Dsonar.projectKey=${{ github.repository }}
+            -Dsonar.sources=.
+            -Dsonar.host.url=${{ vars.SONAR_HOST_URL }}
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+            -Dsonar.sourceEncoding=UTF-8
+            -Dsonar.exclusions=**/vendor/**,**/tests/**,**/*.md,**/*.json,**/storage/**,**/cache/**
