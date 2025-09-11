@@ -1,5 +1,4 @@
-# Reusable workflow (single source of truth). No inputs; all config centralized here.
-name: Codex AI Code Review (Angular)
+name: Codex AI Code Review (PHP)
 
 on:
   workflow_call: {}
@@ -9,7 +8,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-angular-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ai-review-php-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -26,20 +25,21 @@ jobs:
       APPROVE_REVIEWS: "false"
 
       EXCLUDE_PATTERNS: >-
-        **/*.lock,**/*.json,**/*.md,**/*.yml,**/*.yaml,
-        **/dist/**,**/storybook-static/**,**/coverage/**,
-        **/*.spec.ts,**/*.stories.ts,**/__snapshots__/**,
-        **/*.svg,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.mp4,
-        **/e2e/**
+        **/*.md,**/*.json,**/*.lock,**/*.yml,**/*.yaml,
+        **/vendor/**,**/storage/**,**/cache/**,**/logs/**,
+        **/tests/**,**/*Test.php,**/*Spec.php,
+        **/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.svg,**/*.mp4
 
       PROJECT_CONTEXT: |
-        This is an Angular (TypeScript) monorepo.
-        - Angular 9.1 with SCSS
-        - Uses NGRX, Angular Material
-        - Avoid inline styles
-        - Ensure a11y compliance and performance best practices
+        This is a PHP (Laravel/Symfony style) backend project.
+        - Use dependency injection and service containers properly.
+        - Validate and sanitize user inputs carefully.
+        - Avoid leaking secrets in logs.
+        - Ensure SQL queries are parameterized.
+        - Pay attention to performance in middleware and hot paths.
+        - Write unit and feature tests.
 
-      MAX_FILE_BYTES: "30000"   # 30 KB cutoff
+      MAX_FILE_BYTES: "25000"   # 25 KB cutoff
 
     steps:
       - name: Checkout PR code
@@ -50,7 +50,7 @@ jobs:
         id: changes
         run: |
           git fetch origin ${{ github.base_ref }} --quiet || true
-          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/; then
+          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- app/ src/ config/ public/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
@@ -65,7 +65,7 @@ jobs:
           counted=0
           large=false
 
-          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
+          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- app/ src/ config/ public/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
             if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
@@ -89,7 +89,7 @@ jobs:
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
 
           {
-            echo "### AI Review Preflight (Angular)"
+            echo "### AI Review Preflight (PHP)"
             echo "- Files counted: **$counted**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -115,4 +115,4 @@ jobs:
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
-        run: echo "✅ No relevant Angular code changes — skipping AI review."
+        run: echo "✅ No relevant PHP code changes — skipping AI review."
