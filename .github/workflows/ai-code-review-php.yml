@@ -57,48 +57,93 @@ jobs:
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
-          - name: Build payload (diff for large files, full for small)
-          if: steps.changes.outputs.no_changes == 'false'
-          id: payload
-          run: |
-            set -euo pipefail
-        
-            # ✅ Ensure the base branch exists locally
-            git fetch origin ${{ github.base_ref }} --depth=1 --quiet
-        
-            : > payload.txt
-            counted=0
-            large=false
-        
-            for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
-              [ -f "$f" ] || continue
-              sz=$(wc -c <"$f" | tr -d ' ')
-              if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
-                echo "### Diff for $f" >> payload.txt
-                git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
-                large=true
-              else
-                echo "### Full content of $f" >> payload.txt
-                cat "$f" >> payload.txt
-              fi
-              counted=$((counted + 1))
-            done
-        
-            if [ "$large" = "true" ]; then
-              model="${{ vars.AI_MODEL_4_MINI }}"
+      - name: Build payload (diff for large files, full for small)
+        if: steps.changes.outputs.no_changes == 'false'
+        id: payload
+        run: |
+          set -euo pipefail
+    
+          # ✅ Ensure the base branch exists locally
+          git fetch origin ${{ github.base_ref }} --depth=1 --quiet
+      
+          : > payload.txt
+          counted=0
+          large=false
+          total_bytes=0
+      
+          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
+            [ -f "$f" ] || continue
+            sz=$(wc -c <"$f" | tr -d ' ')
+            total_bytes=$((total_bytes + sz))
+            if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
+              echo "### Diff for $f" >> payload.txt
+              git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+              large=true
             else
-              model="${{ vars.AI_MODEL_4 }}"
+              echo "### Full content of $f" >> payload.txt
+              cat "$f" >> payload.txt
             fi
-        
-            echo "selected_model=$model" >> $GITHUB_OUTPUT
-            echo "files_count=$counted"  >> $GITHUB_OUTPUT
-        
-            {
-              echo "### AI Review Preflight (PHP)"
-              echo "- Files counted: **$counted**"
-              echo "- Selected model: **$model**"
-            } >> "$GITHUB_STEP_SUMMARY"
-           
+            counted=$((counted + 1))
+          done
+      
+          # Rough estimate of total tokens
+          estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
+      
+          # ✅ Decide model based on size of entire PR, not just per-file
+          if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
+            model="${{ vars.AI_MODEL_4_MINI }}"
+          else
+            model="${{ vars.AI_MODEL_4 }}"
+          fi
+      
+          echo "selected_model=$model" >> $GITHUB_OUTPUT
+          echo "files_count=$counted"  >> $GITHUB_OUTPUT
+          echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
+      
+          {
+            echo "### AI Review Preflight (Angular)"
+            echo "- Files counted: **$counted**"
+            echo "- Estimated tokens: **$estimated_tokens**"
+            echo "- Selected model: **$model**"
+          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+      
+          # ✅ Ensure the base branch exists locally
+          git fetch origin ${{ github.base_ref }} --depth=1 --quiet
+      
+          : > payload.txt
+          counted=0
+          large=false
+      
+          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
+            [ -f "$f" ] || continue
+            sz=$(wc -c <"$f" | tr -d ' ')
+            if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
+              echo "### Diff for $f" >> payload.txt
+              git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+              large=true
+            else
+              echo "### Full content of $f" >> payload.txt
+              cat "$f" >> payload.txt
+            fi
+            counted=$((counted + 1))
+          done
+      
+          if [ "$large" = "true" ]; then
+            model="${{ vars.AI_MODEL_4_MINI }}"
+          else
+            model="${{ vars.AI_MODEL_4 }}"
+          fi
+      
+          echo "selected_model=$model" >> $GITHUB_OUTPUT
+          echo "files_count=$counted"  >> $GITHUB_OUTPUT
+      
+          {
+            echo "### AI Review Preflight (PHP)"
+            echo "- Files counted: **$counted**"
+            echo "- Selected model: **$model**"
+          } >> "$GITHUB_STEP_SUMMARY"
+          
       - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
         run: sleep $(( (RANDOM % 21) + 5 ))
