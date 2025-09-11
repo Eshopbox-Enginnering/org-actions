@@ -60,11 +60,15 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
+      
+          # ✅ Ensure the base branch exists locally
+          git fetch origin ${{ github.base_ref }} --depth=1 --quiet
+      
           : > payload.txt
           counted=0
           large=false
-
-          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/main/resources/); do
+      
+          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
             if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
@@ -77,18 +81,18 @@ jobs:
             fi
             counted=$((counted + 1))
           done
-
+      
           if [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
             model="${{ vars.AI_MODEL_4 }}"
           fi
-
+      
           echo "selected_model=$model" >> $GITHUB_OUTPUT
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
-
+      
           {
-            echo "### AI Review Preflight"
+            echo "### AI Review Preflight (JAVA)"
             echo "- Files counted: **$counted**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
