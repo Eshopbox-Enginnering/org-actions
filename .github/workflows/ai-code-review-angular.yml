@@ -2,7 +2,7 @@
 name: Codex AI Code Review (Angular)
 
 on:
-  workflow_call: {}  # required to allow cross-repo `uses:`
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -22,10 +22,9 @@ jobs:
     env:
       AI_PROVIDER: openai
       AI_TEMPERATURE: "0.3"
-      MAX_COMMENTS: "12"            # slightly lower to reduce output tokens
+      MAX_COMMENTS: "12"
       APPROVE_REVIEWS: "false"
 
-      # Keep payload lean for Angular repos
       EXCLUDE_PATTERNS: >-
         **/*.lock,**/*.json,**/*.md,**/*.yml,**/*.yaml,
         **/dist/**,**/storybook-static/**,**/coverage/**,
@@ -40,11 +39,7 @@ jobs:
         - Avoid inline styles
         - Ensure a11y compliance and performance best practices
 
-      # Preflight “token-ish” caps (~4 chars ≈ 1 token; x2 for old+new + overhead)
-      MAX_FILE_BYTES: "30000"       # ignore single files larger than this in estimate
-      MAX_TOTAL_BYTES: "120000"      # ~30k tokens input budget
-      SOFT_SWITCH_TOKENS: "20000"   # switch to mini model above this
-      HARD_SKIP_TOKENS:  "60000"    # skip AI step above this
+      MAX_FILE_BYTES: "30000"   # 30 KB cutoff
 
     steps:
       - name: Checkout PR code
@@ -55,100 +50,68 @@ jobs:
         id: changes
         run: |
           git fetch origin ${{ github.base_ref }} --quiet || true
-          if git diff --quiet origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/; then
+          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Collect changed files (filtered)
+      - name: Build payload (diff for large files, full for small)
         if: steps.changes.outputs.no_changes == 'false'
-        id: files
-        run: |
-          git diff --name-only origin/${{ github.base_ref }} HEAD -- src/ libs/ apps/ \
-          | grep -v -E '(^|/)dist/|(^|/)storybook-static/|(^|/)coverage/|(^|/)e2e/|__snapshots__/|\.stories\.ts$|\.spec\.ts$|\.lock$|\.json$|\.md$|\.ya?ml$|\.svg$|\.png$|\.jpe?g$|\.gif$|\.mp4$' \
-          > files.txt
-          echo "files<<EOF" >> $GITHUB_OUTPUT
-          cat files.txt >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Preflight estimate token load and choose model
-        if: steps.changes.outputs.no_changes == 'false'
-        id: preflight
-        env:
-          MAX_FILE_BYTES:       ${{ env.MAX_FILE_BYTES }}
-          MAX_TOTAL_BYTES:      ${{ env.MAX_TOTAL_BYTES }}
-          SOFT_SWITCH_TOKENS:   ${{ env.SOFT_SWITCH_TOKENS }}
-          HARD_SKIP_TOKENS:     ${{ env.HARD_SKIP_TOKENS }}
+        id: payload
         run: |
           set -euo pipefail
-
-          bytes=0
+          : > payload.txt
           counted=0
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
+          large=false
+
+          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
-            if [ "$sz" -gt "$MAX_FILE_BYTES" ]; then
-              echo "⏭️  Ignoring for estimate: $f ($sz > $MAX_FILE_BYTES)"
-              continue
+            if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
+              echo "### Diff for $f" >> payload.txt
+              git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+              large=true
+            else
+              echo "### Full content of $f" >> payload.txt
+              cat "$f" >> payload.txt
             fi
-            bytes=$((bytes + sz))
             counted=$((counted + 1))
-          done < <(printf "%s\n" "${{ steps.files.outputs.files }}")
+          done
 
-          # rough token estimate: (bytes / 4) * 2 (old+new) + overhead
-          input_tokens=$(( (bytes / 4) * 2 + 1500 ))
-
-          default_model="${{ vars.AI_MODEL || 'gpt-4.1' }}"
-          model="$default_model"
-          if [ "$input_tokens" -gt "$SOFT_SWITCH_TOKENS" ]; then
-            model="gpt-4.1-mini"
+          if [ "$large" = "true" ]; then
+            model="${{ vars.AI_MODEL_4_MINI }}"
+          else
+            model="${{ vars.AI_MODEL_4 }}"
           fi
 
-          run_ai="true"
-          if [ "$input_tokens" -gt "$HARD_SKIP_TOKENS" ]; then
-            run_ai="false"
-          fi
-
-          echo "bytes=$bytes"                 >> $GITHUB_OUTPUT
-          echo "files_count=$counted"         >> $GITHUB_OUTPUT
-          echo "estimated_tokens=$input_tokens" >> $GITHUB_OUTPUT
-          echo "selected_model=$model"        >> $GITHUB_OUTPUT
-          echo "run_ai=$run_ai"               >> $GITHUB_OUTPUT
+          echo "selected_model=$model" >> $GITHUB_OUTPUT
+          echo "files_count=$counted"  >> $GITHUB_OUTPUT
 
           {
             echo "### AI Review Preflight (Angular)"
             echo "- Files counted: **$counted**"
-            echo "- Estimated input tokens: **$input_tokens**"
-            echo "- Selected model: **$model** (default: $default_model)"
-            echo "- Decision: **$run_ai** (skip if false)"
+            echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Jitter to reduce org-wide bursts (5–25s)
-        if: steps.preflight.outputs.run_ai == 'true'
-        run: |
-          sleep $(( (RANDOM % 21) + 5 ))
+        if: steps.payload.outputs.files_count != '0'
+        run: sleep $(( (RANDOM % 21) + 5 ))
 
       - name: Run AI Code Review
-        if: steps.preflight.outputs.run_ai == 'true'
+        if: steps.payload.outputs.files_count != '0'
         id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
           GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
           AI_PROVIDER:    ${{ env.AI_PROVIDER }}
           AI_API_KEY:     ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL:       ${{ steps.preflight.outputs.selected_model }}   # auto-switch if big
+          AI_MODEL:       ${{ steps.payload.outputs.selected_model }}
           AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
           APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
           MAX_COMMENTS:   ${{ env.MAX_COMMENTS }}
           PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
           EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
-
-      - name: Skip AI (payload too large)
-        if: steps.preflight.outputs.run_ai != 'true'
-        run: |
-          echo "::warning title=AI review skipped::Estimated ${{ steps.preflight.outputs.estimated_tokens }} tokens exceeds cap ${{ env.HARD_SKIP_TOKENS }}. Consider slicing the PR or running a manual scan."
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
