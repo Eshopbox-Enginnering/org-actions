@@ -2,6 +2,7 @@ name: Codex AI Code Review (PHP)
 
 on:
   workflow_call: {}
+  workflow_dispatch:  # Allow manual run
 
 permissions:
   contents: read
