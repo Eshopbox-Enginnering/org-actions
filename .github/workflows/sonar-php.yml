@@ -35,11 +35,12 @@ jobs:
 
       - name: Setup SonarScanner
         uses: sonarsource/sonarcloud-github-action@v2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
             -Dsonar.projectKey=${{ github.repository }}
             -Dsonar.sources=.
             -Dsonar.host.url=${{ vars.SONAR_HOST_URL }}
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.sourceEncoding=UTF-8
             -Dsonar.exclusions=**/vendor/**,**/tests/**,**/*.md,**/*.json,**/storage/**,**/cache/**
