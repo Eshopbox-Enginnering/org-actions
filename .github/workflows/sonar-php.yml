@@ -39,7 +39,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.projectKey=${{ github.repository }}
+            -Dsonar.projectKey=${{ github.event.repository.name }}
             -Dsonar.sources=.
             -Dsonar.host.url=${{ vars.SONAR_HOST_URL }}
             -Dsonar.sourceEncoding=UTF-8
