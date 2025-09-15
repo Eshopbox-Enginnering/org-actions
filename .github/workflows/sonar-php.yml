@@ -33,13 +33,17 @@ jobs:
       - name: Install Dependencies
         run: composer install --no-progress --prefer-dist --no-interaction
 
-      - name: Setup SonarScanner
+      - name: Derive repo name
+        run: |
+          echo "REPO_NAME=$(echo '${{ github.repository }}' | cut -d'/' -f2)" >> $GITHUB_ENV
+
+      - name: Run SonarQube Scanner
         uses: sonarsource/sonarcloud-github-action@v2
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.projectKey=${{ github.repository }}
+            -Dsonar.projectKey=${{ env.REPO_NAME }}
             -Dsonar.sources=.
             -Dsonar.host.url=${{ vars.SONAR_HOST_URL }}
             -Dsonar.sourceEncoding=UTF-8
