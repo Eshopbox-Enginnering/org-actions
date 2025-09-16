@@ -40,7 +40,7 @@ jobs:
         - Avoid inline styles
         - Ensure a11y compliance and performance best practices
 
-      MAX_FILE_BYTES: "30000"   # tighter 30 KB cutoff
+      MAX_FILE_BYTES: "20000"   # 20 KB cutoff
 
     steps:
       - name: Checkout PR code
@@ -84,39 +84,45 @@ jobs:
             counted=$((counted + 1))
           done
 
-          # Split payload into ~8k-line chunks (~80-100k tokens each max)
+          # Rough estimate of total tokens
+          estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
+
+          # ✅ Decide model based on size of entire PR
+          if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
+            model="${{ vars.AI_MODEL_4_MINI }}"
+          else
+            model="${{ vars.AI_MODEL_4 }}"
+          fi
+
           mkdir chunks
           split -l 8000 payload.txt chunks/chunk_
 
+          echo "selected_model=$model" >> $GITHUB_OUTPUT
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
+          echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
           echo "chunk_count=$(ls chunks | wc -l)" >> $GITHUB_OUTPUT
 
           {
             echo "### AI Review Preflight (Angular)"
             echo "- Files counted: **$counted**"
+            echo "- Estimated tokens: **$estimated_tokens**"
+            echo "- Selected model: **$model**"
             echo "- Chunks created: **$(ls chunks | wc -l)**"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Jitter to reduce org-wide bursts (5–25s)
-        if: steps.payload.outputs.files_count != '0'
-        run: sleep $(( (RANDOM % 21) + 5 ))
 
       - name: Run AI Code Review per chunk
         if: steps.payload.outputs.files_count != '0'
         run: |
           for f in chunks/*; do
             echo "🔎 Reviewing $f ..."
-            gh api \
-              repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews \
-              -f event=COMMENT \
-              -f body="$(cat "$f" | npx eshopbox-ai-codereviewer \
-                --provider $AI_PROVIDER \
-                --apikey ${{ secrets.AI_REVIEW_CODEX }} \
-                --model gpt-4.1-mini-long-context \
-                --temperature $AI_TEMPERATURE \
-                --max-comments $MAX_COMMENTS \
-                --project-context \"$PROJECT_CONTEXT\" \
-                --exclude \"$EXCLUDE_PATTERNS\")"
+            cat "$f" | npx eshopbox-ai-codereviewer \
+              --provider $AI_PROVIDER \
+              --apikey ${{ secrets.AI_REVIEW_CODEX }} \
+              --model ${{ steps.payload.outputs.selected_model }} \
+              --temperature $AI_TEMPERATURE \
+              --max-comments $MAX_COMMENTS \
+              --project-context "$PROJECT_CONTEXT" \
+              --exclude "$EXCLUDE_PATTERNS"
           done
 
       - name: Skip log message
