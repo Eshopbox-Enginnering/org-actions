@@ -38,7 +38,7 @@ jobs:
         - Thread-safety & performance in hot paths.
         - Fast, isolated tests.
 
-      MAX_FILE_BYTES: "20000"   # 20 KB cutoff (tighter)
+      MAX_FILE_BYTES: "20000"   # 20 KB cutoff
 
     steps:
       - name: Checkout PR code
@@ -60,8 +60,8 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
+
           : > payload.txt
           counted=0
           total_bytes=0
@@ -82,29 +82,45 @@ jobs:
             counted=$((counted + 1))
           done
 
+          # Rough estimate of total tokens
+          estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
+
+          # ✅ Decide model based on size of entire PR
+          if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
+            model="${{ vars.AI_MODEL_4_MINI }}"
+          else
+            model="${{ vars.AI_MODEL_4 }}"
+          fi
+
           mkdir chunks
-          # Split into chunks of ~8000 lines (~80-100k tokens)
           split -l 8000 payload.txt chunks/chunk_
 
+          echo "selected_model=$model" >> $GITHUB_OUTPUT
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
+          echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
           echo "chunk_count=$(ls chunks | wc -l)" >> $GITHUB_OUTPUT
 
           {
             echo "### AI Review Preflight (Java)"
             echo "- Files counted: **$counted**"
+            echo "- Estimated tokens: **$estimated_tokens**"
+            echo "- Selected model: **$model**"
             echo "- Chunks created: **$(ls chunks | wc -l)**"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Jitter to reduce org-wide bursts (5–25s)
-        if: steps.payload.outputs.files_count != '0'
-        run: sleep $(( (RANDOM % 21) + 5 ))
 
       - name: Run AI Code Review per chunk
         if: steps.payload.outputs.files_count != '0'
         run: |
           for f in chunks/*; do
             echo "🔎 Reviewing $f ..."
-            cat "$f" | gh workflow run .github/workflows/ai_review_chunk.yml -f chunk_file=- 
+            cat "$f" | npx eshopbox-ai-codereviewer \
+              --provider $AI_PROVIDER \
+              --apikey ${{ secrets.AI_REVIEW_CODEX }} \
+              --model ${{ steps.payload.outputs.selected_model }} \
+              --temperature $AI_TEMPERATURE \
+              --max-comments $MAX_COMMENTS \
+              --project-context "$PROJECT_CONTEXT" \
+              --exclude "$EXCLUDE_PATTERNS"
           done
 
       - name: Skip log message
