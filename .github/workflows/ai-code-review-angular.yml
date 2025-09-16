@@ -18,7 +18,7 @@ jobs:
     name: AI Code Review
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     env:
       AI_PROVIDER: openai
@@ -40,8 +40,7 @@ jobs:
         - Avoid inline styles
         - Ensure a11y compliance and performance best practices
 
-      MAX_FILE_BYTES: "20000"     # 20 KB cutoff
-      MAX_LINES_PER_CHUNK: "2000" # keeps each request safe
+      MAX_FILE_BYTES: "30000"   # 30 KB cutoff
 
     steps:
       - name: Checkout PR code
@@ -58,18 +57,20 @@ jobs:
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build payload and split into chunks
+      - name: Build payload (diff for large files, full for small)
         if: steps.changes.outputs.no_changes == 'false'
         id: payload
         run: |
           set -euo pipefail
+    
+          # ✅ Ensure the base branch exists locally
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
-
+      
           : > payload.txt
           counted=0
-          total_bytes=0
           large=false
-
+          total_bytes=0
+      
           for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
@@ -84,51 +85,46 @@ jobs:
             fi
             counted=$((counted + 1))
           done
-
+      
           # Rough estimate of total tokens
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
-
-          # ✅ Decide model based on size of entire PR
+      
+          # ✅ Decide model based on size of entire PR, not just per-file
           if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
             model="${{ vars.AI_MODEL_4 }}"
           fi
-
-          mkdir chunks
-          split -l "${{ env.MAX_LINES_PER_CHUNK }}" payload.txt chunks/chunk_
-
+      
           echo "selected_model=$model" >> $GITHUB_OUTPUT
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
           echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
-          echo "chunk_count=$(ls chunks | wc -l)" >> $GITHUB_OUTPUT
-
+      
           {
             echo "### AI Review Preflight (Angular)"
             echo "- Files counted: **$counted**"
             echo "- Estimated tokens: **$estimated_tokens**"
             echo "- Selected model: **$model**"
-            echo "- Chunks created: **$(ls chunks | wc -l)**"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Run AI Code Review per chunk
+        
+      - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
-        run: |
-          set -euo pipefail
-          for c in chunks/*; do
-            echo "🔎 Reviewing $c ..."
-            npx --yes ai-codereviewer \
-              --provider ${{ env.AI_PROVIDER }} \
-              --api-key ${{ secrets.AI_REVIEW_CODEX }} \
-              --model "${{ steps.payload.outputs.selected_model }}" \
-              --temperature "${{ env.AI_TEMPERATURE }}" \
-              --approve "${{ env.APPROVE_REVIEWS }}" \
-              --max-comments "${{ env.MAX_COMMENTS }}" \
-              --project-context "${{ env.PROJECT_CONTEXT }}" \
-              --exclude "${{ env.EXCLUDE_PATTERNS }}" \
-              --files "$c"
-            sleep 2 # ✅ throttle requests to avoid TPM errors
-          done
+        run: sleep $(( (RANDOM % 21) + 5 ))
+
+      - name: Run AI Code Review
+        if: steps.payload.outputs.files_count != '0'
+        id: ai_review
+        uses: Eshopbox-Enginnering/ai-codereviewer@main
+        with:
+          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          AI_PROVIDER:    ${{ env.AI_PROVIDER }}
+          AI_API_KEY:     ${{ secrets.AI_REVIEW_CODEX }}
+          AI_MODEL:       ${{ steps.payload.outputs.selected_model }}
+          AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
+          APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
+          MAX_COMMENTS:   ${{ env.MAX_COMMENTS }}
+          PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
+          EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
