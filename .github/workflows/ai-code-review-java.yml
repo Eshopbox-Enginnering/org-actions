@@ -38,7 +38,7 @@ jobs:
         - Thread-safety & performance in hot paths.
         - Fast, isolated tests.
 
-      MAX_FILE_BYTES: "10000"   # 10 KB cutoff (tighter)
+      MAX_FILE_BYTES: "20000"   # 20 KB cutoff (tighter)
 
     steps:
       - name: Checkout PR code
