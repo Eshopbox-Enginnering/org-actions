@@ -1,0 +1,42 @@
+name: Java SonarQube Scan (Manual)
+
+on:
+  workflow_call:  # Allow as reusable workflow
+  workflow_dispatch:  # Allow manual run
+
+jobs:
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Maven Packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Run SonarQube Scanner via Maven
+        run: |
+          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          wget https://storage.googleapis.com/amzprime-integration-prod.appspot.com/AmazonYojaka-1.0.jar
+          mvn install:install-file -Dfile=AmazonYojaka-1.0.jar -DgroupId=com.amazon -DartifactId=AmazonYojaka -Dversion=1.0.0 -Dpackaging=jar
+          mvn clean install -DskipTests=true
+          mvn sonar:sonar \
+            -Dsonar.projectKey=$REPO_NAME \
+            -Dsonar.host.url=${{ vars.SONAR_HOST_URL }} \
+            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
+            -Dsonar.sourceEncoding=UTF-8 \
+            -Dsonar.exclusions=**/target/**,**/test/**,**/*.md,**/*.json,**/generated-sources/**
