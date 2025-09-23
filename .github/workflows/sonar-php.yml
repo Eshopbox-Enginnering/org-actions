@@ -20,6 +20,7 @@ jobs:
           php-version: '8.2'
           coverage: none
           tools: composer
+          extensions: gd, grpc   # ✅ added required extensions
 
       - name: Cache Composer Packages
         uses: actions/cache@v3
