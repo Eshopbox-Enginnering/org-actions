@@ -44,7 +44,6 @@ jobs:
             "Eshopbox-Enginnering/poe-frontend"
             "Eshopbox-Enginnering/amzWholesale-Warehouse-Portal-Frontend"
             "Eshopbox-Enginnering/org-actions"
-            # repos from PHP filter screenshot — bypassed (all under Eshopbox-Enginnering)
             "Eshopbox-Enginnering/eshopbox-wms-api"
             "Eshopbox-Enginnering/clickpost-microservice"
             "Eshopbox-Enginnering/eshopbox-wms-middleware"
@@ -54,7 +53,6 @@ jobs:
             "Eshopbox-Enginnering/myntra-microservices"
             "Eshopbox-Enginnering/scan-label"
             "Eshopbox-Enginnering/eshopbox-client-services"
-            # Add additional repos to bypass here as needed
           )
 
           for b in "${BYPASS_LIST[@]}"; do
