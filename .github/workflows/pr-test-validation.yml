@@ -1,4 +1,4 @@
-name: AI PR Test Validation
+name: PR Test File Validation
 
 on:
   workflow_call: {}
