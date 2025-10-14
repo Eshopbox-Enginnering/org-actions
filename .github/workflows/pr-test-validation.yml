@@ -1,4 +1,4 @@
-name: PR Test File Validation
+name: AI PR Test Validation
 
 on:
   workflow_call: {}
@@ -39,7 +39,6 @@ jobs:
           echo "Repository: ${REPO}"
 
           # === STATIC BYPASS LIST ===
-          # Add repo names here (format: Owner/Repo)
           BYPASS_LIST=(
             "Eshopbox-Enginnering/poe-frontend"
             "Eshopbox-Enginnering/amzWholesale-Warehouse-Portal-Frontend"
@@ -64,14 +63,12 @@ jobs:
             fi
           done
 
-          # If this is the special Angular repo, mark it angular
           if [[ "${REPO}" == "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]]; then
             echo "type=angular" >> "$GITHUB_OUTPUT"
             echo "bypass=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Default: treat as java repo
           echo "type=java" >> "$GITHUB_OUTPUT"
           echo "bypass=false" >> "$GITHUB_OUTPUT"
 
@@ -81,9 +78,10 @@ jobs:
           echo "✅ Repo in static bypass list. Skipping test validation."
 
       ############################
-      # Angular validation block #
+      # Angular validation step  #
       ############################
-      - name: Validate Angular test changes (eshopbox-client-portal-frontend)
+      - name: Validate Angular test changes
+        id: angular_check
         if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true'
         run: |
           set -euo pipefail
@@ -93,7 +91,6 @@ jobs:
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
-          # Detect changed Angular logic files excluding spec files
           FILES=$(grep -E '\.(component|service|pipe|directive)\.ts$' changed_files.txt | grep -v '\.spec\.ts$' || true)
 
           if [ -z "$FILES" ]; then
@@ -110,24 +107,35 @@ jobs:
             base=$(basename "$f" .ts)
             test_file="$dir/${base}.spec.ts"
             if ! grep -qF "$test_file" changed_files.txt; then
-              echo "::error::Missing test for ${f}"
+              echo "Missing test for ${f}"
               MISSING=$((MISSING+1))
             else
-              echo "✅ Test present for ${f}"
+              echo "Found test change for ${f}"
             fi
           done
 
           if [ "${MISSING}" -gt 0 ]; then
-            echo "::error::⚠️ Test case enforcement failed: Angular files changed without matching .spec.ts updates."
+            echo "Angular test validation failed: ${MISSING} missing"
             exit 1
           else
             echo "✅ All modified Angular files have matching .spec.ts updates."
           fi
 
+      - name: Comment on PR — Angular missing tests
+        if: steps.angular_check.outcome == 'failure'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          message: |
+            ⚠️ **Test case enforcement failed (Angular)**
+            Some Angular components/services/pipes/directives were changed without corresponding unit test updates (`*.spec.ts`).
+            
+            Please add or update the respective `.spec.ts` files for the modified items and push the changes — the AI code review will run after tests are included.
+
       #########################
-      # Java validation block #
+      # Java validation step  #
       #########################
-      - name: Validate Java test changes (default)
+      - name: Validate Java test changes
+        id: java_check
         if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true'
         run: |
           set -euo pipefail
@@ -137,7 +145,6 @@ jobs:
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
-          # list changed source files (exclude test files)
           FILES=$(grep '^src/main/java/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
 
           if [ -z "$FILES" ]; then
@@ -155,20 +162,30 @@ jobs:
             test2="src/test/java/${relative%.java}Tests.java"
             test3="src/test/java/${relative%.java}IT.java"
             if grep -qF "$test1" changed_files.txt || grep -qF "$test2" changed_files.txt || grep -qF "$test3" changed_files.txt; then
-              echo "✅ Test present for ${f}"
+              echo "Found test change for ${f}"
             else
-              echo "::error::Missing test for ${f}"
+              echo "Missing test for ${f}"
               MISSING=$((MISSING+1))
             fi
           done
 
           if [ "${MISSING}" -gt 0 ]; then
-            echo "::error::⚠️ Test case enforcement failed: Java source files changed without matching test updates under src/test/java."
+            echo "Java test validation failed: ${MISSING} missing"
             exit 1
           else
             echo "✅ All modified Java classes have matching test updates."
           fi
 
+      - name: Comment on PR — Java missing tests
+        if: steps.java_check.outcome == 'failure'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          message: |
+            ⚠️ **Test case enforcement failed (Java)**
+            Some Java source files were changed without corresponding unit/integration test updates under `src/test/java` (e.g. `*Test.java`, `*Tests.java`, `*IT.java`).
+            
+            Please add or update the relevant tests and push the changes.
+
       - name: All checks passed
-        if: steps.repo_check.outputs.bypass != 'true'
+        if: steps.repo_check.outputs.bypass != 'true' && (steps.angular_check.outcome != 'failure' && steps.java_check.outcome != 'failure')
         run: echo "✅ Test validation passed (or no relevant changes)."
