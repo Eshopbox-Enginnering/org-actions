@@ -43,9 +43,9 @@ jobs:
             "Eshopbox-Enginnering/scan-label"
             "Eshopbox-Enginnering/eshopbox-client-services"
             "Eshopbox-Enginnering/org-actions"
-            )
+          )
 
-          if printf '%s\n' "${BYPASS_REPOS[@]}" | grep -q "^$REPO$"; then
+          if printf '%s\n' "${BYPASS_LIST[@]}" | grep -q "^$REPO$"; then
             echo "bypass=true" >> $GITHUB_OUTPUT
             echo "✅ Repo is bypassed."
           elif [ "$REPO" == "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]; then
@@ -59,11 +59,12 @@ jobs:
         run: echo "✅ Skipping validation for bypassed repo."
 
       ####################################
-      # Angular validation (with failure)
+      # Angular validation
       ####################################
       - name: Validate Angular test changes
         id: angular_check
         if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true'
+        continue-on-error: true   # don't stop job; we’ll fail later
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
@@ -95,15 +96,16 @@ jobs:
           done
 
           if [ "$MISSING" -gt 0 ]; then
+            echo "Angular test validation failed: $MISSING missing"
             echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
-            echo "TESTS_FOUND=true" >> $GITHUB_ENV
             echo "✅ All modified Angular files have tests."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
           fi
 
       - name: Comment on PR — Angular missing tests
-        if: steps.angular_check.outcome == 'failure'
+        if: always() && steps.angular_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
@@ -111,12 +113,19 @@ jobs:
             Some Angular files were changed without corresponding `.spec.ts` test updates.  
             Please add or update the required test files before merging.
 
+      - name: Fail workflow if Angular validation failed
+        if: steps.angular_check.outcome == 'failure'
+        run: |
+          echo "❌ Failing because Angular test validation failed."
+          exit 1
+
       ####################################
-      # Java validation (with failure)
+      # Java validation
       ####################################
       - name: Validate Java test changes
         id: java_check
         if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true'
+        continue-on-error: true
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
@@ -145,18 +154,25 @@ jobs:
           done
 
           if [ "$MISSING" -gt 0 ]; then
+            echo "Java test validation failed: $MISSING missing"
             echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
-            echo "TESTS_FOUND=true" >> $GITHUB_ENV
             echo "✅ All modified Java files have tests."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
           fi
 
       - name: Comment on PR — Java missing tests
-        if: steps.java_check.outcome == 'failure'
+        if: always() && steps.java_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
             ⚠️ **Test file missing in PR**
             Some Java files were changed without corresponding test updates under `src/test/java`.  
             Please add or update the required test files before merging.
+
+      - name: Fail workflow if Java validation failed
+        if: steps.java_check.outcome == 'failure'
+        run: |
+          echo "❌ Failing because Java test validation failed."
+          exit 1
