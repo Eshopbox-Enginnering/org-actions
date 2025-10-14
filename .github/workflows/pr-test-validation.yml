@@ -83,6 +83,7 @@ jobs:
       - name: Validate Angular test changes
         id: angular_check
         if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true'
+        continue-on-error: true   # <— allows workflow to continue to comment step
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
@@ -107,10 +108,10 @@ jobs:
             base=$(basename "$f" .ts)
             test_file="$dir/${base}.spec.ts"
             if ! grep -qF "$test_file" changed_files.txt; then
-              echo "Missing test for ${f}"
+              echo "❌ Missing test for ${f}"
               MISSING=$((MISSING+1))
             else
-              echo "Found test change for ${f}"
+              echo "✅ Found test change for ${f}"
             fi
           done
 
@@ -122,14 +123,13 @@ jobs:
           fi
 
       - name: Comment on PR — Angular missing tests
-        if: steps.angular_check.outcome == 'failure'
+        if: failure() && steps.repo_check.outputs.type == 'angular'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
-            ⚠️ **Test case enforcement failed (Angular)**
-            Some Angular components/services/pipes/directives were changed without corresponding unit test updates (`*.spec.ts`).
-            
-            Please add or update the respective `.spec.ts` files for the modified items and push the changes — the AI code review will run after tests are included.
+            ⚠️ **Test file missing in PR**
+            Some Angular files were changed without corresponding `.spec.ts` unit test updates.  
+            Please add or update the required test files before merging.
 
       #########################
       # Java validation step  #
@@ -137,6 +137,7 @@ jobs:
       - name: Validate Java test changes
         id: java_check
         if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true'
+        continue-on-error: true   # <— allows workflow to continue to comment step
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
@@ -162,9 +163,9 @@ jobs:
             test2="src/test/java/${relative%.java}Tests.java"
             test3="src/test/java/${relative%.java}IT.java"
             if grep -qF "$test1" changed_files.txt || grep -qF "$test2" changed_files.txt || grep -qF "$test3" changed_files.txt; then
-              echo "Found test change for ${f}"
+              echo "✅ Found test change for ${f}"
             else
-              echo "Missing test for ${f}"
+              echo "❌ Missing test for ${f}"
               MISSING=$((MISSING+1))
             fi
           done
@@ -177,14 +178,13 @@ jobs:
           fi
 
       - name: Comment on PR — Java missing tests
-        if: steps.java_check.outcome == 'failure'
+        if: failure() && steps.repo_check.outputs.type == 'java'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
-            ⚠️ **Test case enforcement failed (Java)**
-            Some Java source files were changed without corresponding unit/integration test updates under `src/test/java` (e.g. `*Test.java`, `*Tests.java`, `*IT.java`).
-            
-            Please add or update the relevant tests and push the changes.
+            ⚠️ **Test file missing in PR**
+            Some Java files were changed without corresponding test updates under `src/test/java`.  
+            Please add or update the required test files before merging.
 
       - name: All checks passed
         if: steps.repo_check.outputs.bypass != 'true' && (steps.angular_check.outcome != 'failure' && steps.java_check.outcome != 'failure')
