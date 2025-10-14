@@ -42,7 +42,7 @@ jobs:
             "Eshopbox-Enginnering/myntra-microservices"
             "Eshopbox-Enginnering/scan-label"
             "Eshopbox-Enginnering/eshopbox-client-services"
-            # "Eshopbox-Enginnering/org-actions"
+            "Eshopbox-Enginnering/org-actions"
             )
 
           if printf '%s\n' "${BYPASS_REPOS[@]}" | grep -q "^$REPO$"; then
