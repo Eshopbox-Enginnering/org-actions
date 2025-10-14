@@ -1,7 +1,6 @@
-name: PR Test File Validation
+name: Validate PR Test Coverage
 
 on:
-  workflow_call: {}
   pull_request:
     branches:
       - 'feature/**'
@@ -9,19 +8,13 @@ on:
       - 'FEATURE/**'
       - 'staging'
       - 'main'
-    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
   pull-requests: write
 
-concurrency:
-  group: test-validation-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
-
 jobs:
   validate-tests:
-    name: Validate PR Test Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -31,18 +24,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Determine repository type and bypass (static list only)
+      - name: Determine repository type and bypass
         id: repo_check
         run: |
-          set -euo pipefail
           REPO="${{ github.repository }}"
-          echo "Repository: ${REPO}"
+          echo "Repository: $REPO"
 
-          # === STATIC BYPASS LIST ===
           BYPASS_LIST=(
             "Eshopbox-Enginnering/poe-frontend"
             "Eshopbox-Enginnering/amzWholesale-Warehouse-Portal-Frontend"
-            "Eshopbox-Enginnering/org-actions"
             "Eshopbox-Enginnering/eshopbox-wms-api"
             "Eshopbox-Enginnering/clickpost-microservice"
             "Eshopbox-Enginnering/eshopbox-wms-middleware"
@@ -52,38 +42,28 @@ jobs:
             "Eshopbox-Enginnering/myntra-microservices"
             "Eshopbox-Enginnering/scan-label"
             "Eshopbox-Enginnering/eshopbox-client-services"
-          )
+            "Eshopbox-Enginnering/org-actions"
+            )
 
-          for b in "${BYPASS_LIST[@]}"; do
-            if [[ "${REPO}" == "${b}" ]]; then
-              echo "Detected repo in hard bypass list: ${REPO}"
-              echo "bypass=true" >> "$GITHUB_OUTPUT"
-              echo "type=none" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-
-          if [[ "${REPO}" == "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]]; then
-            echo "type=angular" >> "$GITHUB_OUTPUT"
-            echo "bypass=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          if printf '%s\n' "${BYPASS_REPOS[@]}" | grep -q "^$REPO$"; then
+            echo "bypass=true" >> $GITHUB_OUTPUT
+            echo "✅ Repo is bypassed."
+          elif [ "$REPO" == "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]; then
+            echo "type=angular" >> $GITHUB_OUTPUT
+          else
+            echo "type=java" >> $GITHUB_OUTPUT
           fi
 
-          echo "type=java" >> "$GITHUB_OUTPUT"
-          echo "bypass=false" >> "$GITHUB_OUTPUT"
-
-      - name: Skip validation (bypassed repo)
+      - name: Skip validation for bypassed repos
         if: steps.repo_check.outputs.bypass == 'true'
-        run: |
-          echo "✅ Repo in static bypass list. Skipping test validation."
+        run: echo "✅ Skipping validation for bypassed repo."
 
-      ############################
-      # Angular validation step  #
-      ############################
+      ####################################
+      # Angular validation (with failure)
+      ####################################
       - name: Validate Angular test changes
         id: angular_check
         if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true'
-        continue-on-error: true   # <— allows workflow to continue to comment step
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
@@ -96,10 +76,11 @@ jobs:
 
           if [ -z "$FILES" ]; then
             echo "✅ No Angular logic files changed."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
             exit 0
           fi
 
-          echo "🧩 Files requiring a matching .spec.ts:"
+          echo "🧩 Files requiring .spec.ts:"
           echo "$FILES"
 
           MISSING=0
@@ -108,84 +89,74 @@ jobs:
             base=$(basename "$f" .ts)
             test_file="$dir/${base}.spec.ts"
             if ! grep -qF "$test_file" changed_files.txt; then
-              echo "❌ Missing test for ${f}"
+              echo "❌ Missing test for $f"
               MISSING=$((MISSING+1))
-            else
-              echo "✅ Found test change for ${f}"
             fi
           done
 
-          if [ "${MISSING}" -gt 0 ]; then
-            echo "Angular test validation failed: ${MISSING} missing"
+          if [ "$MISSING" -gt 0 ]; then
+            echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
-            echo "✅ All modified Angular files have matching .spec.ts updates."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
+            echo "✅ All modified Angular files have tests."
           fi
 
       - name: Comment on PR — Angular missing tests
-        if: failure() && steps.repo_check.outputs.type == 'angular'
+        if: steps.angular_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
             ⚠️ **Test file missing in PR**
-            Some Angular files were changed without corresponding `.spec.ts` unit test updates.  
+            Some Angular files were changed without corresponding `.spec.ts` test updates.  
             Please add or update the required test files before merging.
 
-      #########################
-      # Java validation step  #
-      #########################
+      ####################################
+      # Java validation (with failure)
+      ####################################
       - name: Validate Java test changes
         id: java_check
         if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true'
-        continue-on-error: true   # <— allows workflow to continue to comment step
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
           git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/test/java/ > changed_files.txt || true
 
-          echo "🔍 Changed files:"
-          cat changed_files.txt || true
-
           FILES=$(grep '^src/main/java/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
 
           if [ -z "$FILES" ]; then
             echo "✅ No Java source files changed."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
             exit 0
           fi
 
-          echo "🧩 Java source files requiring matching tests:"
-          echo "$FILES"
-
           MISSING=0
           for f in $FILES; do
-            relative=${f#src/main/java/}
-            test1="src/test/java/${relative%.java}Test.java"
-            test2="src/test/java/${relative%.java}Tests.java"
-            test3="src/test/java/${relative%.java}IT.java"
-            if grep -qF "$test1" changed_files.txt || grep -qF "$test2" changed_files.txt || grep -qF "$test3" changed_files.txt; then
-              echo "✅ Found test change for ${f}"
+            rel=${f#src/main/java/}
+            t1="src/test/java/${rel%.java}Test.java"
+            t2="src/test/java/${rel%.java}Tests.java"
+            t3="src/test/java/${rel%.java}IT.java"
+            if grep -qF "$t1" changed_files.txt || grep -qF "$t2" changed_files.txt || grep -qF "$t3" changed_files.txt; then
+              echo "✅ Found test for $f"
             else
-              echo "❌ Missing test for ${f}"
+              echo "❌ Missing test for $f"
               MISSING=$((MISSING+1))
             fi
           done
 
-          if [ "${MISSING}" -gt 0 ]; then
-            echo "Java test validation failed: ${MISSING} missing"
+          if [ "$MISSING" -gt 0 ]; then
+            echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
-            echo "✅ All modified Java classes have matching test updates."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
+            echo "✅ All modified Java files have tests."
           fi
 
       - name: Comment on PR — Java missing tests
-        if: failure() && steps.repo_check.outputs.type == 'java'
+        if: steps.java_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
             ⚠️ **Test file missing in PR**
             Some Java files were changed without corresponding test updates under `src/test/java`.  
             Please add or update the required test files before merging.
-
-      - name: All checks passed
-        if: steps.repo_check.outputs.bypass != 'true' && (steps.angular_check.outcome != 'failure' && steps.java_check.outcome != 'failure')
-        run: echo "✅ Test validation passed (or no relevant changes)."
