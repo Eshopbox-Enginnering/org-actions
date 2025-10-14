@@ -1,0 +1,187 @@
+name: PR Test Validation
+
+on:
+  workflow_call: {}
+  pull_request:
+    branches:
+      - 'feature/**'
+      - 'Feature/**'
+      - 'FEATURE/**'
+      - 'staging'
+      - 'main'
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: test-validation-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  validate-tests:
+    name: Validate PR Test Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine repository type and bypass
+        id: repo_check
+        env:
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "Repository: ${REPO}"
+
+          # Hard-coded bypass list (always skip these repos)
+          BYPASS_LIST=(
+            "Eshopbox-Enginnering/poe-frontend"
+            "Eshopbox-Enginnering/amzWholesale-Warehouse-Portal-Frontend"
+          )
+
+          for b in "${BYPASS_LIST[@]}"; do
+            if [[ "${REPO}" == "${b}" ]]; then
+              echo "Detected repo in hard bypass list: ${REPO}"
+              echo "bypass=true" >> "$GITHUB_OUTPUT"
+              echo "type=none" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+          # Query GitHub API for repo metadata (primary language)
+          API_URL="https://api.github.com/repos/${REPO}"
+          repo_json=$(curl -s -H "Accept: application/vnd.github.v3+json" -H "Authorization: token ${GITHUB_TOKEN}" "$API_URL")
+
+          # Parse primary language (can be null)
+          primary_lang=$(python - <<'PY'
+            import json,sys
+            data = json.load(sys.stdin)
+            print((data.get("language") or "").strip())
+            PY
+          <<<"$repo_json" | tr -d '\r')
+
+          echo "Primary language: '${primary_lang}'"
+
+          # Bypass all PHP repos (case-insensitive)
+          if [[ -n "${primary_lang}" && "${primary_lang,,}" == "php" ]]; then
+            echo "Repo primary language is PHP -> bypassing validation"
+            echo "bypass=true" >> "$GITHUB_OUTPUT"
+            echo "type=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # If this is the special Angular repo, mark it angular
+          if [[ "${REPO}" == "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]]; then
+            echo "type=angular" >> "$GITHUB_OUTPUT"
+            echo "bypass=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Default: treat as java repo
+          echo "type=java" >> "$GITHUB_OUTPUT"
+          echo "bypass=false" >> "$GITHUB_OUTPUT"
+
+      - name: Skip validation (bypassed repo)
+        if: steps.repo_check.outputs.bypass == 'true'
+        run: |
+          echo "✅ Repo in bypass list or detected as PHP. Skipping test validation."
+
+      ############################
+      # Angular validation block #
+      ############################
+      - name: Validate Angular test changes (eshopbox-client-portal-frontend)
+        if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin ${{ github.base_ref }} --quiet || true
+          git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/ > changed_files.txt || true
+
+          echo "🔍 Changed files:"
+          cat changed_files.txt || true
+
+          # Detect changed Angular logic files excluding test specs
+          FILES=$(grep -E '\.(component|service|pipe|directive)\.ts$' changed_files.txt | grep -v '\.spec\.ts$' || true)
+
+          if [ -z "$FILES" ]; then
+            echo "✅ No Angular logic files changed."
+            exit 0
+          fi
+
+          echo "🧩 Files requiring a matching .spec.ts:"
+          echo "$FILES"
+
+          MISSING=0
+          for f in $FILES; do
+            dir=$(dirname "$f")
+            base=$(basename "$f" .ts)
+            test_file="$dir/${base}.spec.ts"
+            if ! grep -qF "$test_file" changed_files.txt; then
+              echo "::error::Missing test for ${f}"
+              MISSING=$((MISSING+1))
+            else
+              echo "✅ Test present for ${f}"
+            fi
+          done
+
+          if [ "${MISSING}" -gt 0 ]; then
+            echo "::error::⚠️ Test case enforcement failed: Angular files changed without corresponding .spec.ts updates."
+            exit 1
+          else
+            echo "✅ All modified Angular files have matching .spec.ts updates."
+          fi
+
+      #########################
+      # Java validation block #
+      #########################
+      - name: Validate Java test changes (default)
+        if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin ${{ github.base_ref }} --quiet || true
+          git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/test/java/ > changed_files.txt || true
+
+          echo "🔍 Changed files:"
+          cat changed_files.txt || true
+
+          # list changed source files (exclude test files)
+          FILES=$(grep '^src/main/java/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
+
+          if [ -z "$FILES" ]; then
+            echo "✅ No Java source files changed."
+            exit 0
+          fi
+
+          echo "🧩 Java source files requiring matching tests:"
+          echo "$FILES"
+
+          MISSING=0
+          for f in $FILES; do
+            relative=${f#src/main/java/}
+            test1="src/test/java/${relative%.java}Test.java"
+            test2="src/test/java/${relative%.java}Tests.java"
+            test3="src/test/java/${relative%.java}IT.java"
+            if grep -qF "$test1" changed_files.txt || grep -qF "$test2" changed_files.txt || grep -qF "$test3" changed_files.txt; then
+              echo "✅ Test present for ${f}"
+            else
+              echo "::error::Missing test for ${f}"
+              MISSING=$((MISSING+1))
+            fi
+          done
+
+          if [ "${MISSING}" -gt 0 ]; then
+            echo "::error::⚠️ Test case enforcement failed: Java source files changed without matching test updates under src/test/java."
+            exit 1
+          else
+            echo "✅ All modified Java classes have matching test updates."
+          fi
+
+      - name: All checks passed
+        if: steps.repo_check.outputs.bypass != 'true'
+        run: echo "✅ Test validation passed (or no relevant changes)."
