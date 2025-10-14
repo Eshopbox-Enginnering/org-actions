@@ -57,15 +57,76 @@ jobs:
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
+      # 🧩 Enforce test validation only for eshopbox-client-portal-frontend
+      - name: Validate test files changed (Angular)
+        id: test_check
+        if: ${{ github.repository == 'Eshopbox-Enginnering/eshopbox-client-portal-frontend' }}
+        run: |
+          git fetch origin ${{ github.base_ref }} --quiet || true
+          git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/ > changed_files.txt
+
+          echo "🔍 Checking modified Angular files..."
+          cat changed_files.txt
+
+          # Detect changed Angular logic files excluding test specs
+          FILES=$(grep -E '\.(component|service|pipe|directive)\.ts$' changed_files.txt | grep -v '\.spec\.ts$' || true)
+
+          if [ -z "$FILES" ]; then
+            echo "✅ No Angular logic files (component/service/pipe/directive) changed."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          echo "🧩 Files requiring test verification:"
+          echo "$FILES"
+
+          MISSING_TESTS=0
+          : > missing_tests.txt
+
+          for f in $FILES; do
+            base=$(basename "$f" .ts)
+            dir=$(dirname "$f")
+            test_file="$dir/${base}.spec.ts"
+
+            if ! grep -q "$test_file" changed_files.txt; then
+              echo "❌ Missing test for: $f"
+              echo "- $f" >> missing_tests.txt
+              MISSING_TESTS=$((MISSING_TESTS+1))
+            else
+              echo "✅ Test present for: $f"
+            fi
+          done
+
+          if [ "$MISSING_TESTS" -gt 0 ]; then
+            echo "❌ Found $MISSING_TESTS file(s) without corresponding test updates."
+            echo "TESTS_FOUND=false" >> $GITHUB_ENV
+            exit 1
+          else
+            echo "✅ All modified Angular files have matching test updates."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
+          fi
+
+      - name: Comment on PR if missing tests
+        if: failure() && github.repository == 'Eshopbox-Enginnering/eshopbox-client-portal-frontend'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          message: |
+            ⚠️ **Test case enforcement failed**
+            Some Angular files (components, services, pipes, or directives) were changed without corresponding `.spec.ts` updates.
+            
+            **Files missing tests:**
+            ```
+            $(cat missing_tests.txt)
+            ```
+            Please add or update the respective test files before requesting AI review.
+
       - name: Build payload (diff for large files, full for small)
-        if: steps.changes.outputs.no_changes == 'false'
+        if: steps.changes.outputs.no_changes == 'false' && (env.TESTS_FOUND == 'true' || github.repository != 'Eshopbox-Enginnering/eshopbox-client-portal-frontend')
         id: payload
         run: |
           set -euo pipefail
     
-          # ✅ Ensure the base branch exists locally
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
-      
           : > payload.txt
           counted=0
           large=false
@@ -86,10 +147,8 @@ jobs:
             counted=$((counted + 1))
           done
       
-          # Rough estimate of total tokens
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
       
-          # ✅ Decide model based on size of entire PR, not just per-file
           if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
@@ -112,7 +171,7 @@ jobs:
         run: sleep $(( (RANDOM % 21) + 5 ))
 
       - name: Run AI Code Review
-        if: steps.payload.outputs.files_count != '0'
+        if: steps.payload.outputs.files_count != '0' && (env.TESTS_FOUND == 'true' || github.repository != 'Eshopbox-Enginnering/eshopbox-client-portal-frontend')
         id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:

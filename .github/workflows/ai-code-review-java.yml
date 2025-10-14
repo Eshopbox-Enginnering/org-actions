@@ -29,7 +29,7 @@ jobs:
         **/*.md,**/*.json,**/target/**,**/build/**,**/*.class,**/*.log,
         **/.mvn/wrapper/**,**/gradle/wrapper/**,**/generated-sources/**,**/build/generated/**,
         **/*.jar,**/*.war,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.svg,**/*.mp4,
-        **/src/test/**,**/*Test.java,**/*IT.java
+        **/src/test/**,**/*Test.java,**/*Tests.java,**/*IT.java
 
       PROJECT_CONTEXT: |
         Java Spring Boot service (Maven).
@@ -55,15 +55,77 @@ jobs:
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
+      # 🧩 Enforce test validation for changed Java files
+      - name: Validate test files changed (Java)
+        id: test_check
+        run: |
+          git fetch origin ${{ github.base_ref }} --quiet || true
+          git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/test/java/ > changed_files.txt
+
+          echo "🔍 Checking modified Java files..."
+          cat changed_files.txt
+
+          # Detect changed Java source files (excluding tests)
+          FILES=$(grep '^src/main/java/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
+
+          if [ -z "$FILES" ]; then
+            echo "✅ No source files changed."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          echo "🧩 Source files requiring test verification:"
+          echo "$FILES"
+
+          MISSING_TESTS=0
+          : > missing_tests.txt
+
+          for f in $FILES; do
+            # Derive potential test file path under src/test/java
+            relative_path=${f#src/main/java/}
+            test_path="src/test/java/${relative_path%.java}Test.java"
+            test_path2="src/test/java/${relative_path%.java}Tests.java"
+            test_path3="src/test/java/${relative_path%.java}IT.java"
+
+            if grep -q "$test_path" changed_files.txt || grep -q "$test_path2" changed_files.txt || grep -q "$test_path3" changed_files.txt; then
+              echo "✅ Test present for: $f"
+            else
+              echo "❌ Missing test for: $f"
+              echo "- $f" >> missing_tests.txt
+              MISSING_TESTS=$((MISSING_TESTS+1))
+            fi
+          done
+
+          if [ "$MISSING_TESTS" -gt 0 ]; then
+            echo "❌ Found $MISSING_TESTS file(s) without corresponding test updates."
+            echo "TESTS_FOUND=false" >> $GITHUB_ENV
+            exit 1
+          else
+            echo "✅ All changed Java classes have test updates."
+            echo "TESTS_FOUND=true" >> $GITHUB_ENV
+          fi
+
+      - name: Comment on PR if missing tests
+        if: failure()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          message: |
+            ⚠️ **Test case enforcement failed**
+            Some Java classes were modified without corresponding unit or integration tests.
+
+            **Files missing tests:**
+            ```
+            $(cat missing_tests.txt)
+            ```
+            Please add or update the respective test files under `src/test/java` before requesting AI review.
+
       - name: Build payload (diff for large files, full for small)
-        if: steps.changes.outputs.no_changes == 'false'
+        if: steps.changes.outputs.no_changes == 'false' && env.TESTS_FOUND == 'true'
         id: payload
         run: |
           set -euo pipefail
     
-          # ✅ Ensure the base branch exists locally
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
-      
           : > payload.txt
           counted=0
           large=false
@@ -84,10 +146,8 @@ jobs:
             counted=$((counted + 1))
           done
       
-          # Rough estimate of total tokens
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
       
-          # ✅ Decide model based on size of entire PR, not just per-file
           if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
@@ -99,7 +159,7 @@ jobs:
           echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
       
           {
-            echo "### AI Review Preflight (Angular)"
+            echo "### AI Review Preflight (Java)"
             echo "- Files counted: **$counted**"
             echo "- Estimated tokens: **$estimated_tokens**"
             echo "- Selected model: **$model**"
@@ -110,7 +170,7 @@ jobs:
         run: sleep $(( (RANDOM % 21) + 5 ))
 
       - name: Run AI Code Review
-        if: steps.payload.outputs.files_count != '0'
+        if: env.TESTS_FOUND == 'true' && steps.payload.outputs.files_count != '0'
         id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
