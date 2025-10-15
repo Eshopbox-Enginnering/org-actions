@@ -2,7 +2,10 @@
 name: Codex AI Code Review (Angular)
 
 on:
-  workflow_call: {}
+  workflow_run:
+    workflows: ["Validate PR Test Coverage"]  # Triggered after PR validation workflow
+    types:
+      - completed
   workflow_dispatch:  # Allow manual run
 
 permissions:
@@ -10,13 +13,15 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-angular-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+  group: ai-review-angular-${{ github.repository }}-${{ github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   ai_review:
     name: AI Code Review
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: >
+      github.event.workflow_run.conclusion == 'success' ||
+      github.repository != 'Eshopbox-Enginnering/eshopbox-client-portal-frontend'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -45,13 +50,14 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Detect relevant changes
         id: changes
         run: |
-          git fetch origin ${{ github.base_ref }} --quiet || true
-          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/; then
+          git fetch origin main --quiet || true
+          if git diff --quiet origin/main...HEAD -- src/ libs/ apps/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
@@ -62,22 +68,19 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-    
-          # ✅ Ensure the base branch exists locally
-          git fetch origin ${{ github.base_ref }} --depth=1 --quiet
-      
+          git fetch origin main --depth=1 --quiet
           : > payload.txt
           counted=0
           large=false
           total_bytes=0
       
-          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
+          for f in $(git diff --name-only origin/main...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
             total_bytes=$((total_bytes + sz))
             if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
               echo "### Diff for $f" >> payload.txt
-              git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+              git diff -U3 origin/main...HEAD -- "$f" >> payload.txt
               large=true
             else
               echo "### Full content of $f" >> payload.txt
@@ -86,10 +89,8 @@ jobs:
             counted=$((counted + 1))
           done
       
-          # Rough estimate of total tokens
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
       
-          # ✅ Decide model based on size of entire PR, not just per-file
           if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
@@ -106,7 +107,7 @@ jobs:
             echo "- Estimated tokens: **$estimated_tokens**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
-        
+
       - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
         run: sleep $(( (RANDOM % 21) + 5 ))
