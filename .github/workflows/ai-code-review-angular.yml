@@ -1,10 +1,8 @@
+# Reusable workflow (single source of truth). No inputs; all config centralized here.
 name: Codex AI Code Review (Angular)
 
 on:
-  workflow_run:
-    workflows: ["Validate PR Test Coverage"]  # Triggered after PR validation workflow
-    types:
-      - completed
+  workflow_call: {}
   workflow_dispatch:  # Allow manual run
 
 permissions:
@@ -12,16 +10,13 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-angular-${{ github.repository }}-${{ github.event.workflow_run.id || github.run_id }}
+  group: ai-review-angular-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   ai_review:
     name: AI Code Review
-    if: >
-      (github.event.workflow_run.conclusion == 'success' &&
-      github.repository == 'Eshopbox-Enginnering/eshopbox-client-portal-frontend') ||
-      github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -48,39 +43,15 @@ jobs:
       MAX_FILE_BYTES: "30000"   # 30 KB cutoff
 
     steps:
-      - name: Checkout code
+      - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install GitHub CLI
-        run: sudo apt-get install -y gh
-
-      - name: Determine PR base branch
-        id: pr_branch
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -e
-          echo "🔍 Extracting PR number from workflow_run event..."
-          PR_NUMBER=$(jq -r '.workflow_run.pull_requests[0].number' <<< "${{ toJson(github.event) }}" || echo "")
-          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
-            echo "⚠️ No PR number found — defaulting to main."
-            echo "base=main" >> $GITHUB_OUTPUT
-          else
-            echo "PR detected: #$PR_NUMBER"
-            BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
-            echo "Base branch: $BASE_BRANCH"
-            echo "base=$BASE_BRANCH" >> $GITHUB_OUTPUT
-          fi
+        with: { fetch-depth: 0 }
 
       - name: Detect relevant changes
         id: changes
         run: |
-          BASE=${{ steps.pr_branch.outputs.base }}
-          echo "🔍 Using base branch: $BASE"
-          git fetch origin "$BASE" --quiet || true
-          if git diff --quiet origin/${BASE}...HEAD -- src/ libs/ apps/; then
+          git fetch origin ${{ github.base_ref }} --quiet || true
+          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
@@ -91,21 +62,22 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-          BASE=${{ steps.pr_branch.outputs.base }}
-          git fetch origin "$BASE" --depth=1 --quiet
+    
+          # ✅ Ensure the base branch exists locally
+          git fetch origin ${{ github.base_ref }} --depth=1 --quiet
       
           : > payload.txt
           counted=0
           large=false
           total_bytes=0
       
-          for f in $(git diff --name-only origin/${BASE}...HEAD -- src/ libs/ apps/); do
+          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
             total_bytes=$((total_bytes + sz))
             if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
               echo "### Diff for $f" >> payload.txt
-              git diff -U3 origin/${BASE}...HEAD -- "$f" >> payload.txt
+              git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
               large=true
             else
               echo "### Full content of $f" >> payload.txt
@@ -114,8 +86,10 @@ jobs:
             counted=$((counted + 1))
           done
       
+          # Rough estimate of total tokens
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
       
+          # ✅ Decide model based on size of entire PR, not just per-file
           if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
@@ -132,7 +106,7 @@ jobs:
             echo "- Estimated tokens: **$estimated_tokens**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
-
+        
       - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
         run: sleep $(( (RANDOM % 21) + 5 ))
