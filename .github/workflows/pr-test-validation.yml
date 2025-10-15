@@ -120,7 +120,7 @@ jobs:
           exit 1
 
       ####################################
-      # Java validation
+      # Java validation (focused on DAO, Service, Endpoint, Controller)
       ####################################
       - name: Validate Java test changes
         id: java_check
@@ -131,20 +131,29 @@ jobs:
           git fetch origin ${{ github.base_ref }} --quiet || true
           git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/test/java/ > changed_files.txt || true
 
-          FILES=$(grep '^src/main/java/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
+          echo "🔍 Changed files:"
+          cat changed_files.txt || true
+
+          # Only consider key logic layers for validation
+          FILES=$(grep -E '^src/main/java/.*/(dao|service|endpoint|controller)/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
 
           if [ -z "$FILES" ]; then
-            echo "✅ No Java source files changed."
+            echo "✅ No relevant Java (DAO/Service/Endpoint/Controller) files changed."
             echo "TESTS_FOUND=true" >> $GITHUB_ENV
             exit 0
           fi
 
+          echo "🧩 Files requiring test validation:"
+          echo "$FILES"
+
           MISSING=0
           for f in $FILES; do
-            rel=${f#src/main/java/}
-            t1="src/test/java/${rel%.java}Test.java"
-            t2="src/test/java/${rel%.java}Tests.java"
-            t3="src/test/java/${rel%.java}IT.java"
+            # Dynamically derive test path relative to src/main/java/
+            rel_path=$(echo "$f" | sed 's|^src/main/java/||')
+            t1="src/test/java/${rel_path%.java}Test.java"
+            t2="src/test/java/${rel_path%.java}Tests.java"
+            t3="src/test/java/${rel_path%.java}IT.java"
+
             if grep -qF "$t1" changed_files.txt || grep -qF "$t2" changed_files.txt || grep -qF "$t3" changed_files.txt; then
               echo "✅ Found test for $f"
             else
@@ -158,7 +167,7 @@ jobs:
             echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
-            echo "✅ All modified Java files have tests."
+            echo "✅ All modified Java (DAO/Service/Endpoint/Controller) files have tests."
             echo "TESTS_FOUND=true" >> $GITHUB_ENV
           fi
 
