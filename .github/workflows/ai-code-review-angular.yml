@@ -1,4 +1,3 @@
-# Reusable workflow (single source of truth). No inputs; all config centralized here.
 name: Codex AI Code Review (Angular)
 
 on:
@@ -20,8 +19,9 @@ jobs:
   ai_review:
     name: AI Code Review
     if: >
-      github.event.workflow_run.conclusion == 'success' ||
-      github.repository != 'Eshopbox-Enginnering/eshopbox-client-portal-frontend'
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.repository == 'Eshopbox-Enginnering/eshopbox-client-portal-frontend') ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -48,16 +48,39 @@ jobs:
       MAX_FILE_BYTES: "30000"   # 30 KB cutoff
 
     steps:
-      - name: Checkout PR code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Install GitHub CLI
+        run: sudo apt-get install -y gh
+
+      - name: Determine PR base branch
+        id: pr_branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          echo "🔍 Extracting PR number from workflow_run event..."
+          PR_NUMBER=$(jq -r '.workflow_run.pull_requests[0].number' <<< "${{ toJson(github.event) }}" || echo "")
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "⚠️ No PR number found — defaulting to main."
+            echo "base=main" >> $GITHUB_OUTPUT
+          else
+            echo "PR detected: #$PR_NUMBER"
+            BASE_BRANCH=$(gh pr view "$PR_NUMBER" --json baseRefName -q '.baseRefName')
+            echo "Base branch: $BASE_BRANCH"
+            echo "base=$BASE_BRANCH" >> $GITHUB_OUTPUT
+          fi
+
       - name: Detect relevant changes
         id: changes
         run: |
-          git fetch origin main --quiet || true
-          if git diff --quiet origin/main...HEAD -- src/ libs/ apps/; then
+          BASE=${{ steps.pr_branch.outputs.base }}
+          echo "🔍 Using base branch: $BASE"
+          git fetch origin "$BASE" --quiet || true
+          if git diff --quiet origin/${BASE}...HEAD -- src/ libs/ apps/; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
@@ -68,19 +91,21 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-          git fetch origin main --depth=1 --quiet
+          BASE=${{ steps.pr_branch.outputs.base }}
+          git fetch origin "$BASE" --depth=1 --quiet
+      
           : > payload.txt
           counted=0
           large=false
           total_bytes=0
       
-          for f in $(git diff --name-only origin/main...HEAD -- src/ libs/ apps/); do
+          for f in $(git diff --name-only origin/${BASE}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
             total_bytes=$((total_bytes + sz))
             if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
               echo "### Diff for $f" >> payload.txt
-              git diff -U3 origin/main...HEAD -- "$f" >> payload.txt
+              git diff -U3 origin/${BASE}...HEAD -- "$f" >> payload.txt
               large=true
             else
               echo "### Full content of $f" >> payload.txt
