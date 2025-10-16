@@ -2,6 +2,7 @@ name: Validate PR Test Coverage
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, edited]
     branches:
       - 'feature/**'
       - 'Feature/**'
