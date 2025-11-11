@@ -1,0 +1,22 @@
+name: Validate CI/CD Timeout
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cicd.yml"
+
+jobs:
+  check-timeout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate timeout-minutes in cicd.yml
+        run: |
+          if ! grep -q "timeout-minutes:" .github/workflows/cicd.yml; then
+            echo "❌ ERROR: 'timeout-minutes' not found in .github/workflows/cicd.yml"
+            echo "Please add 'timeout-minutes: <deployment_time + 10>' immediately after the 'runs-on' line."
+            exit 1
+          fi
+          echo "✅ timeout-minutes found in cicd.yml"
