@@ -38,10 +38,10 @@ jobs:
         - Thread-safety & performance in hot paths.
         - Fast, isolated tests.
 
-      # Thresholds
-      MAX_FILE_BYTES: "20000"       # 20 KB cutoff
-      MAX_FILE_LINES: "1200"        # LOC threshold → diff-only for large files
-      MAX_DIFF_LINES: "3000"        # shrink large diffs to U1
+      # Hybrid thresholds
+      MAX_FILE_BYTES: "35000"        # 35 KB file = full content
+      MAX_FILE_LINES: "600"          # < 600 LOC = full content
+      MAX_DIFF_LINES: "3000"         # shrink large diffs
 
     steps:
       - name: Checkout PR code
@@ -60,7 +60,7 @@ jobs:
             echo "no_changes=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build payload (diff for large files, full for small)
+      - name: Build hybrid payload (full for small files, diff for large)
         if: steps.changes.outputs.no_changes == 'false'
         id: payload
         run: |
@@ -69,23 +69,28 @@ jobs:
 
           : > payload.txt
           counted=0
-          large=false
           total_bytes=0
+          used_diffs=false
 
-          # Collect modified files safely
           changed_files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'src/**' 'libs/**' 'apps/**')
 
           for f in $changed_files; do
-            if [[ ! -f "$f" ]]; then
-              continue
-            fi
+            [[ -f "$f" ]] || continue
 
-            sz=$(wc -c <"$f" | tr -d ' ')
-            lines=$(wc -l <"$f" | tr -d ' ')
+            sz=$(wc -c < "$f" | tr -d ' ')
+            lines=$(wc -l < "$f" | tr -d ' ')
+
             total_bytes=$((total_bytes + sz))
 
-            # Determine whether full file or diff should be sent
-            if [[ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]] || [[ "$lines" -gt "${{ env.MAX_FILE_LINES }}" ]]; then
+            echo "### File: $f" >> payload.txt
+
+            # Hybrid logic
+            if [[ "$sz" -le "${{ env.MAX_FILE_BYTES }}" ]] && [[ "$lines" -le "${{ env.MAX_FILE_LINES }}" ]]; then
+              # Full Content Mode
+              echo "### Full content of $f" >> payload.txt
+              cat "$f" >> payload.txt
+            else
+              # Diff Mode
               echo "### Diff for $f" >> payload.txt
 
               diff_output=$(git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f")
@@ -97,19 +102,16 @@ jobs:
                 echo "$diff_output" >> payload.txt
               fi
 
-              large=true
-            else
-              echo "### Full content of $f" >> payload.txt
-              cat "$f" >> payload.txt
+              used_diffs=true
             fi
 
             counted=$((counted + 1))
           done
 
-          # Token estimation for model selection
+          # Estimate tokens
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
 
-          if [[ "$estimated_tokens" -gt 25000 ]] || [[ "$large" = "true" ]]; then
+          if [[ "$used_diffs" == true ]] || [[ "$estimated_tokens" -gt 35000 ]]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
             model="${{ vars.AI_MODEL_4 }}"
