@@ -27,9 +27,9 @@ jobs:
 
       EXCLUDE_PATTERNS: >-
         **/*.md,**/*.json,**/target/**,**/build/**,**/*.class,**/*.log,
-        **/.mvn/wrapper/**,**/gradle/wrapper/**,**/generated-sources/**,**/build/generated/**,
-        **/*.jar,**/*.war,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.svg,**/*.mp4,
-        **/src/test/**,**/*Test.java,**/*IT.java
+        **/.mvn/wrapper/**,**/gradle/wrapper/**,**/generated-sources/**,
+        **/build/generated/**,**/*.jar,**/*.war,**/*.png,**/*.jpg,**/*.jpeg,
+        **/*.gif,**/*.svg,**/*.mp4,**/src/test/**,**/*Test.java,**/*IT.java
 
       PROJECT_CONTEXT: |
         Java Spring Boot service (Maven).
@@ -39,20 +39,22 @@ jobs:
         - Fast, isolated tests.
 
       # Thresholds
-      MAX_FILE_BYTES: "20000"     # 20 KB
-      MAX_FILE_LINES: "1200"      # NEW: large file LOC threshold
-      MAX_DIFF_LINES: "3000"      # NEW: shrink diffs if extremely large
+      MAX_FILE_BYTES: "20000"       # 20 KB cutoff
+      MAX_FILE_LINES: "1200"        # LOC threshold → diff-only for large files
+      MAX_DIFF_LINES: "3000"        # shrink large diffs to U1
 
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with:
+          fetch-depth: 0
 
       - name: Detect relevant changes
         id: changes
         run: |
           git fetch origin ${{ github.base_ref }} --quiet || true
-          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/main/resources/; then
+
+          if git diff --quiet origin/${{ github.base_ref }}...HEAD -- 'src/**' 'libs/**' 'apps/**'; then
             echo "no_changes=true" >> $GITHUB_OUTPUT
           else
             echo "no_changes=false" >> $GITHUB_OUTPUT
@@ -63,7 +65,6 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
 
           : > payload.txt
@@ -71,22 +72,29 @@ jobs:
           large=false
           total_bytes=0
 
-          for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
-            [ -f "$f" ] || continue
+          # Collect modified files safely
+          changed_files=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- 'src/**' 'libs/**' 'apps/**')
+
+          for f in $changed_files; do
+            if [[ ! -f "$f" ]]; then
+              continue
+            fi
 
             sz=$(wc -c <"$f" | tr -d ' ')
             lines=$(wc -l <"$f" | tr -d ' ')
             total_bytes=$((total_bytes + sz))
 
-            if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ] || [ "$lines" -gt "${{ env.MAX_FILE_LINES }}" ]; then
+            # Determine whether full file or diff should be sent
+            if [[ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]] || [[ "$lines" -gt "${{ env.MAX_FILE_LINES }}" ]]; then
               echo "### Diff for $f" >> payload.txt
 
-              diff_lines=$(git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" | wc -l)
+              diff_output=$(git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f")
+              diff_lines=$(echo "$diff_output" | wc -l)
 
-              if [ "$diff_lines" -gt "${{ env.MAX_DIFF_LINES }}" ]; then
+              if [[ "$diff_lines" -gt "${{ env.MAX_DIFF_LINES }}" ]]; then
                 git diff -U1 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
               else
-                git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+                echo "$diff_output" >> payload.txt
               fi
 
               large=true
@@ -98,16 +106,17 @@ jobs:
             counted=$((counted + 1))
           done
 
+          # Token estimation for model selection
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
 
-          if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
+          if [[ "$estimated_tokens" -gt 25000 ]] || [[ "$large" = "true" ]]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
             model="${{ vars.AI_MODEL_4 }}"
           fi
 
           echo "selected_model=$model" >> $GITHUB_OUTPUT
-          echo "files_count=$counted"  >> $GITHUB_OUTPUT
+          echo "files_count=$counted" >> $GITHUB_OUTPUT
           echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
 
           {
