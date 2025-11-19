@@ -2,7 +2,7 @@ name: Codex AI Code Review (Java)
 
 on:
   workflow_call: {}
-  workflow_dispatch:  # Allow manual run
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,7 +38,10 @@ jobs:
         - Thread-safety & performance in hot paths.
         - Fast, isolated tests.
 
-      MAX_FILE_BYTES: "20000"   # 20 KB cutoff
+      # Thresholds
+      MAX_FILE_BYTES: "20000"     # 20 KB
+      MAX_FILE_LINES: "1200"      # NEW: large file LOC threshold
+      MAX_DIFF_LINES: "3000"      # NEW: shrink diffs if extremely large
 
     steps:
       - name: Checkout PR code
@@ -60,51 +63,60 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-    
-          # ✅ Ensure the base branch exists locally
+
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
-      
+
           : > payload.txt
           counted=0
           large=false
           total_bytes=0
-      
+
           for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
+
             sz=$(wc -c <"$f" | tr -d ' ')
+            lines=$(wc -l <"$f" | tr -d ' ')
             total_bytes=$((total_bytes + sz))
-            if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ]; then
+
+            if [ "$sz" -gt "${{ env.MAX_FILE_BYTES }}" ] || [ "$lines" -gt "${{ env.MAX_FILE_LINES }}" ]; then
               echo "### Diff for $f" >> payload.txt
-              git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+
+              diff_lines=$(git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" | wc -l)
+
+              if [ "$diff_lines" -gt "${{ env.MAX_DIFF_LINES }}" ]; then
+                git diff -U1 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+              else
+                git diff -U3 origin/${{ github.base_ref }}...HEAD -- "$f" >> payload.txt
+              fi
+
               large=true
             else
               echo "### Full content of $f" >> payload.txt
               cat "$f" >> payload.txt
             fi
+
             counted=$((counted + 1))
           done
-      
-          # Rough estimate of total tokens
+
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
-      
-          # ✅ Decide model based on size of entire PR, not just per-file
+
           if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
             model="${{ vars.AI_MODEL_4 }}"
           fi
-      
+
           echo "selected_model=$model" >> $GITHUB_OUTPUT
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
           echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
-      
+
           {
-            echo "### AI Review Preflight (Angular)"
+            echo "### AI Review Preflight (Java)"
             echo "- Files counted: **$counted**"
             echo "- Estimated tokens: **$estimated_tokens**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
-            
+
       - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
         run: sleep $(( (RANDOM % 21) + 5 ))
