@@ -3,9 +3,7 @@ name: QA Approval Check
 on:
   pull_request:
     branches:
-      # - main
-      # - Master
-      - master
+      - main
     types:
       - opened
       - reopened
