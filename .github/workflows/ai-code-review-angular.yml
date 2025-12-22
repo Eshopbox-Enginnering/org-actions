@@ -8,7 +8,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: read
 
 concurrency:
   group: ai-review-angular-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
