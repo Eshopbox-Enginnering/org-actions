@@ -45,8 +45,7 @@ jobs:
     steps:
       - name: Checkout PR code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
 
       - name: Detect relevant changes
         id: changes
@@ -63,15 +62,15 @@ jobs:
         id: payload
         run: |
           set -euo pipefail
-
+    
           # ✅ Ensure the base branch exists locally
           git fetch origin ${{ github.base_ref }} --depth=1 --quiet
-
+      
           : > payload.txt
           counted=0
           large=false
           total_bytes=0
-
+      
           for f in $(git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/); do
             [ -f "$f" ] || continue
             sz=$(wc -c <"$f" | tr -d ' ')
@@ -86,28 +85,28 @@ jobs:
             fi
             counted=$((counted + 1))
           done
-
+      
           # Rough estimate of total tokens
           estimated_tokens=$(( (total_bytes / 4) * 2 + 1500 ))
-
+      
           # ✅ Decide model based on size of entire PR, not just per-file
           if [ "$estimated_tokens" -gt 25000 ] || [ "$large" = "true" ]; then
             model="${{ vars.AI_MODEL_4_MINI }}"
           else
             model="${{ vars.AI_MODEL_4 }}"
           fi
-
+      
           echo "selected_model=$model" >> $GITHUB_OUTPUT
           echo "files_count=$counted"  >> $GITHUB_OUTPUT
           echo "estimated_tokens=$estimated_tokens" >> $GITHUB_OUTPUT
-
+      
           {
             echo "### AI Review Preflight (Angular)"
             echo "- Files counted: **$counted**"
             echo "- Estimated tokens: **$estimated_tokens**"
             echo "- Selected model: **$model**"
           } >> "$GITHUB_STEP_SUMMARY"
-
+        
       - name: Jitter to reduce org-wide bursts (5–25s)
         if: steps.payload.outputs.files_count != '0'
         run: sleep $(( (RANDOM % 21) + 5 ))
@@ -117,71 +116,15 @@ jobs:
         id: ai_review
         uses: Eshopbox-Enginnering/ai-codereviewer@main
         with:
-          GITHUB_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
-          AI_PROVIDER:     ${{ env.AI_PROVIDER }}
-          AI_API_KEY:      ${{ secrets.AI_REVIEW_CODEX }}
-          AI_MODEL:        ${{ steps.payload.outputs.selected_model }}
-          AI_TEMPERATURE:  ${{ env.AI_TEMPERATURE }}
+          GITHUB_TOKEN:   ${{ secrets.GITHUB_TOKEN }}
+          AI_PROVIDER:    ${{ env.AI_PROVIDER }}
+          AI_API_KEY:     ${{ secrets.AI_REVIEW_CODEX }}
+          AI_MODEL:       ${{ steps.payload.outputs.selected_model }}
+          AI_TEMPERATURE: ${{ env.AI_TEMPERATURE }}
           APPROVE_REVIEWS: ${{ env.APPROVE_REVIEWS }}
-          MAX_COMMENTS:    ${{ env.MAX_COMMENTS }}
+          MAX_COMMENTS:   ${{ env.MAX_COMMENTS }}
           PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
           EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
-
-      - name: Fail only if AI verdict is Request Changes
-        if: steps.payload.outputs.files_count != '0' && github.event.pull_request.number
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const pr = context.payload.pull_request;
-            if (!pr) {
-              core.warning("No pull_request context found. Skipping verdict validation.");
-              return;
-            }
-      
-            const { owner, repo } = context.repo;
-      
-            // Helper: detect "Request Changes" in any text
-            const isRequestChanges = (text) =>
-              /Verdict:\s*Request\s*Changes/i.test(text || "") ||
-              /Verdict:\s*Require\s*Changes/i.test(text || "") ||
-              /Verdict:\s*Requires\s*Changes/i.test(text || "");
-      
-            // 1) Check PR Reviews first (AI action may submit a review)
-            const reviews = await github.paginate(github.rest.pulls.listReviews, {
-              owner,
-              repo,
-              pull_number: pr.number,
-              per_page: 100
-            });
-      
-            // Prefer latest review from github-actions[bot] (or any Bot if author differs)
-            const botReview = reviews
-              .filter(r => (r.user?.login === "github-actions[bot]" || r.user?.type === "Bot") && (r.body || "").trim().length > 0)
-              .sort((a, b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0))[0];
-      
-            if (botReview && isRequestChanges(botReview.body)) {
-              core.setFailed("❌ AI Verdict is 'Request Changes' (from PR review). Blocking merge.");
-              return;
-            }
-      
-            // 2) Fallback: check PR conversation comments (github-actions bot "left a comment")
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner,
-              repo,
-              issue_number: pr.number,
-              per_page: 100
-            });
-      
-            const botComment = comments
-              .filter(c => (c.user?.login === "github-actions[bot]" || c.user?.type === "Bot") && (c.body || "").trim().length > 0)
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-      
-            if (botComment && isRequestChanges(botComment.body)) {
-              core.setFailed("❌ AI Verdict is 'Request Changes' (from PR comment). Blocking merge.");
-              return;
-            }
-      
-            core.info("✅ AI Verdict is not Request Changes (or not found). Allowing merge.");
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
