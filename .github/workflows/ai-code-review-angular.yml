@@ -8,7 +8,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  issues: read
 
 concurrency:
   group: ai-review-angular-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
@@ -128,7 +127,7 @@ jobs:
           PROJECT_CONTEXT: ${{ env.PROJECT_CONTEXT }}
           EXCLUDE_PATTERNS: ${{ env.EXCLUDE_PATTERNS }}
 
-      - name: Fail only if AI verdict is Request Changes
+      - name: Fail only if AI verdict is Request Changes (PR reviews only)
         if: steps.payload.outputs.files_count != '0' && github.event.pull_request.number
         uses: actions/github-script@v7
         with:
@@ -138,38 +137,30 @@ jobs:
               core.warning("No pull_request context found. Skipping verdict validation.");
               return;
             }
-
+      
             const { owner, repo } = context.repo;
-
-            // Fetch all PR conversation comments (AI posts summary as a github-actions bot comment)
-            const comments = await github.paginate(
-              github.rest.issues.listComments,
-              {
-                owner,
-                repo,
-                issue_number: pr.number,
-                per_page: 100
-              }
-            );
-
-            // Fail if ANY bot comment explicitly contains: "Verdict: Request Changes"
-            const hit = comments.find(c => {
-              const isBot =
-                c.user?.login === "github-actions[bot]" ||
-                c.user?.type === "Bot";
-
+      
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number: pr.number,
+              per_page: 100
+            });
+      
+            // Look for ANY bot review containing "Verdict: Request Changes"
+            const hit = reviews.find(r => {
+              const isBot = r.user?.type === "Bot" || (r.user?.login || "").endsWith("[bot]");
               if (!isBot) return false;
-
-              const body = c.body || "";
+              const body = r.body || "";
               return /Verdict:\s*Request\s*Changes/i.test(body);
             });
-
+      
             if (hit) {
-              core.setFailed("❌ AI Verdict is 'Request Changes'. Blocking merge.");
+              core.setFailed("❌ AI Verdict is 'Request Changes' (from PR review). Blocking merge.");
               return;
             }
-
-            core.info("✅ No 'Request Changes' verdict found in AI comments. Allowing merge.");
+      
+            core.info("✅ No 'Request Changes' verdict found in PR reviews. Allowing merge.");
 
       - name: Skip log message
         if: steps.changes.outputs.no_changes == 'true'
