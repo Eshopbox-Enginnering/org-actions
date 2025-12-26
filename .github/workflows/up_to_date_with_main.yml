@@ -1,0 +1,84 @@
+name: Check source branch up-to-date with main for staging PRs
+
+on:
+  workflow_call:
+    inputs:
+      main_branch:
+        description: Main branch to compare against
+        required: false
+        default: main
+        type: string
+      target_branch:
+        description: Target branch where rule should apply
+        required: false
+        default: staging
+        type: string
+      conflict_prefix:
+        description: Source branch prefix to skip (conflict branches)
+        required: false
+        default: conflict/
+        type: string
+
+  pull_request:
+    branches:
+      - staging
+
+jobs:
+  up_to_date_with_main:
+    if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - id: verify
+        name: Verify source branch contains latest main commit (skip conflict branches)
+        env:
+          BASE: ${{ github.base_ref }}
+          SOURCE: ${{ github.event.pull_request.head.ref }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+          TARGET: ${{ inputs.target_branch || 'staging' }}
+          MAIN: ${{ inputs.main_branch || 'main' }}
+          CONFLICT_PREFIX: ${{ inputs.conflict_prefix || 'conflict/' }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Base: ${BASE:-} | Source: ${SOURCE:-} | Target rule branch: $TARGET | Main: $MAIN"
+
+          # This workflow is intended for PRs targeting staging; if invoked elsewhere, skip.
+          if [ "${BASE:-}" != "$TARGET" ]; then
+            echo "Skipping: PR base is '${BASE:-}', rule applies only when base is '$TARGET'."
+            exit 0
+          fi
+
+          # Skip conflict branches
+          if [[ "${SOURCE:-}" == "${CONFLICT_PREFIX}"* ]]; then
+            echo "Skipping: source branch '${SOURCE:-}' is a conflict branch (${CONFLICT_PREFIX}*)."
+            exit 0
+          fi
+
+          # Fetch latest main SHA
+          git init -q
+          git remote add origin "https://github.com/${REPO}.git"
+          git fetch -q --no-tags --depth=1 origin "$MAIN"
+          MAIN_SHA="$(git rev-parse "FETCH_HEAD")"
+
+          echo "Latest $MAIN SHA: $MAIN_SHA"
+          echo "PR head SHA     : ${SOURCE_SHA:-}"
+
+          if [ -z "${SOURCE_SHA:-}" ]; then
+            echo "::error::Could not determine PR head SHA."
+            exit 1
+          fi
+
+          # Check if main SHA is contained in PR head commit history
+          # (i.e., PR source branch includes latest main)
+          if git merge-base --is-ancestor "$MAIN_SHA" "$SOURCE_SHA"; then
+            echo "✅ Source branch '${SOURCE}' contains latest '$MAIN' commit ($MAIN_SHA)."
+            exit 0
+          fi
+
+          echo "::error::❌ Source branch '${SOURCE}' does NOT contain the latest '$MAIN' commit."
+          echo "::error::Please merge/rebase '$MAIN' into '${SOURCE}' before merging to '$TARGET'."
+          echo "::error::Latest $MAIN: https://github.com/${REPO}/commit/${MAIN_SHA}"
+          exit 1
