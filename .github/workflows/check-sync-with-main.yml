@@ -13,11 +13,6 @@ on:
         required: false
         default: staging
         type: string
-      conflict_prefix:
-        description: Source branch prefix to skip (conflict branches)
-        required: false
-        default: conflict/
-        type: string
 
   pull_request:
     branches:
@@ -38,14 +33,13 @@ jobs:
           fetch-depth: 0
 
       - id: verify
-        name: Verify source branch contains latest main commit (skip conflict branches)
+        name: Verify source branch contains latest main commit
         env:
           BASE: ${{ github.base_ref }}
           SOURCE: ${{ github.event.pull_request.head.ref }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-          TARGET: ${{ inputs.target_branch || 'staging' }}
-          MAIN: ${{ inputs.main_branch || 'main' }}
-          CONFLICT_PREFIX: ${{ inputs.conflict_prefix || 'conflict/' }}
+          TARGET: ${{ inputs.target_branch }}
+          MAIN: ${{ inputs.main_branch }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
@@ -53,15 +47,9 @@ jobs:
 
           echo "Base: ${BASE:-} | Source: ${SOURCE:-} | Target rule branch: $TARGET | Main: $MAIN"
 
-          # Rule applies only for PRs targeting staging (or whatever TARGET is set to)
+          # Rule applies only for PRs targeting TARGET (default: staging)
           if [ "${BASE:-}" != "$TARGET" ]; then
             echo "Skipping: PR base is '${BASE:-}', rule applies only when base is '$TARGET'."
-            exit 0
-          fi
-
-          # Skip conflict branches
-          if [[ "${SOURCE:-}" == "${CONFLICT_PREFIX}"* ]]; then
-            echo "Skipping: source branch '${SOURCE:-}' is a conflict branch (${CONFLICT_PREFIX}*)."
             exit 0
           fi
 
@@ -83,23 +71,77 @@ jobs:
             exit 0
           fi
 
+          # Detect conflict branch (case-insensitive): conflict/* or conflicts/*
+          SOURCE_LOWER="$(echo "${SOURCE}" | tr '[:upper:]' '[:lower:]')"
+          IS_CONFLICT_BRANCH=false
+          if [[ "$SOURCE_LOWER" == conflict/* || "$SOURCE_LOWER" == conflicts/* ]]; then
+            IS_CONFLICT_BRANCH=true
+          fi
+
+          if [ "$IS_CONFLICT_BRANCH" = true ]; then
           cat <<EOF
           ::error::❌ Source branch '${SOURCE}' is NOT up to date with ${MAIN}.
-
+          
           -----------------------------------------------------------------------------
           WHY THIS PR IS BLOCKED
           -----------------------------------------------------------------------------
-
+          
+          This repository enforces the rule:
+          All changes merged into STAGING must be based on the latest MAIN branch.
+          
+          This PR uses a CONFLICT branch, and the original development branch
+          (feature / patch / bugfix) does not include the latest commits from MAIN.
+          
+          Because of this, the merge is blocked.
+          
+          -----------------------------------------------------------------------------
+          HOW TO FIX THIS (Conflict branch flow)
+          -----------------------------------------------------------------------------
+          
+          1. Checkout your original development branch (feature / patch / bugfix):
+             git checkout <your-development-branch>
+          
+          2. Pull the latest changes from MAIN:
+             git pull origin ${MAIN}
+          
+          3. Resolve conflicts if any, then commit and push the changes.
+          
+          4. Switch back to the current conflict branch:
+             git checkout ${SOURCE}
+          
+          5. Pull your updated development branch into the conflict branch:
+             git pull origin <your-development-branch>
+          
+          6. Resolve conflicts if required, commit, and push.
+          
+          Once this is done, the validation check will re-run automatically.
+          After it passes, the PR can be merged to STAGING.
+          
+          -----------------------------------------------------------------------------
+          Latest MAIN commit:
+          https://github.com/${REPO}/commit/${MAIN_SHA}
+          -----------------------------------------------------------------------------
+          EOF
+          
+          else
+          cat <<EOF
+          ::error::❌ Source branch '${SOURCE}' is NOT up to date with ${MAIN}.
+          
+          -----------------------------------------------------------------------------
+          WHY THIS PR IS BLOCKED
+          -----------------------------------------------------------------------------
+          
           This repository enforces the rule:
           Always update your source branch from MAIN before creating a PR to STAGING or MAIN.
           
           This PR targets STAGING, but the source branch does not include the latest commits from MAIN.
           
           Because of this, the merge is blocked.
-
+          
           -----------------------------------------------------------------------------
           HOW TO FIX THIS
           -----------------------------------------------------------------------------
+          
           1. Pull the latest changes from the MAIN branch into your source branch:
              git checkout ${SOURCE}
              git pull origin ${MAIN}
@@ -108,7 +150,14 @@ jobs:
           
           3. The validation check will re-run automatically.
              Once it passes, the PR can be merged to STAGING.
-             
+          
+          -----------------------------------------------------------------------------
+          Latest MAIN commit:
+          https://github.com/${REPO}/commit/${MAIN_SHA}
+          -----------------------------------------------------------------------------
           EOF
+          
+          fi
 
           exit 1
+          
