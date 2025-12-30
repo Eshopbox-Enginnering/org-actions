@@ -45,6 +45,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Fallbacks (helps if called without inputs populated)
+          TARGET="${TARGET:-staging}"
+          MAIN="${MAIN:-main}"
+
           echo "Base: ${BASE:-} | Source: ${SOURCE:-} | Target rule branch: $TARGET | Main: $MAIN"
 
           # Rule applies only for PRs targeting TARGET (default: staging)
@@ -160,4 +164,3 @@ jobs:
           fi
 
           exit 1
-          
