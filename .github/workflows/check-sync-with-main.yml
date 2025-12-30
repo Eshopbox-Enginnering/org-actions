@@ -23,10 +23,13 @@ on:
     branches:
       - staging
 
+permissions:
+  contents: read
+
 jobs:
   up_to_date_with_main:
     if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' }}
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - id: verify
@@ -39,27 +42,26 @@ jobs:
           MAIN: ${{ inputs.main_branch || 'main' }}
           CONFLICT_PREFIX: ${{ inputs.conflict_prefix || 'conflict/' }}
           REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
           echo "Base: ${BASE:-} | Source: ${SOURCE:-} | Target rule branch: $TARGET | Main: $MAIN"
 
-          # This workflow is intended for PRs targeting staging; if invoked elsewhere, skip.
           if [ "${BASE:-}" != "$TARGET" ]; then
             echo "Skipping: PR base is '${BASE:-}', rule applies only when base is '$TARGET'."
             exit 0
           fi
 
-          # Skip conflict branches
           if [[ "${SOURCE:-}" == "${CONFLICT_PREFIX}"* ]]; then
             echo "Skipping: source branch '${SOURCE:-}' is a conflict branch (${CONFLICT_PREFIX}*)."
             exit 0
           fi
 
-          # Fetch latest main SHA
+          # Authenticated fetch (fixes: could not read Username for 'https://github.com')
           git init -q
-          git remote add origin "https://github.com/${REPO}.git"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
           git fetch -q --no-tags --depth=1 origin "$MAIN"
           MAIN_SHA="$(git rev-parse "FETCH_HEAD")"
 
@@ -71,8 +73,7 @@ jobs:
             exit 1
           fi
 
-          # Check if main SHA is contained in PR head commit history
-          # (i.e., PR source branch includes latest main)
+          # Check if latest main is contained in PR head history
           if git merge-base --is-ancestor "$MAIN_SHA" "$SOURCE_SHA"; then
             echo "✅ Source branch '${SOURCE}' contains latest '$MAIN' commit ($MAIN_SHA)."
             exit 0
