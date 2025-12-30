@@ -32,6 +32,11 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 10
     steps:
+      - name: Checkout repo (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - id: verify
         name: Verify source branch contains latest main commit (skip conflict branches)
         env:
@@ -42,29 +47,28 @@ jobs:
           MAIN: ${{ inputs.main_branch || 'main' }}
           CONFLICT_PREFIX: ${{ inputs.conflict_prefix || 'conflict/' }}
           REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
           echo "Base: ${BASE:-} | Source: ${SOURCE:-} | Target rule branch: $TARGET | Main: $MAIN"
 
+          # Rule applies only for PRs targeting staging (or whatever TARGET is set to)
           if [ "${BASE:-}" != "$TARGET" ]; then
             echo "Skipping: PR base is '${BASE:-}', rule applies only when base is '$TARGET'."
             exit 0
           fi
 
+          # Skip conflict branches
           if [[ "${SOURCE:-}" == "${CONFLICT_PREFIX}"* ]]; then
             echo "Skipping: source branch '${SOURCE:-}' is a conflict branch (${CONFLICT_PREFIX}*)."
             exit 0
           fi
 
-          # Authenticated fetch (fixes: could not read Username for 'https://github.com')
-          git init -q
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
-          git fetch -q --no-tags --depth=1 origin "$MAIN"
-          MAIN_SHA="$(git rev-parse "FETCH_HEAD")"
+          # Ensure we have latest MAIN
+          git fetch origin "$MAIN" --quiet
 
+          MAIN_SHA="$(git rev-parse "origin/$MAIN")"
           echo "Latest $MAIN SHA: $MAIN_SHA"
           echo "PR head SHA     : ${SOURCE_SHA:-}"
 
@@ -73,13 +77,27 @@ jobs:
             exit 1
           fi
 
-          # Check if latest main is contained in PR head history
+          # Validate: latest main commit must be reachable from PR head
           if git merge-base --is-ancestor "$MAIN_SHA" "$SOURCE_SHA"; then
             echo "✅ Source branch '${SOURCE}' contains latest '$MAIN' commit ($MAIN_SHA)."
             exit 0
           fi
 
-          echo "::error::❌ Source branch '${SOURCE}' does NOT contain the latest '$MAIN' commit."
-          echo "::error::Please merge/rebase '$MAIN' into '${SOURCE}' before merging to '$TARGET'."
-          echo "::error::Latest $MAIN: https://github.com/${REPO}/commit/${MAIN_SHA}"
+          cat <<EOF
+          ::error::❌ Source branch '${SOURCE}' is NOT up to date with ${MAIN}.
+
+          To enforce the thumb rule — **always update your source branch from main before creating a PR to STAGING or MAIN** — we’ve added a validation check.
+
+          If a PR to **staging** doesn’t include the latest commits from **main**, it will now be **blocked** until the branch is updated.
+
+          Please ensure you **pull the latest changes from main** before creating any PR to **STAGING** or **MAIN**.
+
+          **How to resolve if the "Check source branch up-to-date with main for staging PRs" check fails:**
+
+          1. Pull the latest changes from the **MAIN** branch into your source branch.
+          2. Commit and push the updates.
+          3. The PR check will automatically re-run, and once it passes, the merge to **STAGING** will be allowed.
+
+          EOF
+
           exit 1
