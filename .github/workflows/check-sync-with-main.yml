@@ -1,4 +1,4 @@
-name: Check source branch up-to-date with main for staging PRs
+name: Check source branch up-to-date with main
 
 on:
   workflow_call:
@@ -32,19 +32,20 @@ jobs:
     runs-on: self-hosted
     timeout-minutes: 10
     steps:
-      - name: Checkout repository (full history)
+      - name: Checkout repo (full history)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Verify source branch contains latest main commit
+      - id: verify
+        name: Verify source branch contains latest main commit (skip conflict branches)
         env:
           BASE: ${{ github.base_ref }}
           SOURCE: ${{ github.event.pull_request.head.ref }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-          TARGET: ${{ inputs.target_branch }}
-          MAIN: ${{ inputs.main_branch }}
-          CONFLICT_PREFIX: ${{ inputs.conflict_prefix }}
+          TARGET: ${{ inputs.target_branch || 'staging' }}
+          MAIN: ${{ inputs.main_branch || 'main' }}
+          CONFLICT_PREFIX: ${{ inputs.conflict_prefix || 'conflict/' }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
@@ -52,19 +53,19 @@ jobs:
 
           echo "Base: ${BASE:-} | Source: ${SOURCE:-} | Target rule branch: $TARGET | Main: $MAIN"
 
-          # Apply rule only when PR targets staging (or whatever TARGET is set to)
+          # Rule applies only for PRs targeting staging (or whatever TARGET is set to)
           if [ "${BASE:-}" != "$TARGET" ]; then
-            echo "Skipping check: PR base is '${BASE:-}', rule applies only for '$TARGET'."
+            echo "Skipping: PR base is '${BASE:-}', rule applies only when base is '$TARGET'."
             exit 0
           fi
 
           # Skip conflict branches
           if [[ "${SOURCE:-}" == "${CONFLICT_PREFIX}"* ]]; then
-            echo "Skipping check: '${SOURCE}' is a conflict branch."
+            echo "Skipping: source branch '${SOURCE:-}' is a conflict branch (${CONFLICT_PREFIX}*)."
             exit 0
           fi
 
-          # Fetch latest MAIN
+          # Ensure we have latest MAIN
           git fetch origin "$MAIN" --quiet
 
           MAIN_SHA="$(git rev-parse "origin/$MAIN")"
@@ -72,45 +73,42 @@ jobs:
           echo "PR head SHA     : ${SOURCE_SHA:-}"
 
           if [ -z "${SOURCE_SHA:-}" ]; then
-            echo "::error::Unable to determine PR head SHA."
+            echo "::error::Could not determine PR head SHA."
             exit 1
           fi
 
           # Validate: latest main commit must be reachable from PR head
           if git merge-base --is-ancestor "$MAIN_SHA" "$SOURCE_SHA"; then
-            echo "✅ Source branch '${SOURCE}' contains latest '$MAIN' commit."
+            echo "✅ Source branch '${SOURCE}' contains latest '$MAIN' commit ($MAIN_SHA)."
             exit 0
           fi
 
-          # Annotation (short, no markdown)
-          echo "::error::Source branch '${SOURCE}' is not up to date with ${MAIN}. Merge or rebase ${MAIN} before merging to ${TARGET}."
+          cat <<EOF
+          ::error::❌ Source branch '${SOURCE}' is NOT up to date with ${MAIN}.
 
-          # Detailed explanation (logs)
-          printf '%s\n' \
-            '' \
-            '------------------------------------------------------------' \
-            'WHY THIS PR IS BLOCKED' \
-            '------------------------------------------------------------' \
-            '' \
-            'This repository enforces the rule:' \
-            'Always update your source branch from MAIN before creating a PR to STAGING or MAIN.' \
-            '' \
-            'This PR targets STAGING, but the source branch does not include the latest commits from MAIN.' \
-            'Because of this, the merge is blocked.' \
-            '' \
-            'HOW TO FIX THIS' \
-            "1. Pull the latest changes from the MAIN branch into your source branch:" \
-            "   git checkout ${SOURCE}" \
-            "   git pull origin ${MAIN}" \
-            '' \
-            '2. Resolve conflicts if any, then commit and push the changes.' \
-            '' \
-            '3. The validation check will re-run automatically.' \
-            '   Once it passes, the PR can be merged to STAGING.' \
-            '' \
-            'LATEST MAIN COMMIT' \
-            "https://github.com/${REPO}/commit/${MAIN_SHA}" \
-            '------------------------------------------------------------' \
-            ''
+          -----------------------------------------------------------------------------
+          WHY THIS PR IS BLOCKED
+          -----------------------------------------------------------------------------
+
+          This repository enforces the rule:
+          Always update your source branch from MAIN before creating a PR to STAGING or MAIN.
+          
+          This PR targets STAGING, but the source branch does not include the latest commits from MAIN.
+          
+          Because of this, the merge is blocked.
+
+          -----------------------------------------------------------------------------
+          HOW TO FIX THIS
+          -----------------------------------------------------------------------------
+          1. Pull the latest changes from the MAIN branch into your source branch:
+             git checkout ${SOURCE}
+             git pull origin ${MAIN}
+          
+          2. Resolve conflicts if any, then commit and push the changes.
+          
+          3. The validation check will re-run automatically.
+             Once it passes, the PR can be merged to STAGING.
+             
+          EOF
 
           exit 1
