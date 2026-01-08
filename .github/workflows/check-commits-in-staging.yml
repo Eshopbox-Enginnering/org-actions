@@ -25,7 +25,9 @@ jobs:
     # Run for workflow_call OR pull_request (but skip if PR source branch contains "revert")
     if: >
       github.event_name == 'workflow_call' ||
-      (github.event_name == 'pull_request' && !contains(toLower(github.event.pull_request.head.ref), 'revert'))
+      (github.event_name == 'pull_request' &&
+       !contains(lower(github.event.pull_request.head.ref), 'revert'))
+
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
