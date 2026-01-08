@@ -27,7 +27,7 @@ on:
 jobs:
   check-commits:
     if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
