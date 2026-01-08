@@ -22,14 +22,9 @@ on:
 
 jobs:
   check-commits:
-<<<<<<< HEAD
-    if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
-    runs-on: self-hosted
-=======
     # Expressions don't support lowercasing; do revert-skip inside bash instead
     if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
->>>>>>> d259e0c8633d7a1e71a5bdad97f3ac3f51bfb10f
     timeout-minutes: 10
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
