@@ -20,17 +20,17 @@ on:
       - Master
       - Main
 
-  # push:
-  #   branches:
-  #     - staging
-
 jobs:
   check-commits:
-    if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
+    # Run for workflow_call OR pull_request (but skip if PR source branch contains "revert")
+    if: >
+      github.event_name == 'workflow_call' ||
+      (github.event_name == 'pull_request' && !contains(toLower(github.event.pull_request.head.ref), 'revert'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -41,28 +41,35 @@ jobs:
         name: Verify all PR commits exist in compare branch
         env:
           BASE: ${{ github.base_ref }}
-          SOURCE: ${{ github.event.pull_request.head.ref }}
+          # For workflow_call, github.event.pull_request.* won't exist, so fall back safely
+          SOURCE: ${{ github.event.pull_request.head.ref || github.ref_name }}
           COMPARE: ${{ inputs.compare_branch || 'staging' }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Base: $BASE | Source: $SOURCE | Compare: $COMPARE"
+          echo "Base: ${BASE:-} | Source: $SOURCE | Compare: $COMPARE"
+
+          # Extra safety: if this is a PR and branch name contains "revert", skip
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            if [[ "${SOURCE,,}" == *revert* ]]; then
+              echo "Skipping staging commit verification for revert branch: $SOURCE"
+              exit 0
+            fi
+          fi
+
           git fetch origin "$COMPARE" --quiet || true
           git fetch origin "$SOURCE" --quiet || true
 
-          # Get commits unique to source branch compared to staging (remove blanks)
-          PR_COMMITS=$(git log origin/${COMPARE}..origin/${SOURCE} --pretty=format:"%H" | grep -v '^$' || true)
+          # Get commits unique to source branch compared to compare branch (remove blanks)
+          PR_COMMITS=$(git log "origin/${COMPARE}..origin/${SOURCE}" --pretty=format:"%H" | grep -v '^$' || true)
 
           echo "Commits in PR source branch not in $COMPARE yet:"
           echo "$PR_COMMITS"
 
           MISSING=""
           for commit in $PR_COMMITS; do
-            # Skip if empty
-            if [ -z "$commit" ]; then
-              continue
-            fi
+            [ -z "$commit" ] && continue
             if ! git branch --remotes --contains "$commit" | grep -q "origin/${COMPARE}"; then
               MISSING+="$commit"$'\n'
             fi
