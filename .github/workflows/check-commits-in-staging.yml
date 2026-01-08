@@ -27,7 +27,7 @@ on:
 jobs:
   check-commits:
     if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/staging') }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
@@ -48,6 +48,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "Base: $BASE | Source: $SOURCE | Compare: $COMPARE"
+
+          # Skip check for revert branches (case-insensitive)
+          if [[ -n "${SOURCE:-}" && "${SOURCE,,}" == *revert* ]]; then
+            echo "Skipping staging commit verification for revert branch: $SOURCE"
+            exit 0
+          fi
+
           git fetch origin "$COMPARE" --quiet || true
           git fetch origin "$SOURCE" --quiet || true
 
