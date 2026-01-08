@@ -22,9 +22,8 @@ on:
 
 jobs:
   check-commits:
-    # Expressions don't support lowercasing; do revert-skip inside bash instead
     if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
     outputs:
       pr_commits: ${{ steps.verify.outputs.pr_commits }}
