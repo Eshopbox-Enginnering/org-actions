@@ -22,12 +22,8 @@ on:
 
 jobs:
   check-commits:
-    # Run for workflow_call OR pull_request (but skip if PR source branch contains "revert")
-    if: >
-      github.event_name == 'workflow_call' ||
-      (github.event_name == 'pull_request' &&
-       !contains(lower(github.event.pull_request.head.ref), 'revert'))
-
+    # Expressions don't support lowercasing; do revert-skip inside bash instead
+    if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -43,18 +39,17 @@ jobs:
         name: Verify all PR commits exist in compare branch
         env:
           BASE: ${{ github.base_ref }}
-          # For workflow_call, github.event.pull_request.* won't exist, so fall back safely
           SOURCE: ${{ github.event.pull_request.head.ref || github.ref_name }}
           COMPARE: ${{ inputs.compare_branch || 'staging' }}
           REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Base: ${BASE:-} | Source: $SOURCE | Compare: $COMPARE"
+          echo "Event: ${GITHUB_EVENT_NAME} | Base: ${BASE:-} | Source: ${SOURCE:-} | Compare: ${COMPARE:-}"
 
-          # Extra safety: if this is a PR and branch name contains "revert", skip
+          # Skip for revert branches (case-insensitive) on PRs
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            if [[ "${SOURCE,,}" == *revert* ]]; then
+            if [[ -n "${SOURCE:-}" && "${SOURCE,,}" == *revert* ]]; then
               echo "Skipping staging commit verification for revert branch: $SOURCE"
               exit 0
             fi
@@ -63,7 +58,7 @@ jobs:
           git fetch origin "$COMPARE" --quiet || true
           git fetch origin "$SOURCE" --quiet || true
 
-          # Get commits unique to source branch compared to compare branch (remove blanks)
+          # Commits unique to source branch compared to compare branch
           PR_COMMITS=$(git log "origin/${COMPARE}..origin/${SOURCE}" --pretty=format:"%H" | grep -v '^$' || true)
 
           echo "Commits in PR source branch not in $COMPARE yet:"
