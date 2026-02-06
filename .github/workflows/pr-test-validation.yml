@@ -47,24 +47,52 @@ jobs:
           )
 
           if printf '%s\n' "${BYPASS_LIST[@]}" | grep -q "^$REPO$"; then
-            echo "bypass=true" >> $GITHUB_OUTPUT
+            echo "bypass=true" >> "$GITHUB_OUTPUT"
             echo "✅ Repo is bypassed."
           elif [ "$REPO" == "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]; then
-            echo "type=angular" >> $GITHUB_OUTPUT
+            echo "type=angular" >> "$GITHUB_OUTPUT"
           else
-            echo "type=java" >> $GITHUB_OUTPUT
+            echo "type=java" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Skip validation for bypassed repos
         if: steps.repo_check.outputs.bypass == 'true'
         run: echo "✅ Skipping validation for bypassed repo."
 
+      # Detect PR changes (if none, pass and skip checks)
+      - name: Detect code changes in PR
+        id: changes
+        if: steps.repo_check.outputs.bypass != 'true'
+        run: |
+          set -euo pipefail
+          git fetch origin ${{ github.base_ref }} --quiet || true
+
+          # Union of paths you care about across Angular + Java
+          git diff --name-only origin/${{ github.base_ref }}...HEAD -- \
+            src/ libs/ apps/ src/main/java/ src/test/java/ > changed_files.txt || true
+
+          echo "🔍 Changed files:"
+          cat changed_files.txt || true
+
+          if [ ! -s changed_files.txt ]; then
+            echo "✅ No changes found in monitored paths."
+            echo "no_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: No changes — skip validation
+        if: steps.changes.outputs.no_changes == 'true'
+        run: |
+          echo "✅ No relevant changes. Skipping validation."
+          exit 0
+
       ####################################
       # Angular validation
       ####################################
       - name: Validate Angular test changes
         id: angular_check
-        if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true'
+        if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true' && steps.changes.outputs.no_changes != 'true'
         continue-on-error: true   # don't stop job; we’ll fail later
         run: |
           set -euo pipefail
@@ -106,7 +134,7 @@ jobs:
           fi
 
       - name: Comment on PR — Angular missing tests
-        if: always() && steps.angular_check.outcome == 'failure'
+        if: always() && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
@@ -115,7 +143,7 @@ jobs:
             Please add or update the required test files before merging.
 
       - name: Fail workflow if Angular validation failed
-        if: steps.angular_check.outcome == 'failure'
+        if: steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
         run: |
           echo "❌ Failing because Angular test validation failed."
           exit 1
@@ -125,7 +153,7 @@ jobs:
       ####################################
       - name: Validate Java test changes
         id: java_check
-        if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true'
+        if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true' && steps.changes.outputs.no_changes != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -173,7 +201,7 @@ jobs:
           fi
 
       - name: Comment on PR — Java missing tests
-        if: always() && steps.java_check.outcome == 'failure'
+        if: always() && steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
@@ -182,7 +210,7 @@ jobs:
             Please add or update the required test files before merging.
 
       - name: Fail workflow if Java validation failed
-        if: steps.java_check.outcome == 'failure'
+        if: steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
         run: |
           echo "❌ Failing because Java test validation failed."
           exit 1
