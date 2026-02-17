@@ -1,0 +1,61 @@
+name: Manual Runner Cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Cleanup mode"
+        required: true
+        default: "normal"
+        type: choice
+        options:
+          - normal
+          - aggressive
+      builder_ttl:
+        description: "BuildKit prune TTL (e.g., 12h, 6h, 24h)"
+        required: true
+        default: "12h"
+
+concurrency:
+  group: runner-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    # IMPORTANT: ensure this matches your self-hosted runner labels
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Show disk + docker usage (before)
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h
+          docker system df -v || true
+
+      - name: Run cleanup script (normal)
+        if: ${{ inputs.mode == 'normal' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /bin/bash /home/aman_singh/cleanup.sh
+          tail -n 80 /home/aman_singh/cleanup.log || true
+
+      - name: Run aggressive cleanup (safe)
+        if: ${{ inputs.mode == 'aggressive' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Aggressive mode: pruning BuildKit cache + unused images"
+          sudo docker builder prune -f --filter "until=${{ inputs.builder_ttl }}" || true
+          sudo docker builder prune -a -f || true
+          sudo docker image prune -a -f || true
+          sudo /bin/bash /home/aman_singh/cleanup.sh
+          tail -n 120 /home/aman_singh/cleanup.log || true
+
+      - name: Show disk + docker usage (after)
+        shell: bash
+        run: |
+          set -euo pipefail
+          df -h
+          docker system df -v || true
