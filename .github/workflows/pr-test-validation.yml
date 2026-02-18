@@ -55,6 +55,42 @@ jobs:
             echo "type=java" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Detect revert PR/commit
+        id: revert_check
+        run: |
+          set -euo pipefail
+          TITLE="${{ github.event.pull_request.title }}"
+          BODY="${{ github.event.pull_request.body }}"
+          echo "PR title: $TITLE"
+
+          is_revert="false"
+
+          # Common GitHub revert PR title starts with "Revert"
+          if echo "$TITLE" | grep -Eiq '^\s*revert\b'; then
+            is_revert="true"
+          # GitHub revert PR body usually contains "This reverts commit <sha>"
+          elif echo "${BODY:-}" | grep -Eiq 'this reverts commit'; then
+            is_revert="true"
+          else
+            # Best-effort: scan commit subjects in PR range for revert keywords
+            git fetch origin ${{ github.base_ref }} --quiet || true
+            if git log --format=%s origin/${{ github.base_ref }}...HEAD 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
+              is_revert="true"
+            fi
+          fi
+
+          echo "is_revert=$is_revert" >> "$GITHUB_OUTPUT"
+
+          if [ "$is_revert" = "true" ]; then
+            echo "✅ Revert detected. Skipping test coverage validation."
+          else
+            echo "✅ Not a revert."
+          fi
+
+      - name: Revert PR — skip validation
+        if: steps.revert_check.outputs.is_revert == 'true'
+        run: echo "✅ Revert PR/commit detected. Validation skipped."
+
       - name: Skip validation for bypassed repos
         if: steps.repo_check.outputs.bypass == 'true'
         run: echo "✅ Skipping validation for bypassed repo."
@@ -62,7 +98,7 @@ jobs:
       # Detect PR changes (if none, pass and skip checks)
       - name: Detect code changes in PR
         id: changes
-        if: steps.repo_check.outputs.bypass != 'true'
+        if: steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true'
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
@@ -82,7 +118,7 @@ jobs:
           fi
 
       - name: No changes — skip validation
-        if: steps.changes.outputs.no_changes == 'true'
+        if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes == 'true'
         run: |
           echo "✅ No relevant changes. Skipping validation."
           exit 0
@@ -92,7 +128,7 @@ jobs:
       ####################################
       - name: Validate Angular test changes
         id: angular_check
-        if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true' && steps.changes.outputs.no_changes != 'true'
+        if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true'
         continue-on-error: true   # don't stop job; we’ll fail later
         run: |
           set -euo pipefail
@@ -134,7 +170,7 @@ jobs:
           fi
 
       - name: Comment on PR — Angular missing tests
-        if: always() && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
+        if: always() && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
@@ -143,7 +179,7 @@ jobs:
             Please add or update the required test files before merging.
 
       - name: Fail workflow if Angular validation failed
-        if: steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
+        if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
         run: |
           echo "❌ Failing because Angular test validation failed."
           exit 1
@@ -153,7 +189,7 @@ jobs:
       ####################################
       - name: Validate Java test changes
         id: java_check
-        if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true' && steps.changes.outputs.no_changes != 'true'
+        if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -201,7 +237,7 @@ jobs:
           fi
 
       - name: Comment on PR — Java missing tests
-        if: always() && steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
+        if: always() && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
@@ -210,7 +246,7 @@ jobs:
             Please add or update the required test files before merging.
 
       - name: Fail workflow if Java validation failed
-        if: steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
+        if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
         run: |
           echo "❌ Failing because Java test validation failed."
           exit 1
