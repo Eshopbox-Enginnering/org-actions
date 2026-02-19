@@ -65,14 +65,11 @@ jobs:
 
           is_revert="false"
 
-          # Common GitHub revert PR title starts with "Revert"
           if echo "$TITLE" | grep -Eiq '^\s*revert\b'; then
             is_revert="true"
-          # GitHub revert PR body usually contains "This reverts commit <sha>"
           elif echo "${BODY:-}" | grep -Eiq 'this reverts commit'; then
             is_revert="true"
           else
-            # Best-effort: scan commit subjects in PR range for revert keywords
             git fetch origin ${{ github.base_ref }} --quiet || true
             if git log --format=%s origin/${{ github.base_ref }}...HEAD 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
               is_revert="true"
@@ -95,7 +92,6 @@ jobs:
         if: steps.repo_check.outputs.bypass == 'true'
         run: echo "✅ Skipping validation for bypassed repo."
 
-      # Detect PR changes (if none, pass and skip checks)
       - name: Detect code changes in PR
         id: changes
         if: steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true'
@@ -129,19 +125,22 @@ jobs:
       - name: Validate Angular test changes
         id: angular_check
         if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true'
-        continue-on-error: true   # don't stop job; we’ll fail later
+        continue-on-error: true
         run: |
           set -euo pipefail
           git fetch origin ${{ github.base_ref }} --quiet || true
+
+          # Include html/scss so they are detected, but tests are only enforced for logic TS files
           git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
+          # Require tests only when Angular logic TS files change (ignore html/scss-only changes)
           FILES=$(grep -E '\.(component|service|pipe|directive)\.ts$' changed_files.txt | grep -v '\.spec\.ts$' || true)
 
           if [ -z "$FILES" ]; then
-            echo "✅ No Angular logic files changed."
+            echo "✅ No Angular logic .ts files changed (or only html/scss changed)."
             echo "TESTS_FOUND=true" >> $GITHUB_ENV
             exit 0
           fi
@@ -165,7 +164,7 @@ jobs:
             echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
-            echo "✅ All modified Angular files have tests."
+            echo "✅ All modified Angular logic files have tests."
             echo "TESTS_FOUND=true" >> $GITHUB_ENV
           fi
 
@@ -175,8 +174,8 @@ jobs:
         with:
           message: |
             ⚠️ **Test file missing in PR**
-            Some Angular files were changed without corresponding `.spec.ts` test updates.  
-            Please add or update the required test files before merging.
+            Some Angular logic files (`.component.ts`, `.service.ts`, `.pipe.ts`, `.directive.ts`) were changed without corresponding `.spec.ts` test updates.  
+            Changes only in `.html` / `.scss` do not require unit test updates, but logic `.ts` changes do.
 
       - name: Fail workflow if Angular validation failed
         if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
@@ -199,7 +198,6 @@ jobs:
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
-          # Only consider key logic layers for validation
           FILES=$(grep -E '^src/main/java/.*/(dao|service|endpoint|controller)/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
 
           if [ -z "$FILES" ]; then
@@ -213,7 +211,6 @@ jobs:
 
           MISSING=0
           for f in $FILES; do
-            # Dynamically derive test path relative to src/main/java/
             rel_path=$(echo "$f" | sed 's|^src/main/java/||')
             t1="src/test/java/${rel_path%.java}Test.java"
             t2="src/test/java/${rel_path%.java}Tests.java"
