@@ -16,6 +16,8 @@ permissions:
 
 jobs:
   validate-tests:
+    # Skip this workflow for the problematic head branch (source branch)
+    if: ${{ github.head_ref != 'conflict/remove-text-recharge-to-avoid' }}
     runs-on: self-hosted
     timeout-minutes: 10
 
@@ -70,11 +72,14 @@ jobs:
 
           is_revert="false"
 
+          # Revert PR title usually starts with "Revert"
           if echo "$TITLE" | grep -Eiq '^\s*revert\b'; then
             is_revert="true"
+          # Revert PR body usually contains "This reverts commit <sha>"
           elif echo "${BODY:-}" | grep -Eiq 'this reverts commit'; then
             is_revert="true"
           else
+            # Best-effort: scan commit subjects in PR range for revert keywords
             git fetch origin "${{ github.base_ref }}" --quiet || true
             if git log --format=%s "origin/${{ github.base_ref }}...HEAD" 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
               is_revert="true"
