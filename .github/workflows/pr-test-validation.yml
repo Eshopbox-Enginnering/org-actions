@@ -4,11 +4,11 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, edited]
     branches:
-      - 'feature/**'
-      - 'Feature/**'
-      - 'FEATURE/**'
-      - 'staging'
-      - 'main'
+      - "feature/**"
+      - "Feature/**"
+      - "FEATURE/**"
+      - "staging"
+      - "main"
 
 permissions:
   contents: read
@@ -27,7 +27,9 @@ jobs:
 
       - name: Determine repository type and bypass
         id: repo_check
+        shell: bash
         run: |
+          set -euo pipefail
           REPO="${{ github.repository }}"
           echo "Repository: $REPO"
 
@@ -49,14 +51,17 @@ jobs:
           if printf '%s\n' "${BYPASS_LIST[@]}" | grep -q "^$REPO$"; then
             echo "bypass=true" >> "$GITHUB_OUTPUT"
             echo "✅ Repo is bypassed."
-          elif [ "$REPO" == "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]; then
+          elif [ "$REPO" = "Eshopbox-Enginnering/eshopbox-client-portal-frontend" ]; then
             echo "type=angular" >> "$GITHUB_OUTPUT"
+            echo "bypass=false" >> "$GITHUB_OUTPUT"
           else
             echo "type=java" >> "$GITHUB_OUTPUT"
+            echo "bypass=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Detect revert PR/commit
         id: revert_check
+        shell: bash
         run: |
           set -euo pipefail
           TITLE="${{ github.event.pull_request.title }}"
@@ -70,8 +75,8 @@ jobs:
           elif echo "${BODY:-}" | grep -Eiq 'this reverts commit'; then
             is_revert="true"
           else
-            git fetch origin ${{ github.base_ref }} --quiet || true
-            if git log --format=%s origin/${{ github.base_ref }}...HEAD 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
+            git fetch origin "${{ github.base_ref }}" --quiet || true
+            if git log --format=%s "origin/${{ github.base_ref }}...HEAD" 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
               is_revert="true"
             fi
           fi
@@ -86,21 +91,26 @@ jobs:
 
       - name: Revert PR — skip validation
         if: steps.revert_check.outputs.is_revert == 'true'
-        run: echo "✅ Revert PR/commit detected. Validation skipped."
+        shell: bash
+        run: |
+          echo "✅ Revert PR/commit detected. Validation skipped."
 
       - name: Skip validation for bypassed repos
         if: steps.repo_check.outputs.bypass == 'true'
-        run: echo "✅ Skipping validation for bypassed repo."
+        shell: bash
+        run: |
+          echo "✅ Skipping validation for bypassed repo."
 
       - name: Detect code changes in PR
         id: changes
         if: steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true'
+        shell: bash
         run: |
           set -euo pipefail
-          git fetch origin ${{ github.base_ref }} --quiet || true
+          git fetch origin "${{ github.base_ref }}" --quiet || true
 
           # Union of paths you care about across Angular + Java
-          git diff --name-only origin/${{ github.base_ref }}...HEAD -- \
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- \
             src/ libs/ apps/ src/main/java/ src/test/java/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
@@ -115,6 +125,7 @@ jobs:
 
       - name: No changes — skip validation
         if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes == 'true'
+        shell: bash
         run: |
           echo "✅ No relevant changes. Skipping validation."
           exit 0
@@ -126,12 +137,13 @@ jobs:
         id: angular_check
         if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true'
         continue-on-error: true
+        shell: bash
         run: |
           set -euo pipefail
-          git fetch origin ${{ github.base_ref }} --quiet || true
+          git fetch origin "${{ github.base_ref }}" --quiet || true
 
           # Include html/scss so they are detected, but tests are only enforced for logic TS files
-          git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/ libs/ apps/ > changed_files.txt || true
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- src/ libs/ apps/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
           cat changed_files.txt || true
@@ -139,9 +151,8 @@ jobs:
           # Require tests only when Angular logic TS files change (ignore html/scss-only changes)
           FILES=$(grep -E '\.(component|service|pipe|directive)\.ts$' changed_files.txt | grep -v '\.spec\.ts$' || true)
 
-          if [ -z "$FILES" ]; then
+          if [ -z "${FILES:-}" ]; then
             echo "✅ No Angular logic .ts files changed (or only html/scss changed)."
-            echo "TESTS_FOUND=true" >> $GITHUB_ENV
             exit 0
           fi
 
@@ -150,22 +161,20 @@ jobs:
 
           MISSING=0
           for f in $FILES; do
-            dir=$(dirname "$f")
-            base=$(basename "$f" .ts)
+            dir="$(dirname "$f")"
+            base="$(basename "$f" .ts)"
             test_file="$dir/${base}.spec.ts"
             if ! grep -qF "$test_file" changed_files.txt; then
-              echo "❌ Missing test for $f"
+              echo "❌ Missing test for $f (expected $test_file in PR)"
               MISSING=$((MISSING+1))
             fi
           done
 
           if [ "$MISSING" -gt 0 ]; then
             echo "Angular test validation failed: $MISSING missing"
-            echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
             echo "✅ All modified Angular logic files have tests."
-            echo "TESTS_FOUND=true" >> $GITHUB_ENV
           fi
 
       - name: Comment on PR — Angular missing tests
@@ -174,11 +183,12 @@ jobs:
         with:
           message: |
             ⚠️ **Test file missing in PR**
-            Some Angular logic files (`.component.ts`, `.service.ts`, `.pipe.ts`, `.directive.ts`) were changed without corresponding `.spec.ts` test updates.  
+            Some Angular logic files (`.component.ts`, `.service.ts`, `.pipe.ts`, `.directive.ts`) were changed without corresponding `.spec.ts` test updates.
             Changes only in `.html` / `.scss` do not require unit test updates, but logic `.ts` changes do.
 
       - name: Fail workflow if Angular validation failed
         if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
+        shell: bash
         run: |
           echo "❌ Failing because Angular test validation failed."
           exit 1
@@ -190,19 +200,20 @@ jobs:
         id: java_check
         if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true'
         continue-on-error: true
+        shell: bash
         run: |
           set -euo pipefail
-          git fetch origin ${{ github.base_ref }} --quiet || true
-          git diff --name-only origin/${{ github.base_ref }}...HEAD -- src/main/java/ src/test/java/ > changed_files.txt || true
+          git fetch origin "${{ github.base_ref }}" --quiet || true
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- src/main/java/ src/test/java/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
+          # Only consider key logic layers for validation
           FILES=$(grep -E '^src/main/java/.*/(dao|service|endpoint|controller)/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
 
-          if [ -z "$FILES" ]; then
+          if [ -z "${FILES:-}" ]; then
             echo "✅ No relevant Java (DAO/Service/Endpoint/Controller) files changed."
-            echo "TESTS_FOUND=true" >> $GITHUB_ENV
             exit 0
           fi
 
@@ -211,7 +222,7 @@ jobs:
 
           MISSING=0
           for f in $FILES; do
-            rel_path=$(echo "$f" | sed 's|^src/main/java/||')
+            rel_path="$(echo "$f" | sed 's|^src/main/java/||')"
             t1="src/test/java/${rel_path%.java}Test.java"
             t2="src/test/java/${rel_path%.java}Tests.java"
             t3="src/test/java/${rel_path%.java}IT.java"
@@ -219,18 +230,16 @@ jobs:
             if grep -qF "$t1" changed_files.txt || grep -qF "$t2" changed_files.txt || grep -qF "$t3" changed_files.txt; then
               echo "✅ Found test for $f"
             else
-              echo "❌ Missing test for $f"
+              echo "❌ Missing test for $f (expected one of: $t1 / $t2 / $t3 in PR)"
               MISSING=$((MISSING+1))
             fi
           done
 
           if [ "$MISSING" -gt 0 ]; then
             echo "Java test validation failed: $MISSING missing"
-            echo "TESTS_FOUND=false" >> $GITHUB_ENV
             exit 1
           else
             echo "✅ All modified Java (DAO/Service/Endpoint/Controller) files have tests."
-            echo "TESTS_FOUND=true" >> $GITHUB_ENV
           fi
 
       - name: Comment on PR — Java missing tests
@@ -239,11 +248,12 @@ jobs:
         with:
           message: |
             ⚠️ **Test file missing in PR**
-            Some Java files were changed without corresponding test updates under `src/test/java`.  
+            Some Java files were changed without corresponding test updates under `src/test/java`.
             Please add or update the required test files before merging.
 
       - name: Fail workflow if Java validation failed
         if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
+        shell: bash
         run: |
           echo "❌ Failing because Java test validation failed."
           exit 1
