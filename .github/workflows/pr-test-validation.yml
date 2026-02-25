@@ -61,13 +61,17 @@ jobs:
             echo "bypass=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # ✅ FIXED: Do NOT interpolate PR title/body directly into bash script.
+      # Read them safely from $GITHUB_EVENT_PATH using jq.
       - name: Detect revert PR/commit
         id: revert_check
         shell: bash
         run: |
           set -euo pipefail
-          TITLE="${{ github.event.pull_request.title }}"
-          BODY="${{ github.event.pull_request.body }}"
+
+          TITLE="$(jq -r '.pull_request.title // ""' "$GITHUB_EVENT_PATH")"
+          BODY="$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")"
+
           echo "PR title: $TITLE"
 
           is_revert="false"
@@ -76,7 +80,7 @@ jobs:
           if echo "$TITLE" | grep -Eiq '^\s*revert\b'; then
             is_revert="true"
           # Revert PR body usually contains "This reverts commit <sha>"
-          elif echo "${BODY:-}" | grep -Eiq 'this reverts commit'; then
+          elif echo "$BODY" | grep -Eiq 'this reverts commit'; then
             is_revert="true"
           else
             # Best-effort: scan commit subjects in PR range for revert keywords
