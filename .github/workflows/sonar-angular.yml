@@ -1,35 +1,54 @@
 name: Angular SonarQube Scan (Manual)
 
 on:
-  workflow_call:  # Allow as reusable workflow
-  workflow_dispatch:  # Allow manual run
+  workflow_call:
+  workflow_dispatch:
 
 jobs:
   sonarqube:
     name: SonarQube Analysis
     runs-on: self-hosted
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 14
+          cache: npm
 
       - name: Install Dependencies
-        run: npm install --legacy-peer-deps --unsafe-perm=true
+        run: npm ci --legacy-peer-deps --unsafe-perm=true
 
-      - name: Run SonarQube Scanner
+      # Optional: run tests to generate coverage (enable if you want LCOV)
+      # - name: Run unit tests (coverage)
+      #   run: npm test -- --watch=false --code-coverage
+
+      - name: SonarQube Scan (TypeScript only; exclude SASS/SCSS to avoid CssRuleSensor crash)
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
-          REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+          set -euo pipefail
+
+          REPO_NAME="$(echo "${{ github.repository }}" | cut -d'/' -f2)"
+
+          # If runner + SonarQube are on same VM, prefer localhost.
+          # Keep vars.SONAR_HOST_URL in GitHub as http://127.0.0.1:9000
+          echo "Using SONAR_HOST_URL=$SONAR_HOST_URL"
+          echo "Project Key: $REPO_NAME"
+
           sonar-scanner \
-            -Dsonar.projectKey=$REPO_NAME \
-            -Dsonar.sources=src/app \
-            -Dsonar.host.url=${{ vars.SONAR_HOST_URL }} \
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }} \
-            -Dsonar.exclusions=**/node_modules/**,**/test/**,**/*.spec.ts,**/legacy/**,**/dist/**,**/coverage/**,**/*.js,**/*.d.ts \
-            -Dsonar.typescript.lcov.reportPaths=coverage/lcov.info \
-            -Dsonar.sourceEncoding=UTF-8
+            -Dsonar.projectKey="$REPO_NAME" \
+            -Dsonar.projectName="$REPO_NAME" \
+            -Dsonar.sources="src/app" \
+            -Dsonar.host.url="$SONAR_HOST_URL" \
+            -Dsonar.login="$SONAR_TOKEN" \
+            -Dsonar.sourceEncoding="UTF-8" \
+            -Dsonar.exclusions="**/node_modules/**,**/test/**,**/*.spec.ts,**/legacy/**,**/dist/**,**/coverage/**,**/*.js,**/*.d.ts,**/*.sass,**/*.scss" \
+            -Dsonar.typescript.lcov.reportPaths="coverage/lcov.info"
