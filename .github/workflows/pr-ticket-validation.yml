@@ -1,4 +1,4 @@
-name: Validate PR Title and Ticket
+name: Validate PR Title and Ticket testing commit
 
 on:
   pull_request:
