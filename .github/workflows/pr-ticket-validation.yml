@@ -1,8 +1,8 @@
-name: Validate PR Title and Ticket Testing
+name: Validate PR Title and Ticket
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, edited]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
     branches:
       - "staging"
       - "main"
