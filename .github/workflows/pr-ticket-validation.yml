@@ -1,4 +1,4 @@
-name: Validate PR Title and Ticket test
+name: Validate PR Title and Ticket
 
 on:
   pull_request:
@@ -22,6 +22,7 @@ jobs:
         id: validate
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.CENTRAL_BACKLOG_READ_TOKEN }}
           script: |
             const prNumber = context.payload.pull_request.number;
 
@@ -107,14 +108,20 @@ jobs:
                 descriptionErrors.push(descriptionGuidance);
               } else {
                 try {
+                  core.info(`Checking Central-Backlog issue #${issueNumber}`);
+
                   await github.rest.issues.get({
                     owner: "Eshopbox-Enginnering",
                     repo: "Central-Backlog",
                     issue_number: issueNumber
                   });
                 } catch (error) {
+                  core.info(`Issue lookup failed with status: ${error.status}, message: ${error.message}`);
+
                   descriptionErrors.push([
-                    `Central Backlog issue not found: #${issueNumber}`,
+                    `Central Backlog issue not found or not accessible: #${issueNumber}`,
+                    "",
+                    `GitHub API response: ${error.status || "unknown"} ${error.message || ""}`,
                     "",
                     "Use a valid issue reference in PR description, for example:",
                     `  Eshopbox-Enginnering/Central-Backlog#${issueNumber}`,
