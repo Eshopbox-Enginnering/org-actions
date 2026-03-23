@@ -18,7 +18,8 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Validate PR title and Central Backlog ticket
+      - name: Validate PR title, ticket, and commit messages
+        id: validate
         uses: actions/github-script@v7
         with:
           script: |
@@ -31,6 +32,10 @@ jobs:
 
             const shortRefRegex = /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
             const urlRefRegex = /https:\/\/github\.com\/Eshopbox-Enginnering\/Central-Backlog\/issues\/(\d+)/i;
+
+            // Warning-only commit validation
+            const commitGoodPattern = /^([A-Z]+-\d+):\s+(add|fix|update|refactor|remove|improve)\b.+/i;
+            const commitBadPattern = /^(changes|change|fix|fixes|update|updates|common|common changes|minor|minor changes)$/i;
 
             const titleError = [
               "Invalid PR title format.",
@@ -67,46 +72,187 @@ jobs:
               "  https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/2516"
             ].join("\n");
 
+            let blockingErrors = [];
+            let warnings = [];
+            let issueNumber = null;
+
+            // -----------------------------
+            // Blocking validations
+            // -----------------------------
             if (!titleRegex.test(title)) {
-              core.setFailed(titleError);
-              return;
+              blockingErrors.push(titleError);
             }
 
             if (closingRegex.test(body)) {
-              core.setFailed(closingKeywordError);
-              return;
+              blockingErrors.push(closingKeywordError);
             }
 
             const shortMatch = body.match(shortRefRegex);
             const urlMatch = body.match(urlRefRegex);
 
             if (!shortMatch && !urlMatch) {
-              core.setFailed(ticketError);
-              return;
+              blockingErrors.push(ticketError);
+            } else {
+              issueNumber = Number((shortMatch && shortMatch[1]) || (urlMatch && urlMatch[1]));
+
+              if (!issueNumber || Number.isNaN(issueNumber)) {
+                blockingErrors.push(ticketError);
+              } else {
+                try {
+                  await github.rest.issues.get({
+                    owner: "Eshopbox-Enginnering",
+                    repo: "Central-Backlog",
+                    issue_number: issueNumber
+                  });
+                } catch (error) {
+                  blockingErrors.push([
+                    `Central Backlog issue not found: #${issueNumber}`,
+                    "",
+                    "Use a valid issue reference in PR description, for example:",
+                    `  Eshopbox-Enginnering/Central-Backlog#${issueNumber}`,
+                    `  https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/${issueNumber}`
+                  ].join("\n"));
+                }
+              }
             }
 
-            const issueNumber = Number((shortMatch && shortMatch[1]) || (urlMatch && urlMatch[1]));
+            // -----------------------------
+            // Warning-only commit validation
+            // -----------------------------
+            const commits = await github.paginate(
+              github.rest.pulls.listCommits,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100
+              }
+            );
 
-            if (!issueNumber || Number.isNaN(issueNumber)) {
-              core.setFailed(ticketError);
-              return;
+            const invalidCommitMessages = [];
+
+            for (const commit of commits) {
+              const firstLine = (commit.commit.message || "").split("\n")[0].trim();
+
+              const isBadGeneric = commitBadPattern.test(firstLine);
+              const isGoodFormat = commitGoodPattern.test(firstLine);
+
+              if (isBadGeneric || !isGoodFormat) {
+                invalidCommitMessages.push(firstLine || "(empty commit message)");
+              }
             }
 
-            try {
-              await github.rest.issues.get({
-                owner: "Eshopbox-Enginnering",
-                repo: "Central-Backlog",
-                issue_number: issueNumber
-              });
-            } catch (error) {
-              core.setFailed([
-                `Central Backlog issue not found: #${issueNumber}`,
+            if (invalidCommitMessages.length > 0) {
+              warnings.push([
+                "Commit message best-practice warning:",
                 "",
-                "Use a valid issue reference in PR description, for example:",
-                `  Eshopbox-Enginnering/Central-Backlog#${issueNumber}`,
-                `  https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/${issueNumber}`
+                "Some commit messages are not in recommended format.",
+                "",
+                "Recommended format:",
+                "  CB-2516: Fix order detail API null handling",
+                "  CB-2480: Add payment validation",
+                "  CB-2601: Refactor shipment retry flow",
+                "",
+                "Avoid vague commit messages like:",
+                "  changes",
+                "  fixes",
+                "  updates",
+                "  common changes",
+                "  minor changes",
+                "",
+                "Commits found:",
+                ...invalidCommitMessages.map(m => `  - ${m}`)
               ].join("\n"));
+            }
+
+            // -----------------------------
+            // Final outputs for next step
+            // -----------------------------
+            const summaryLines = [];
+
+            if (blockingErrors.length === 0) {
+              summaryLines.push("PR title and Central Backlog ticket validation passed.");
+              if (issueNumber) {
+                summaryLines.push(`Linked issue: Eshopbox-Enginnering/Central-Backlog#${issueNumber}`);
+              }
+            } else {
+              summaryLines.push("PR validation failed.");
+            }
+
+            if (warnings.length > 0) {
+              summaryLines.push("");
+              summaryLines.push("Warnings:");
+              summaryLines.push(...warnings);
+            }
+
+            core.setOutput("summary", summaryLines.join("\n\n"));
+            core.setOutput("warnings_present", warnings.length > 0 ? "true" : "false");
+            core.setOutput("blocking_errors_present", blockingErrors.length > 0 ? "true" : "false");
+
+            if (blockingErrors.length > 0) {
+              core.setFailed(blockingErrors.join("\n\n------------------------\n\n"));
               return;
             }
 
-            core.info(`PR title is valid and Central Backlog issue #${issueNumber} exists.`);
+            core.info(summaryLines.join("\n\n"));
+
+      - name: Add or update PR comment with validation result
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          VALIDATION_SUMMARY: ${{ steps.validate.outputs.summary }}
+          BLOCKING_ERRORS_PRESENT: ${{ steps.validate.outputs.blocking_errors_present }}
+          WARNINGS_PRESENT: ${{ steps.validate.outputs.warnings_present }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const summary = process.env.VALIDATION_SUMMARY || "Validation completed.";
+            const hasBlocking = process.env.BLOCKING_ERRORS_PRESENT === "true";
+            const hasWarnings = process.env.WARNINGS_PRESENT === "true";
+
+            const marker = "<!-- pr-title-ticket-validation-comment -->";
+
+            let header = "## PR validation result";
+            if (hasBlocking) {
+              header = "## PR validation failed";
+            } else if (hasWarnings) {
+              header = "## PR validation passed with warnings";
+            } else {
+              header = "## PR validation passed";
+            }
+
+            const body = [
+              marker,
+              header,
+              "",
+              "```text",
+              summary,
+              "```"
+            ].join("\n");
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              per_page: 100
+            });
+
+            const existing = comments.find(comment =>
+              comment.user.type === "Bot" && comment.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body
+              });
+            }
