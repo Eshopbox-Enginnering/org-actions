@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Validate PR title, ticket, and commit messages
+      - name: Validate PR title, description, and commit messages
         id: validate
         uses: actions/github-script@v7
         with:
@@ -33,11 +33,10 @@ jobs:
             const shortRefRegex = /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
             const urlRefRegex = /https:\/\/github\.com\/Eshopbox-Enginnering\/Central-Backlog\/issues\/(\d+)/i;
 
-            // Warning-only commit validation
             const commitGoodPattern = /^([A-Z]+-\d+):\s+(add|fix|update|refactor|remove|improve)\b.+/i;
             const commitBadPattern = /^(changes|change|fix|fixes|update|updates|common|common changes|minor|minor changes)$/i;
 
-            const titleError = [
+            const titleGuidance = [
               "Invalid PR title format.",
               "",
               "Use format:",
@@ -56,7 +55,7 @@ jobs:
               "  Conflicts to Main: Resolve staging merge conflicts"
             ].join("\n");
 
-            const ticketError = [
+            const descriptionGuidance = [
               "PR description must include a valid Central Backlog issue reference.",
               "",
               "Accepted examples:",
@@ -64,7 +63,7 @@ jobs:
               "  https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/2516"
             ].join("\n");
 
-            const closingKeywordError = [
+            const closingKeywordGuidance = [
               "Do not use Closes, Fixes, or Resolves in PR description.",
               "",
               "Use only a backlog reference like:",
@@ -72,31 +71,36 @@ jobs:
               "  https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/2516"
             ].join("\n");
 
-            let blockingErrors = [];
-            let warnings = [];
+            const titleErrors = [];
+            const descriptionErrors = [];
+            const warnings = [];
+
             let issueNumber = null;
 
             // -----------------------------
-            // Blocking validations
+            // Title validation
             // -----------------------------
             if (!titleRegex.test(title)) {
-              blockingErrors.push(titleError);
+              titleErrors.push(titleGuidance);
             }
 
+            // -----------------------------
+            // Description validation
+            // -----------------------------
             if (closingRegex.test(body)) {
-              blockingErrors.push(closingKeywordError);
+              descriptionErrors.push(closingKeywordGuidance);
             }
 
             const shortMatch = body.match(shortRefRegex);
             const urlMatch = body.match(urlRefRegex);
 
             if (!shortMatch && !urlMatch) {
-              blockingErrors.push(ticketError);
+              descriptionErrors.push(descriptionGuidance);
             } else {
               issueNumber = Number((shortMatch && shortMatch[1]) || (urlMatch && urlMatch[1]));
 
               if (!issueNumber || Number.isNaN(issueNumber)) {
-                blockingErrors.push(ticketError);
+                descriptionErrors.push(descriptionGuidance);
               } else {
                 try {
                   await github.rest.issues.get({
@@ -105,7 +109,7 @@ jobs:
                     issue_number: issueNumber
                   });
                 } catch (error) {
-                  blockingErrors.push([
+                  descriptionErrors.push([
                     `Central Backlog issue not found: #${issueNumber}`,
                     "",
                     "Use a valid issue reference in PR description, for example:",
@@ -117,7 +121,7 @@ jobs:
             }
 
             // -----------------------------
-            // Warning-only commit validation
+            // Commit message warning only
             // -----------------------------
             const commits = await github.paginate(
               github.rest.pulls.listCommits,
@@ -133,7 +137,6 @@ jobs:
 
             for (const commit of commits) {
               const firstLine = (commit.commit.message || "").split("\n")[0].trim();
-
               const isBadGeneric = commitBadPattern.test(firstLine);
               const isGoodFormat = commitGoodPattern.test(firstLine);
 
@@ -166,17 +169,30 @@ jobs:
             }
 
             // -----------------------------
-            // Final outputs for next step
+            // Build separate summary sections
             // -----------------------------
+            const hasBlockingErrors = titleErrors.length > 0 || descriptionErrors.length > 0;
             const summaryLines = [];
 
-            if (blockingErrors.length === 0) {
-              summaryLines.push("PR title and Central Backlog ticket validation passed.");
+            if (!hasBlockingErrors) {
+              summaryLines.push("PR title and description validation passed.");
               if (issueNumber) {
                 summaryLines.push(`Linked issue: Eshopbox-Enginnering/Central-Backlog#${issueNumber}`);
               }
             } else {
               summaryLines.push("PR validation failed.");
+
+              if (titleErrors.length > 0) {
+                summaryLines.push("");
+                summaryLines.push("Title issues:");
+                summaryLines.push(...titleErrors);
+              }
+
+              if (descriptionErrors.length > 0) {
+                summaryLines.push("");
+                summaryLines.push("Description issues:");
+                summaryLines.push(...descriptionErrors);
+              }
             }
 
             if (warnings.length > 0) {
@@ -187,10 +203,25 @@ jobs:
 
             core.setOutput("summary", summaryLines.join("\n\n"));
             core.setOutput("warnings_present", warnings.length > 0 ? "true" : "false");
-            core.setOutput("blocking_errors_present", blockingErrors.length > 0 ? "true" : "false");
+            core.setOutput("blocking_errors_present", hasBlockingErrors ? "true" : "false");
+            core.setOutput("pr_author", pr.user.login);
 
-            if (blockingErrors.length > 0) {
-              core.setFailed(blockingErrors.join("\n\n------------------------\n\n"));
+            if (hasBlockingErrors) {
+              const failLines = ["PR validation failed."];
+
+              if (titleErrors.length > 0) {
+                failLines.push("");
+                failLines.push("Title issues:");
+                failLines.push(...titleErrors);
+              }
+
+              if (descriptionErrors.length > 0) {
+                failLines.push("");
+                failLines.push("Description issues:");
+                failLines.push(...descriptionErrors);
+              }
+
+              core.setFailed(failLines.join("\n\n"));
               return;
             }
 
@@ -203,12 +234,14 @@ jobs:
           VALIDATION_SUMMARY: ${{ steps.validate.outputs.summary }}
           BLOCKING_ERRORS_PRESENT: ${{ steps.validate.outputs.blocking_errors_present }}
           WARNINGS_PRESENT: ${{ steps.validate.outputs.warnings_present }}
+          PR_AUTHOR: ${{ steps.validate.outputs.pr_author }}
         with:
           script: |
             const pr = context.payload.pull_request;
             const summary = process.env.VALIDATION_SUMMARY || "Validation completed.";
             const hasBlocking = process.env.BLOCKING_ERRORS_PRESENT === "true";
             const hasWarnings = process.env.WARNINGS_PRESENT === "true";
+            const prAuthor = process.env.PR_AUTHOR || pr.user.login;
 
             const marker = "<!-- pr-title-ticket-validation-comment -->";
 
@@ -221,9 +254,17 @@ jobs:
               header = "## PR validation passed";
             }
 
-            const body = [
+            const mentionLine = hasBlocking
+              ? `@${prAuthor} please update this PR based on the validation details below.`
+              : hasWarnings
+              ? `@${prAuthor} PR validation passed, but please review the warning(s) below.`
+              : `@${prAuthor} PR validation passed successfully.`;
+
+            const commentBody = [
               marker,
               header,
+              "",
+              mentionLine,
               "",
               "```text",
               summary,
@@ -246,13 +287,13 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 comment_id: existing.id,
-                body
+                body: commentBody
               });
             } else {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pr.number,
-                body
+                body: commentBody
               });
             }
