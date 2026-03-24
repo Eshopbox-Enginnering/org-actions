@@ -16,16 +16,16 @@ permissions:
 
 jobs:
   validate-tests:
-    # Skip this workflow for the problematic head branch (source branch)
     if: ${{ github.head_ref != 'conflict/remove-text-recharge-to-avoid' }}
     runs-on: self-hosted
     timeout-minutes: 10
 
     steps:
-      - name: Checkout code
+      - name: Checkout PR head commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Determine repository type and bypass
         id: repo_check
@@ -61,8 +61,6 @@ jobs:
             echo "bypass=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ✅ FIXED: Do NOT interpolate PR title/body directly into bash script.
-      # Read them safely from $GITHUB_EVENT_PATH using jq.
       - name: Detect revert PR/commit
         id: revert_check
         shell: bash
@@ -76,16 +74,18 @@ jobs:
 
           is_revert="false"
 
-          # Revert PR title usually starts with "Revert"
           if echo "$TITLE" | grep -Eiq '^\s*revert\b'; then
             is_revert="true"
-          # Revert PR body usually contains "This reverts commit <sha>"
           elif echo "$BODY" | grep -Eiq 'this reverts commit'; then
             is_revert="true"
           else
-            # Best-effort: scan commit subjects in PR range for revert keywords
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
             git fetch origin "${{ github.base_ref }}" --quiet || true
-            if git log --format=%s "origin/${{ github.base_ref }}...HEAD" 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
+            git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
+
+            if git log --format=%s "$BASE_SHA...$HEAD_SHA" 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
               is_revert="true"
             fi
           fi
@@ -116,10 +116,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin "${{ github.base_ref }}" --quiet || true
 
-          # Union of paths you care about across Angular + Java
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- \
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
+
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" -- \
             src/ libs/ apps/ src/main/java/ src/test/java/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
@@ -149,15 +152,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin "${{ github.base_ref }}" --quiet || true
 
-          # Include html/scss so they are detected, but tests are only enforced for logic TS files
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- src/ libs/ apps/ > changed_files.txt || true
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
+
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" -- src/ libs/ apps/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
-          # Require tests only when Angular logic TS files change (ignore html/scss-only changes)
           FILES=$(grep -E '\.(component|service|pipe|directive)\.ts$' changed_files.txt | grep -v '\.spec\.ts$' || true)
 
           if [ -z "${FILES:-}" ]; then
@@ -166,13 +171,14 @@ jobs:
           fi
 
           echo "🧩 Files requiring .spec.ts:"
-          echo "$FILES"
+          printf '%s\n' "$FILES"
 
           MISSING=0
           for f in $FILES; do
             dir="$(dirname "$f")"
             base="$(basename "$f" .ts)"
             test_file="$dir/${base}.spec.ts"
+
             if ! grep -qF "$test_file" changed_files.txt; then
               echo "❌ Missing test for $f (expected $test_file in PR)"
               MISSING=$((MISSING+1))
@@ -203,7 +209,7 @@ jobs:
           exit 1
 
       ####################################
-      # Java validation (focused on DAO, Service, Endpoint, Controller)
+      # Java validation
       ####################################
       - name: Validate Java test changes
         id: java_check
@@ -212,22 +218,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin "${{ github.base_ref }}" --quiet || true
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- src/main/java/ src/test/java/ > changed_files.txt || true
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
+
+          git diff --name-only "$BASE_SHA...$HEAD_SHA" -- src/main/java/ src/test/java/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
-          # Only consider key logic layers for validation
           FILES=$(grep -E '^src/main/java/.*/(dao|service|endpoint|controller)/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
+
+          echo "🧩 Files requiring test validation:"
+          printf '%s\n' "$FILES"
 
           if [ -z "${FILES:-}" ]; then
             echo "✅ No relevant Java (DAO/Service/Endpoint/Controller) files changed."
             exit 0
           fi
-
-          echo "🧩 Files requiring test validation:"
-          echo "$FILES"
 
           MISSING=0
           for f in $FILES; do
@@ -257,7 +267,7 @@ jobs:
         with:
           message: |
             ⚠️ **Test file missing in PR**
-            Some Java files were changed without corresponding test updates under `src/test/java`.
+            Some Java files under `dao`, `service`, `endpoint`, or `controller` were changed without corresponding test updates under `src/test/java`.
             Please add or update the required test files before merging.
 
       - name: Fail workflow if Java validation failed
