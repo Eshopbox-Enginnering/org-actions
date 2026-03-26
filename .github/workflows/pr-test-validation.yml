@@ -78,65 +78,45 @@ jobs:
             is_revert="true"
           elif echo "$BODY" | grep -Eiq 'this reverts commit'; then
             is_revert="true"
-          else
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-
-            git fetch origin "${{ github.base_ref }}" --quiet || true
-            git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
-
-            if git log --format=%s "$BASE_SHA...$HEAD_SHA" 2>/dev/null | grep -Eiq '\b(revert|reverted|reverting)\b'; then
-              is_revert="true"
-            fi
           fi
 
           echo "is_revert=$is_revert" >> "$GITHUB_OUTPUT"
 
-          if [ "$is_revert" = "true" ]; then
-            echo "✅ Revert detected. Skipping test coverage validation."
-          else
-            echo "✅ Not a revert."
-          fi
-
       - name: Revert PR — skip validation
         if: steps.revert_check.outputs.is_revert == 'true'
         shell: bash
-        run: |
-          echo "✅ Revert PR/commit detected. Validation skipped."
+        run: echo "✅ Revert PR/commit detected. Validation skipped."
 
       - name: Skip validation for bypassed repos
         if: steps.repo_check.outputs.bypass == 'true'
         shell: bash
-        run: |
-          echo "✅ Skipping validation for bypassed repo."
+        run: echo "✅ Skipping validation for bypassed repo."
 
-      - name: Detect code changes in PR
-        id: changes
+      - name: Get PR changed files from GitHub API
+        id: pr_files
         if: steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          gh api \
+            repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files \
+            --paginate \
+            --jq '.[].filename' > changed_files.txt
 
-          git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
-
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" -- \
-            src/ libs/ apps/ src/main/java/ src/test/java/ > changed_files.txt || true
-
-          echo "🔍 Changed files:"
+          echo "🔍 Changed files from GitHub PR API:"
           cat changed_files.txt || true
 
           if [ ! -s changed_files.txt ]; then
-            echo "✅ No changes found in monitored paths."
             echo "no_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "no_changes=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: No changes — skip validation
-        if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes == 'true'
+        if: steps.revert_check.outputs.is_revert != 'true' && steps.pr_files.outputs.no_changes == 'true'
         shell: bash
         run: |
           echo "✅ No relevant changes. Skipping validation."
@@ -147,26 +127,19 @@ jobs:
       ####################################
       - name: Validate Angular test changes
         id: angular_check
-        if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true'
+        if: steps.repo_check.outputs.type == 'angular' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.pr_files.outputs.no_changes != 'true'
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
 
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-
-          git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
-
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" -- src/ libs/ apps/ > changed_files.txt || true
-
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
-          FILES=$(grep -E '\.(component|service|pipe|directive)\.ts$' changed_files.txt | grep -v '\.spec\.ts$' || true)
+          FILES=$(grep -E '^src/|^libs/|^apps/' changed_files.txt | grep -E '\.(component|service|pipe|directive)\.ts$' | grep -v '\.spec\.ts$' || true)
 
           if [ -z "${FILES:-}" ]; then
-            echo "✅ No Angular logic .ts files changed (or only html/scss changed)."
+            echo "✅ No Angular logic .ts files changed."
             exit 0
           fi
 
@@ -174,16 +147,29 @@ jobs:
           printf '%s\n' "$FILES"
 
           MISSING=0
-          for f in $FILES; do
+          MISSING_LIST=""
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
             dir="$(dirname "$f")"
             base="$(basename "$f" .ts)"
             test_file="$dir/${base}.spec.ts"
 
-            if ! grep -qF "$test_file" changed_files.txt; then
+            if grep -qFx "$test_file" changed_files.txt; then
+              echo "✅ Found test for $f"
+            else
               echo "❌ Missing test for $f (expected $test_file in PR)"
               MISSING=$((MISSING+1))
+              MISSING_LIST="${MISSING_LIST}\n- $f → $test_file"
             fi
-          done
+          done <<< "$FILES"
+
+          {
+            echo "missing_count=$MISSING"
+            echo "missing_list<<EOF"
+            printf '%b\n' "$MISSING_LIST"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           if [ "$MISSING" -gt 0 ]; then
             echo "Angular test validation failed: $MISSING missing"
@@ -193,16 +179,18 @@ jobs:
           fi
 
       - name: Comment on PR — Angular missing tests
-        if: always() && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
+        if: always() && steps.revert_check.outputs.is_revert != 'true' && steps.pr_files.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
             ⚠️ **Test file missing in PR**
-            Some Angular logic files (`.component.ts`, `.service.ts`, `.pipe.ts`, `.directive.ts`) were changed without corresponding `.spec.ts` test updates.
-            Changes only in `.html` / `.scss` do not require unit test updates, but logic `.ts` changes do.
+
+            The following Angular logic files were changed without corresponding `.spec.ts` updates:
+
+            ${{ steps.angular_check.outputs.missing_list }}
 
       - name: Fail workflow if Angular validation failed
-        if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
+        if: steps.revert_check.outputs.is_revert != 'true' && steps.pr_files.outputs.no_changes != 'true' && steps.angular_check.outcome == 'failure'
         shell: bash
         run: |
           echo "❌ Failing because Angular test validation failed."
@@ -213,65 +201,71 @@ jobs:
       ####################################
       - name: Validate Java test changes
         id: java_check
-        if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true'
+        if: steps.repo_check.outputs.type == 'java' && steps.repo_check.outputs.bypass != 'true' && steps.revert_check.outputs.is_revert != 'true' && steps.pr_files.outputs.no_changes != 'true'
         continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-
-          git fetch origin "$BASE_SHA" "$HEAD_SHA" --quiet || true
-
-          git diff --name-only "$BASE_SHA...$HEAD_SHA" -- src/main/java/ src/test/java/ > changed_files.txt || true
 
           echo "🔍 Changed files:"
           cat changed_files.txt || true
 
           FILES=$(grep -E '^src/main/java/.*/(dao|service|endpoint|controller)/.*\.java$' changed_files.txt | grep -v -E '(Test|Tests|IT)\.java$' || true)
 
-          echo "🧩 Files requiring test validation:"
-          printf '%s\n' "$FILES"
-
           if [ -z "${FILES:-}" ]; then
-            echo "✅ No relevant Java (DAO/Service/Endpoint/Controller) files changed."
+            echo "✅ No relevant Java files changed."
             exit 0
           fi
 
+          echo "🧩 Files requiring test validation:"
+          printf '%s\n' "$FILES"
+
           MISSING=0
-          for f in $FILES; do
+          MISSING_LIST=""
+
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
             rel_path="$(echo "$f" | sed 's|^src/main/java/||')"
             t1="src/test/java/${rel_path%.java}Test.java"
             t2="src/test/java/${rel_path%.java}Tests.java"
             t3="src/test/java/${rel_path%.java}IT.java"
 
-            if grep -qF "$t1" changed_files.txt || grep -qF "$t2" changed_files.txt || grep -qF "$t3" changed_files.txt; then
+            if grep -qFx "$t1" changed_files.txt || grep -qFx "$t2" changed_files.txt || grep -qFx "$t3" changed_files.txt; then
               echo "✅ Found test for $f"
             else
-              echo "❌ Missing test for $f (expected one of: $t1 / $t2 / $t3 in PR)"
+              echo "❌ Missing test for $f"
               MISSING=$((MISSING+1))
+              MISSING_LIST="${MISSING_LIST}\n- $f"
             fi
-          done
+          done <<< "$FILES"
+
+          {
+            echo "missing_count=$MISSING"
+            echo "missing_list<<EOF"
+            printf '%b\n' "$MISSING_LIST"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           if [ "$MISSING" -gt 0 ]; then
             echo "Java test validation failed: $MISSING missing"
             exit 1
           else
-            echo "✅ All modified Java (DAO/Service/Endpoint/Controller) files have tests."
+            echo "✅ All modified Java files have tests."
           fi
 
       - name: Comment on PR — Java missing tests
-        if: always() && steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
+        if: always() && steps.revert_check.outputs.is_revert != 'true' && steps.pr_files.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
             ⚠️ **Test file missing in PR**
-            Some Java files under `dao`, `service`, `endpoint`, or `controller` were changed without corresponding test updates under `src/test/java`.
-            Please add or update the required test files before merging.
+
+            The following Java files were changed without corresponding test updates:
+
+            ${{ steps.java_check.outputs.missing_list }}
 
       - name: Fail workflow if Java validation failed
-        if: steps.revert_check.outputs.is_revert != 'true' && steps.changes.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
+        if: steps.revert_check.outputs.is_revert != 'true' && steps.pr_files.outputs.no_changes != 'true' && steps.java_check.outcome == 'failure'
         shell: bash
         run: |
           echo "❌ Failing because Java test validation failed."
