@@ -17,7 +17,7 @@ permissions:
 jobs:
   validate-tests:
     if: ${{ github.head_ref != 'conflict/remove-text-recharge-to-avoid' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
 
     steps:
