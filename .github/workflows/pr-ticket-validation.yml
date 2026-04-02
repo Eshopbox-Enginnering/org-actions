@@ -68,14 +68,8 @@ jobs:
               "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts",
               "",
               "Examples:",
-              "  Feature to Staging: Order detail bugfix",
-              "  Feature to Staging : Order detail bugfix",
-              "  Feature to Staging | Order detail bugfix",
-              "  Features to Main: Bulk order and invoice improvements",
-              "  Bug to Staging | Fix payment sync issue",
-              "  Bugs to Main : Resolve pickup and manifest issues",
-              "  Patch to Staging: Update order API handling",
-              "  Conflicts to Main | Resolve staging merge conflicts"
+              "  Feature to Staging: Bulk order and invoice improvements",
+              "  Feature to Main: Bulk order and invoice improvements",
             ].join("\n");
 
             const descriptionGuidance = [
