@@ -24,7 +24,7 @@ permissions:
 jobs:
   up_to_date_with_main:
     if: ${{ github.event_name == 'workflow_call' || github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 10
     steps:
       - name: Checkout repo (full history)
