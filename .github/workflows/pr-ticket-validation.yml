@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   validate-pr-title-and-ticket:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 5
 
     steps:
