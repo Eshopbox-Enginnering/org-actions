@@ -4,10 +4,6 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, edited]
     branches:
-      - "feature/**"
-      - "Feature/**"
-      - "FEATURE/**"
-      - "staging"
       - "main"
 
 permissions:
