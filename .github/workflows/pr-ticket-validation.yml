@@ -4,6 +4,7 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, edited, ready_for_review]
     branches:
+      # - "staging"
       - "main"
 
 permissions:
