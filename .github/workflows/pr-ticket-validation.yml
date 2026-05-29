@@ -44,39 +44,37 @@ jobs:
             core.info(`Source branch: ${sourceBranch}`);
             core.info(`Target branch: ${targetBranch}`);
 
-            const allowedTypes = [
-              "feature",
-              "features",
-              "bug",
-              "bugs",
-              "patch",
-              "patches",
-              "conflict",
-              "conflicts"
-            ];
-
             const normalizeType = value => {
               const lower = String(value || "").toLowerCase();
+
               if (lower === "features") return "feature";
               if (lower === "bugs") return "bug";
               if (lower === "patches") return "patch";
               if (lower === "conflicts") return "conflict";
+
               return lower;
             };
 
             const getBranchType = branchName => {
               const firstPart = String(branchName || "").split(/[\/_-]/)[0];
               const normalized = normalizeType(firstPart);
-              return ["feature", "bug", "patch", "conflict"].includes(normalized)
+
+              return [
+                "feature",
+                "bug",
+                "patch",
+                "conflict",
+                "codex"
+              ].includes(normalized)
                 ? normalized
                 : null;
             };
 
             // Supports:
             // Feature to Staging: Summary
-            // Feature to Staging : Summary
-            // Feature to Staging | Summary
-            const titleRegex = /^(feature|features|bug|bugs|patch|patches|conflict|conflicts)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
+            // Bug to Main | Summary
+            // Codex to Main: Summary
+            const titleRegex = /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
 
             const shortRefRegex = /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
             const urlRefRegex = /https:\/\/github\.com\/Eshopbox-Enginnering\/Central-Backlog\/issues\/(\d+)/i;
@@ -89,7 +87,7 @@ jobs:
               "  <source> to <target> | <summary>",
               "",
               "Allowed sources:",
-              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts",
+              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex",
               "",
               "Allowed targets:",
               "  Staging, Main",
@@ -97,6 +95,7 @@ jobs:
               "Examples:",
               "  Bug to Main: Unnecessary Fulfillment Locations Visible in Shopify Location Config",
               "  Feature to Staging: Bulk order and invoice improvements",
+              "  Codex to Main: Add PR title validation",
               "",
               `Current PR source branch: ${sourceBranch}`,
               `Current PR target branch: ${targetBranch}`
