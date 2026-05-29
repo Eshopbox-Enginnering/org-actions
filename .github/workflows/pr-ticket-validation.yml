@@ -36,14 +36,45 @@ jobs:
             const title = rawTitle.trim();
             const body = rawBody.trim();
 
+            const sourceBranch = pr.head.ref || "";
+            const targetBranch = pr.base.ref || "";
+
             core.info(`Latest PR title: ${title}`);
             core.info(`Latest PR body: ${body}`);
+            core.info(`Source branch: ${sourceBranch}`);
+            core.info(`Target branch: ${targetBranch}`);
+
+            const normalizeType = value => {
+              const lower = String(value || "").toLowerCase();
+
+              if (lower === "features") return "feature";
+              if (lower === "bugs") return "bug";
+              if (lower === "patches") return "patch";
+              if (lower === "conflicts") return "conflict";
+
+              return lower;
+            };
+
+            const getBranchType = branchName => {
+              const firstPart = String(branchName || "").split(/[\/_-]/)[0];
+              const normalized = normalizeType(firstPart);
+
+              return [
+                "feature",
+                "bug",
+                "patch",
+                "conflict",
+                "codex"
+              ].includes(normalized)
+                ? normalized
+                : null;
+            };
 
             // Supports:
             // Feature to Staging: Summary
-            // Feature to Staging : Summary
-            // Feature to Staging | Summary
-            const titleRegex = /^(feature|features|bug|bugs|patch|patches|conflict|conflicts)\s+to\s+(staging|main)\s*(?::|\|)\s*.+$/i;
+            // Bug to Main | Summary
+            // Codex to Main: Summary
+            const titleRegex = /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
 
             const shortRefRegex = /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
             const urlRefRegex = /https:\/\/github\.com\/Eshopbox-Enginnering\/Central-Backlog\/issues\/(\d+)/i;
@@ -52,17 +83,22 @@ jobs:
               "Invalid PR title format.",
               "",
               "Use one of these formats:",
-              "  <type> to Staging: <summary>",
-              "  <type> to Main: <summary>",
-              "  <type> to Staging | <summary>",
-              "  <type> to Main | <summary>",
+              "  <source> to <target>: <summary>",
+              "  <source> to <target> | <summary>",
               "",
-              "Allowed types:",
-              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts",
+              "Allowed sources:",
+              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex",
+              "",
+              "Allowed targets:",
+              "  Staging, Main",
               "",
               "Examples:",
+              "  Bug to Main: Unnecessary Fulfillment Locations Visible in Shopify Location Config",
               "  Feature to Staging: Bulk order and invoice improvements",
-              "  Feature to Main: Bulk order and invoice improvements",
+              "  Codex to Main: Add PR title validation",
+              "",
+              `Current PR source branch: ${sourceBranch}`,
+              `Current PR target branch: ${targetBranch}`
             ].join("\n");
 
             const descriptionGuidance = [
@@ -78,8 +114,44 @@ jobs:
 
             let issueNumber = null;
 
-            if (!titleRegex.test(title)) {
+            const titleMatch = title.match(titleRegex);
+
+            if (!titleMatch) {
               titleErrors.push(titleGuidance);
+            } else {
+              const titleSource = normalizeType(titleMatch[1]);
+              const titleTarget = String(titleMatch[2] || "").toLowerCase();
+              const titleSummary = String(titleMatch[3] || "").trim();
+
+              const actualTarget = String(targetBranch || "").toLowerCase();
+              const actualSourceType = getBranchType(sourceBranch);
+
+              if (!titleSummary) {
+                titleErrors.push("PR title summary cannot be empty.");
+              }
+
+              if (actualTarget && titleTarget !== actualTarget) {
+                titleErrors.push([
+                  "PR title target branch does not match actual target branch.",
+                  "",
+                  `Title target: ${titleTarget}`,
+                  `Actual target branch: ${actualTarget}`,
+                  "",
+                  `Expected title like: ${titleMatch[1]} to ${actualTarget}: ${titleSummary || "<summary>"}`
+                ].join("\n"));
+              }
+
+              if (actualSourceType && titleSource !== actualSourceType) {
+                titleErrors.push([
+                  "PR title source type does not match actual source branch.",
+                  "",
+                  `Title source: ${titleSource}`,
+                  `Actual source branch: ${sourceBranch}`,
+                  `Detected source type from branch: ${actualSourceType}`,
+                  "",
+                  `Expected title like: ${actualSourceType} to ${actualTarget || "<target>"}: ${titleSummary || "<summary>"}`
+                ].join("\n"));
+              }
             }
 
             if (body.length === 0) {
@@ -104,6 +176,9 @@ jobs:
 
             if (!hasBlockingErrors) {
               summaryLines.push("PR title and description validation passed.");
+              summaryLines.push(`Source branch: ${sourceBranch}`);
+              summaryLines.push(`Target branch: ${targetBranch}`);
+
               if (issueNumber) {
                 summaryLines.push(`Linked issue: Eshopbox-Enginnering/Central-Backlog#${issueNumber}`);
               }
@@ -129,21 +204,7 @@ jobs:
             core.setOutput("pr_author", pr.user.login);
 
             if (hasBlockingErrors) {
-              const failLines = ["PR validation failed."];
-
-              if (titleErrors.length > 0) {
-                failLines.push("");
-                failLines.push("Title issues:");
-                failLines.push(...titleErrors);
-              }
-
-              if (descriptionErrors.length > 0) {
-                failLines.push("");
-                failLines.push("Description issues:");
-                failLines.push(...descriptionErrors);
-              }
-
-              core.setFailed(failLines.join("\n\n"));
+              core.setFailed(summaryLines.join("\n\n"));
               return;
             }
 
