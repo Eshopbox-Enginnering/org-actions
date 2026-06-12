@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, edited, ready_for_review]
     branches:
-      # - "staging"
+      - "staging"
       - "main"
 
 permissions:
@@ -51,6 +51,7 @@ jobs:
               if (lower === "bugs") return "bug";
               if (lower === "patches") return "patch";
               if (lower === "conflicts") return "conflict";
+              if (lower === "seers") return "seer";
 
               return lower;
             };
@@ -64,17 +65,14 @@ jobs:
                 "bug",
                 "patch",
                 "conflict",
-                "codex"
+                "codex",
+                "seer"
               ].includes(normalized)
                 ? normalized
                 : null;
             };
 
-            // Supports:
-            // Feature to Staging: Summary
-            // Bug to Main | Summary
-            // Codex to Main: Summary
-            const titleRegex = /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
+            const titleRegex = /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex|seer|seers)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
 
             const shortRefRegex = /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
             const urlRefRegex = /https:\/\/github\.com\/Eshopbox-Enginnering\/Central-Backlog\/issues\/(\d+)/i;
@@ -87,7 +85,7 @@ jobs:
               "  <source> to <target> | <summary>",
               "",
               "Allowed sources:",
-              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex",
+              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex, Seer, Seers",
               "",
               "Allowed targets:",
               "  Staging, Main",
@@ -96,6 +94,7 @@ jobs:
               "  Bug to Main: Unnecessary Fulfillment Locations Visible in Shopify Location Config",
               "  Feature to Staging: Bulk order and invoice improvements",
               "  Codex to Main: Add PR title validation",
+              "  Seer to Staging: Fix TypeError for isEnabled",
               "",
               `Current PR source branch: ${sourceBranch}`,
               `Current PR target branch: ${targetBranch}`
