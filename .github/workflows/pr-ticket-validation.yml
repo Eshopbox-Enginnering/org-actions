@@ -66,16 +66,21 @@ jobs:
                 "patch",
                 "conflict",
                 "codex",
+                "claude",
                 "seer"
               ].includes(normalized)
                 ? normalized
                 : null;
             };
 
-            const titleRegex = /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex|seer|seers)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
+            const titleRegex =
+              /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex|claude|seer|seers)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
 
-            const shortRefRegex = /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
-            const urlRefRegex = /https:\/\/github\.com\/Eshopbox-Enginnering\/Central-Backlog\/issues\/(\d+)/i;
+            const shortRefRegex =
+              /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
+
+            const urlRefRegex =
+              /https:\/\/github\.com\/Eshopbox-Enginnering\/Central-Backlog\/issues\/(\d+)/i;
 
             const titleGuidance = [
               "Invalid PR title format.",
@@ -85,7 +90,7 @@ jobs:
               "  <source> to <target> | <summary>",
               "",
               "Allowed sources:",
-              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex, Seer, Seers",
+              "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex, Claude, Seer, Seers",
               "",
               "Allowed targets:",
               "  Staging, Main",
@@ -94,6 +99,8 @@ jobs:
               "  Bug to Main: Unnecessary Fulfillment Locations Visible in Shopify Location Config",
               "  Feature to Staging: Bulk order and invoice improvements",
               "  Codex to Main: Add PR title validation",
+              "  Claude to Staging: Fix shipment search handling",
+              "  Claude to Main: Add support widget navigation",
               "  Seer to Staging: Fix TypeError for isEnabled",
               "",
               `Current PR source branch: ${sourceBranch}`,
@@ -162,7 +169,10 @@ jobs:
               if (!shortMatch && !urlMatch) {
                 descriptionErrors.push(descriptionGuidance);
               } else {
-                issueNumber = Number((shortMatch && shortMatch[1]) || (urlMatch && urlMatch[1]));
+                issueNumber = Number(
+                  (shortMatch && shortMatch[1]) ||
+                  (urlMatch && urlMatch[1])
+                );
 
                 if (!issueNumber || Number.isNaN(issueNumber)) {
                   descriptionErrors.push(descriptionGuidance);
@@ -170,16 +180,24 @@ jobs:
               }
             }
 
-            const hasBlockingErrors = titleErrors.length > 0 || descriptionErrors.length > 0;
+            const hasBlockingErrors =
+              titleErrors.length > 0 ||
+              descriptionErrors.length > 0;
+
             const summaryLines = [];
 
             if (!hasBlockingErrors) {
-              summaryLines.push("PR title and description validation passed.");
+              summaryLines.push(
+                "PR title and description validation passed."
+              );
+
               summaryLines.push(`Source branch: ${sourceBranch}`);
               summaryLines.push(`Target branch: ${targetBranch}`);
 
               if (issueNumber) {
-                summaryLines.push(`Linked issue: Eshopbox-Enginnering/Central-Backlog#${issueNumber}`);
+                summaryLines.push(
+                  `Linked issue: Eshopbox-Enginnering/Central-Backlog#${issueNumber}`
+                );
               }
             } else {
               summaryLines.push("PR validation failed.");
@@ -197,10 +215,25 @@ jobs:
               }
             }
 
-            core.setOutput("summary", summaryLines.join("\n\n"));
-            core.setOutput("warnings_present", "false");
-            core.setOutput("blocking_errors_present", hasBlockingErrors ? "true" : "false");
-            core.setOutput("pr_author", pr.user.login);
+            core.setOutput(
+              "summary",
+              summaryLines.join("\n\n")
+            );
+
+            core.setOutput(
+              "warnings_present",
+              "false"
+            );
+
+            core.setOutput(
+              "blocking_errors_present",
+              hasBlockingErrors ? "true" : "false"
+            );
+
+            core.setOutput(
+              "pr_author",
+              pr.user.login
+            );
 
             if (hasBlockingErrors) {
               core.setFailed(summaryLines.join("\n\n"));
@@ -227,14 +260,25 @@ jobs:
               pull_number: prNumber
             });
 
-            const summary = process.env.VALIDATION_SUMMARY || "Validation completed.";
-            const hasBlocking = process.env.BLOCKING_ERRORS_PRESENT === "true";
-            const hasWarnings = process.env.WARNINGS_PRESENT === "true";
-            const prAuthor = process.env.PR_AUTHOR || pr.user.login;
+            const summary =
+              process.env.VALIDATION_SUMMARY ||
+              "Validation completed.";
 
-            const marker = "<!-- pr-title-ticket-validation-comment -->";
+            const hasBlocking =
+              process.env.BLOCKING_ERRORS_PRESENT === "true";
+
+            const hasWarnings =
+              process.env.WARNINGS_PRESENT === "true";
+
+            const prAuthor =
+              process.env.PR_AUTHOR ||
+              pr.user.login;
+
+            const marker =
+              "<!-- pr-title-ticket-validation-comment -->";
 
             let header = "## PR validation result";
+
             if (hasBlocking) {
               header = "## PR validation failed";
             } else if (hasWarnings) {
@@ -260,15 +304,18 @@ jobs:
               "```"
             ].join("\n");
 
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number,
-              per_page: 100
-            });
+            const { data: comments } =
+              await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                per_page: 100
+              });
 
-            const existing = comments.find(comment =>
-              comment.user.type === "Bot" && comment.body.includes(marker)
+            const existing = comments.find(
+              comment =>
+                comment.user.type === "Bot" &&
+                comment.body.includes(marker)
             );
 
             if (existing) {
