@@ -7,7 +7,9 @@ on:
 jobs:
   sonarqube:
     name: SonarQube Analysis
-    runs-on: self-hosted
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
 
     steps:
       - name: Checkout Repository
