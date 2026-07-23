@@ -7,9 +7,6 @@ jobs:
   test-runner:
     runs-on:
       group: frontend-runners
-      labels:
-        - self-hosted
-        - frontend-runner
 
     steps:
       - name: Verify runner
