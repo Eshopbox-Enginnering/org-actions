@@ -1,0 +1,21 @@
+name: Test Frontend Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-runner:
+    runs-on:
+      - self-hosted
+      - frontend-runner
+
+    steps:
+      - name: Verify runner
+        run: |
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner OS: $RUNNER_OS"
+          hostname
+          nproc
+          free -h
+          df -h /
+          docker --version
