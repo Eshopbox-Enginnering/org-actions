@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   validate-pr-title-and-ticket:
-    runs-on: self-hosted
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     timeout-minutes: 5
 
     steps:
