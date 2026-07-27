@@ -23,7 +23,9 @@ concurrency:
 jobs:
   cleanup:
     # IMPORTANT: ensure this matches your self-hosted runner labels
-    runs-on: self-hosted
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
 
     steps:
       - name: Show disk + docker usage (before)
