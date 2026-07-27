@@ -1,0 +1,16 @@
+name: Runner smoke test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
+
+    steps:
+      - run: |
+          echo "Runner is working"
+          whoami
+          date
