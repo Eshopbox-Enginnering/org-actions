@@ -7,9 +7,7 @@ on:
 
 jobs:
   check-timeout:
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
