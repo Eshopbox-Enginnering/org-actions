@@ -5,9 +5,7 @@ on:
 
 jobs:
   test:
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    runs-on: self-hosted
 
     steps:
       - run: |
