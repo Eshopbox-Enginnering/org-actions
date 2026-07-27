@@ -13,9 +13,7 @@ concurrency:
 
 jobs:
   restrict-large-wip-pr:
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    runs-on: self-hosted
     timeout-minutes: 10
     env:
       # Normal cap
