@@ -15,9 +15,10 @@ concurrency:
 
 jobs:
   require-qa-approval:
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    # runs-on:
+    #   group: checks-runners
+    #   labels: checks-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Check for QA team approval
         uses: actions/github-script@v7
