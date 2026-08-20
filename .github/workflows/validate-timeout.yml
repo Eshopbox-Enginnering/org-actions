@@ -7,10 +7,9 @@ on:
 
 jobs:
   check-timeout:
-    # runs-on:
-    #   group: checks-runners
-    #   labels: checks-runner
-    runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
