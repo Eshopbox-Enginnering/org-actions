@@ -14,9 +14,10 @@ permissions:
 jobs:
   validate-tests:
     if: ${{ github.head_ref != 'conflict/remove-text-recharge-to-avoid' }}
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    # runs-on:
+    #   group: checks-runners
+    #   labels: checks-runner
+    runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
