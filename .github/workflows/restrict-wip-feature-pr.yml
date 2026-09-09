@@ -13,10 +13,9 @@ concurrency:
 
 jobs:
   restrict-large-wip-pr:
-    # runs-on:
-    #   group: checks-runners
-    #   labels: checks-runner
-    runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     timeout-minutes: 10
     env:
       # Normal cap
