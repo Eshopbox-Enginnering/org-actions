@@ -7,10 +7,9 @@ on:
 jobs:
   sonarqube:
     name: SonarQube Analysis
-    # runs-on:
-    #   group: checks-runners
-    #   labels: checks-runner
-    runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     timeout-minutes: 20
 
     steps:

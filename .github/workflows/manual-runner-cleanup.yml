@@ -23,10 +23,9 @@ concurrency:
 jobs:
   cleanup:
     # IMPORTANT: ensure this matches your self-hosted runner labels
-    # runs-on:
-    #   group: checks-runners
-    #   labels: checks-runner
-    runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
 
     steps:
       - name: Show disk + docker usage (before)
