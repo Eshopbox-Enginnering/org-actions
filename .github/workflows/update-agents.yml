@@ -1,1 +1,175 @@
+name: Update AGENTS.md
 
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Operation"
+        required: true
+        type: choice
+        options:
+          - DRY_RUN
+          - APPLY
+
+      repo_type:
+        description: "Repository type"
+        required: true
+        type: choice
+        options:
+          - backend
+          - frontend
+          - all
+
+      dry_run_repo:
+        description: "Single repo for DRY_RUN, e.g. esb-unicommerce-inventory-integration"
+        required: false
+        type: string
+
+      confirmation:
+        description: "For APPLY only, enter exactly: APPLY"
+        required: false
+        type: string
+
+      content_file:
+        description: "Content file to append to AGENTS.md"
+        required: true
+        default: "payload/agents-update.md"
+        type: string
+
+# Prevent two organization-wide rollouts running together.
+concurrency:
+  group: agents-org-update
+  cancel-in-progress: false
+
+jobs:
+
+  validate:
+    name: Validate request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout org-action
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OPERATION="${{ inputs.operation }}"
+          DRY_RUN_REPO="${{ inputs.dry_run_repo }}"
+          CONFIRMATION="${{ inputs.confirmation }}"
+          CONTENT_FILE="${{ inputs.content_file }}"
+
+          if [ ! -f "$CONTENT_FILE" ]; then
+            echo "ERROR: Content file does not exist: $CONTENT_FILE"
+            exit 1
+          fi
+
+          if [ ! -s "$CONTENT_FILE" ]; then
+            echo "ERROR: Content file is empty: $CONTENT_FILE"
+            exit 1
+          fi
+
+          if [ "$OPERATION" = "DRY_RUN" ] && [ -z "$DRY_RUN_REPO" ]; then
+            echo "ERROR: dry_run_repo is required for DRY_RUN."
+            exit 1
+          fi
+
+          if [ "$OPERATION" = "APPLY" ] && [ "$CONFIRMATION" != "APPLY" ]; then
+            echo "ERROR: For APPLY, confirmation must be exactly: APPLY"
+            exit 1
+          fi
+
+          echo "Validation successful."
+          echo "Operation: $OPERATION"
+          echo "Repo type: ${{ inputs.repo_type }}"
+          echo "Content file: $CONTENT_FILE"
+
+  dry-run:
+    name: Dry run
+    needs: validate
+
+    if: inputs.operation == 'DRY_RUN'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout org-action
+        uses: actions/checkout@v4
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Run dry run
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+          ORG: ${{ github.repository_owner }}
+
+          OPERATION: DRY_RUN
+
+          REPO_TYPE: ${{ inputs.repo_type }}
+
+          DRY_RUN_REPO: ${{ inputs.dry_run_repo }}
+
+          CONTENT_FILE: ${{ inputs.content_file }}
+
+          BATCH_ID: ${{ github.run_id }}
+
+        run: |
+          chmod +x scripts/update-agents.sh
+          scripts/update-agents.sh
+
+  apply:
+    name: Apply to repositories
+    needs: validate
+
+    if: inputs.operation == 'APPLY'
+
+    runs-on: ubuntu-latest
+
+    # This environment should have required reviewers configured.
+    environment:
+      name: agents-org-production
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout org-action
+        uses: actions/checkout@v4
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Apply AGENTS.md update
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+          ORG: ${{ github.repository_owner }}
+
+          OPERATION: APPLY
+
+          REPO_TYPE: ${{ inputs.repo_type }}
+
+          CONTENT_FILE: ${{ inputs.content_file }}
+
+          BATCH_ID: ${{ github.run_id }}
+
+        run: |
+          chmod +x scripts/update-agents.sh
+          scripts/update-agents.sh
