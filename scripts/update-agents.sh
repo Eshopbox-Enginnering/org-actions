@@ -12,6 +12,7 @@ OPERATION="${OPERATION:?OPERATION is required}"
 TARGET="${TARGET:?TARGET is required}"
 CONTENT_FILE="${CONTENT_FILE:?CONTENT_FILE is required}"
 BATCH_ID="${BATCH_ID:?BATCH_ID is required}"
+CENTRAL_BACKLOG_ISSUE="${CENTRAL_BACKLOG_ISSUE:?CENTRAL_BACKLOG_ISSUE is required}"
 
 TARGET_REPO="${TARGET_REPO:-}"
 
@@ -23,7 +24,8 @@ CONTENT_PATH="$GITHUB_WORKSPACE/$CONTENT_FILE"
 # ============================================================
 
 total=0
-updated=0
+pr_created=0
+auto_merge_enabled=0
 skipped=0
 failed=0
 
@@ -41,6 +43,12 @@ if [ ! -s "$CONTENT_PATH" ]; then
   echo "ERROR: Content file is empty: $CONTENT_PATH"
   exit 1
 fi
+
+if ! [[ "$CENTRAL_BACKLOG_ISSUE" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: CENTRAL_BACKLOG_ISSUE must be numeric."
+  exit 1
+fi
+
 
 case "$OPERATION" in
   DRY_RUN|APPLY)
@@ -69,9 +77,9 @@ fi
 
 
 # ============================================================
-# Generate content ID
+# Content marker
 #
-# This prevents the exact same update from being appended twice.
+# Same exact payload will not be appended twice.
 # ============================================================
 
 CONTENT_HASH=$(sha256sum "$CONTENT_PATH" | awk '{print substr($1,1,12)}')
@@ -81,7 +89,7 @@ END_MARKER="<!-- END ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 
 
 # ============================================================
-# Cleanup helper
+# Cleanup
 # ============================================================
 
 cleanup_repo() {
@@ -154,7 +162,6 @@ detect_repo_type() {
       return
     fi
 
-
     if grep -Eq \
       '"(react|react-dom|@angular/core|vue|next|vite)"' \
       "$dir/package.json"; then
@@ -171,7 +178,7 @@ detect_repo_type() {
 
 
 # ============================================================
-# Check whether repository should be processed
+# Target matching
 # ============================================================
 
 matches_target() {
@@ -180,10 +187,7 @@ matches_target() {
   local detected="$2"
 
 
-  # Single repository takes priority.
-  #
-  # Do NOT check frontend/backend classification here.
-  # If user explicitly selected a repo, process that repo.
+  # Explicit repository selection always wins.
   if [ "$TARGET" = "single" ]; then
     [ "$repo" = "$TARGET_REPO" ]
     return
@@ -202,9 +206,6 @@ matches_target() {
   fi
 
 
-  # "all" = all detected backend + frontend repositories.
-  #
-  # Infrastructure / unknown repositories are intentionally excluded.
   if [ "$TARGET" = "all" ]; then
 
     [ "$detected" = "backend" ] || \
@@ -219,20 +220,31 @@ matches_target() {
 
 
 # ============================================================
-# Process repository
+# Process one repository
+#
+# Return values:
+#
+# 0 = success
+# 2 = skipped
+# 1 = failure
 # ============================================================
 
 process_repo() {
 
   local repo="$1"
+
   local repo_info=""
   local archived=""
   local fork=""
   local default_branch=""
+
   local workdir=""
   local detected_type=""
   local branch=""
   local pr_url=""
+
+  local pr_title=""
+  local pr_body=""
 
 
   echo
@@ -242,7 +254,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Read repository metadata
+  # Repository metadata
   # ----------------------------------------------------------
 
   if ! repo_info=$(gh repo view "$ORG/$repo" \
@@ -283,7 +295,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Clone repository
+  # Clone
   # ----------------------------------------------------------
 
   workdir=$(mktemp -d)
@@ -302,7 +314,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Detect repository type
+  # Detect repo type
   # ----------------------------------------------------------
 
   detected_type=$(detect_repo_type "$workdir")
@@ -311,7 +323,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Target filtering
+  # Filter target
   # ----------------------------------------------------------
 
   if ! matches_target "$repo" "$detected_type"; then
@@ -350,16 +362,15 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Append content
+  # Append/create AGENTS.md
   #
-  # IMPORTANT:
-  # Existing AGENTS.md is NEVER replaced.
+  # Existing content is NEVER replaced.
   # ----------------------------------------------------------
 
   if [ -f AGENTS.md ]; then
 
     echo "Existing AGENTS.md found."
-    echo "Appending organization content to bottom."
+    echo "Appending content."
 
     printf '\n\n%s\n\n' "$BEGIN_MARKER" >> AGENTS.md
 
@@ -384,7 +395,7 @@ process_repo() {
   # ----------------------------------------------------------
   # Safety check
   #
-  # AGENTS.md MUST be the only changed file.
+  # AGENTS.md must be the only changed file.
   # ----------------------------------------------------------
 
   mapfile -t changed_files < <(
@@ -459,7 +470,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Ensure branch does not already exist remotely
+  # Existing remote branch protection
   # ----------------------------------------------------------
 
   if git ls-remote \
@@ -477,7 +488,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Create local branch
+  # Create branch
   # ----------------------------------------------------------
 
   if ! git checkout -b "$branch"; then
@@ -510,9 +521,6 @@ process_repo() {
 
   # ----------------------------------------------------------
   # Push
-  #
-  # CRITICAL:
-  # Never continue to PR creation if push fails.
   # ----------------------------------------------------------
 
   echo "Pushing branch..."
@@ -535,7 +543,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Verify branch actually exists remotely
+  # Verify remote branch
   # ----------------------------------------------------------
 
   if ! git ls-remote \
@@ -544,12 +552,44 @@ process_repo() {
     origin \
     "$branch" >/dev/null 2>&1; then
 
-    echo "FAILED: Branch was not found remotely after push."
+    echo "FAILED: Branch not found remotely after push."
 
     cleanup_repo "$workdir"
 
     return 1
   fi
+
+
+  # ----------------------------------------------------------
+  # PR title / body
+  #
+  # Matches current org validation:
+  #
+  # Codex to Main: ...
+  #
+  # and includes Central Backlog reference.
+  # ----------------------------------------------------------
+
+  pr_title="Codex to Main: Update AGENTS.md organization guidance"
+
+  pr_body="Organization-level automated AGENTS.md update.
+
+Central Backlog:
+Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
+
+Repository:
+$ORG/$repo
+
+Repository type detected:
+$detected_type
+
+Batch:
+$BATCH_ID
+
+Content ID:
+$CONTENT_HASH
+
+Only AGENTS.md is modified."
 
 
   # ----------------------------------------------------------
@@ -563,18 +603,8 @@ process_repo() {
     --repo "$ORG/$repo" \
     --base "$default_branch" \
     --head "$branch" \
-    --title "Update AGENTS.md" \
-    --body "Organization-level automated AGENTS.md update.
-
-Repository: $ORG/$repo
-
-Repository type detected: $detected_type
-
-Batch: $BATCH_ID
-
-Content ID: $CONTENT_HASH
-
-Only AGENTS.md is modified."); then
+    --title "$pr_title" \
+    --body "$pr_body"); then
 
     echo "FAILED: PR creation failed."
 
@@ -597,35 +627,66 @@ Only AGENTS.md is modified."); then
   echo "PR created: $pr_url"
 
 
-  # ----------------------------------------------------------
-  # Merge PR
+  # ==========================================================
+  # SINGLE
   #
-  # Remove this block if you want manual approval + merge.
-  # ----------------------------------------------------------
+  # Create PR only.
+  # Do NOT auto-merge.
+  # ==========================================================
 
-  echo "Merging PR..."
+  if [ "$TARGET" = "single" ]; then
 
-
-  if ! gh pr merge "$pr_url" \
-    --repo "$ORG/$repo" \
-    --squash \
-    --delete-branch; then
-
-    echo "FAILED: PR merge failed."
-    echo "PR remains available at: $pr_url"
+    echo
+    echo "SUCCESS: PR created for selected repository."
+    echo "PR: $pr_url"
+    echo "Manual review/merge required."
 
     cleanup_repo "$workdir"
 
-    return 1
+    return 0
   fi
 
 
-  echo "SUCCESS: $ORG/$repo updated and merged."
+  # ==========================================================
+  # BULK
+  #
+  # backend / frontend / all
+  #
+  # Enable auto-merge.
+  #
+  # GitHub waits for branch protection / reviews / checks.
+  # ==========================================================
+
+  echo "Enabling auto-merge..."
 
 
-  cleanup_repo "$workdir"
+  if gh pr merge "$pr_url" \
+    --repo "$ORG/$repo" \
+    --squash \
+    --delete-branch \
+    --auto; then
 
-  return 0
+    echo "SUCCESS: PR created and auto-merge enabled."
+    echo "PR: $pr_url"
+
+    cleanup_repo "$workdir"
+
+    return 10
+
+  else
+
+    # PR itself was still successfully created.
+    #
+    # Do not fail entire rollout because auto-merge could not
+    # be enabled for one repository.
+    echo "WARNING: PR created but auto-merge could not be enabled."
+    echo "PR remains open:"
+    echo "$pr_url"
+
+    cleanup_repo "$workdir"
+
+    return 11
+  fi
 }
 
 
@@ -636,30 +697,31 @@ Only AGENTS.md is modified."); then
 echo "=================================================="
 echo "AGENTS.md organization updater"
 echo "=================================================="
-echo "Organization : $ORG"
-echo "Operation    : $OPERATION"
-echo "Target       : $TARGET"
+echo "Organization          : $ORG"
+echo "Operation             : $OPERATION"
+echo "Target                : $TARGET"
 
 if [ "$TARGET" = "single" ]; then
-  echo "Repository   : $TARGET_REPO"
+  echo "Repository            : $TARGET_REPO"
 fi
 
-echo "Content file : $CONTENT_FILE"
-echo "Content ID   : $CONTENT_HASH"
-echo "Batch ID     : $BATCH_ID"
+echo "Content file          : $CONTENT_FILE"
+echo "Content ID            : $CONTENT_HASH"
+echo "Central Backlog issue : $CENTRAL_BACKLOG_ISSUE"
+echo "Batch ID              : $BATCH_ID"
 echo "=================================================="
 
 
 # ============================================================
 # SINGLE REPOSITORY
 #
-# Most important safety behavior:
-# if single is selected, NEVER enumerate organization repos.
+# NEVER call gh repo list.
 # ============================================================
 
 if [ "$TARGET" = "single" ]; then
 
   total=1
+
 
   process_repo "$TARGET_REPO"
   result=$?
@@ -668,22 +730,36 @@ if [ "$TARGET" = "single" ]; then
   case "$result" in
 
     0)
-      updated=$((updated + 1))
+
+      if [ "$OPERATION" = "DRY_RUN" ]; then
+        echo "DRY RUN successful."
+      else
+        pr_created=$((pr_created + 1))
+      fi
+
       ;;
+
 
     2)
+
       skipped=$((skipped + 1))
+
       ;;
 
+
     *)
+
       failed=$((failed + 1))
+
       ;;
 
   esac
 
 
 # ============================================================
-# ORGANIZATION TARGET
+# BULK
+#
+# backend / frontend / all
 # ============================================================
 
 else
@@ -701,6 +777,7 @@ else
       .name'); then
 
     echo "ERROR: Unable to retrieve organization repositories."
+
     exit 1
   fi
 
@@ -717,15 +794,43 @@ else
     case "$result" in
 
       0)
-        updated=$((updated + 1))
+
+        # DRY_RUN success
         ;;
+
 
       2)
+
         skipped=$((skipped + 1))
+
         ;;
 
+
+      10)
+
+        pr_created=$((pr_created + 1))
+        auto_merge_enabled=$((auto_merge_enabled + 1))
+
+        ;;
+
+
+      11)
+
+        # PR exists, but auto merge wasn't enabled.
+        #
+        # Count PR creation as success,
+        # not repository failure.
+        pr_created=$((pr_created + 1))
+
+        ;;
+
+
       *)
+
         failed=$((failed + 1))
+
+        echo "FAILED: $repo"
+
         ;;
 
     esac
@@ -744,15 +849,26 @@ echo "=================================================="
 echo "ROLLOUT COMPLETE"
 echo "=================================================="
 echo "Repositories checked : $total"
-echo "Updated               : $updated"
-echo "Skipped               : $skipped"
-echo "Failed                : $failed"
+
+if [ "$OPERATION" = "DRY_RUN" ]; then
+
+  echo "Operation            : DRY_RUN"
+  echo "Skipped              : $skipped"
+  echo "Failed               : $failed"
+
+else
+
+  echo "PRs created          : $pr_created"
+  echo "Auto-merge enabled   : $auto_merge_enabled"
+  echo "Skipped              : $skipped"
+  echo "Failed               : $failed"
+
+fi
+
 echo "=================================================="
 
 
 if [ "$failed" -gt 0 ]; then
   exit 1
 fi
-
-
 exit 0
