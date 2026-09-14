@@ -75,7 +75,7 @@ fi
 
 
 # ============================================================
-# Content markers
+# Content marker
 # ============================================================
 
 CONTENT_HASH=$(sha256sum "$CONTENT_PATH" | awk '{print substr($1,1,12)}')
@@ -83,12 +83,16 @@ CONTENT_HASH=$(sha256sum "$CONTENT_PATH" | awk '{print substr($1,1,12)}')
 BEGIN_MARKER="<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 END_MARKER="<!-- END ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 
+# Same content => same branch.
+ROLLOUT_BRANCH="org-action/agents-${CONTENT_HASH}"
+
 
 # ============================================================
 # Helpers
 # ============================================================
 
 cleanup_repo() {
+
   local workdir="$1"
 
   cd "$GITHUB_WORKSPACE" || true
@@ -100,13 +104,14 @@ cleanup_repo() {
 
 
 remote_branch_exists() {
+
   local branch="$1"
 
   git ls-remote \
     --exit-code \
     --heads \
     origin \
-    "$branch" >/dev/null 2>&1
+    "refs/heads/$branch" >/dev/null 2>&1
 }
 
 
@@ -119,7 +124,10 @@ detect_repo_type() {
   local dir="$1"
 
 
+  # ----------------------------------------------------------
   # Frontend
+  # ----------------------------------------------------------
+
   if [ -f "$dir/angular.json" ] || \
      [ -f "$dir/vite.config.js" ] || \
      [ -f "$dir/vite.config.ts" ] || \
@@ -134,7 +142,10 @@ detect_repo_type() {
   fi
 
 
+  # ----------------------------------------------------------
   # Backend
+  # ----------------------------------------------------------
+
   if [ -f "$dir/pom.xml" ] || \
      [ -f "$dir/build.gradle" ] || \
      [ -f "$dir/build.gradle.kts" ] || \
@@ -148,7 +159,10 @@ detect_repo_type() {
   fi
 
 
+  # ----------------------------------------------------------
   # Node fallback
+  # ----------------------------------------------------------
+
   if [ -f "$dir/package.json" ]; then
 
     if grep -Eq \
@@ -214,13 +228,6 @@ matches_target() {
 
 # ============================================================
 # Find staging branch
-#
-# Supported:
-#
-# main              -> staging
-# aws-velocis-main  -> aws-velocis-staging
-#
-# Falls back to staging if available.
 # ============================================================
 
 find_staging_branch() {
@@ -254,7 +261,32 @@ find_staging_branch() {
 
 
 # ============================================================
-# Wait for required PR checks
+# Find existing open PR for same content
+# ============================================================
+
+find_existing_pr() {
+
+  local repo="$1"
+
+
+  gh pr list \
+    --repo "$ORG/$repo" \
+    --state open \
+    --search "\"Content ID:\" \"$CONTENT_HASH\" in:body" \
+    --json url,number,title,body \
+    --jq "
+      .[]
+      | select(.body != null)
+      | select(.body | contains(\"Content ID:\"))
+      | select(.body | contains(\"$CONTENT_HASH\"))
+      | .url
+    " \
+    | head -n 1
+}
+
+
+# ============================================================
+# Wait for required checks
 # ============================================================
 
 wait_for_checks() {
@@ -267,9 +299,6 @@ wait_for_checks() {
   echo "PR: $pr_url"
 
 
-  # --watch waits until checks complete.
-  #
-  # If any required check fails, this returns non-zero.
   if ! gh pr checks "$pr_url" \
     --repo "$ORG/$repo" \
     --watch \
@@ -289,12 +318,13 @@ wait_for_checks() {
 # ============================================================
 # Process repository
 #
-# Return:
-# 0  = dry run success
-# 2  = skipped
-# 10 = bulk fully merged
-# 11 = single PR created
-# 1  = failure
+# Return codes:
+#
+# 0  dry run
+# 2  skipped
+# 10 bulk completed
+# 11 single PR created
+# 1  failure
 # ============================================================
 
 process_repo() {
@@ -310,12 +340,14 @@ process_repo() {
   local workdir=""
   local detected_type=""
 
-  local branch=""
+  local branch="$ROLLOUT_BRANCH"
 
   local staging_pr=""
   local production_pr=""
+  local existing_pr=""
 
   local pr_body=""
+  local working_commit=""
 
 
   echo
@@ -325,7 +357,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Metadata
+  # Repository metadata
   # ----------------------------------------------------------
 
   if ! repo_info=$(gh repo view "$ORG/$repo" \
@@ -366,7 +398,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Clone production branch
+  # Clone
   # ----------------------------------------------------------
 
   workdir=$(mktemp -d)
@@ -385,20 +417,22 @@ process_repo() {
 
 
   cd "$workdir" || {
+
     echo "FAILED: Unable to enter repository."
+
     cleanup_repo "$workdir"
+
     return 1
   }
 
 
-  # Fetch branch refs because this clone is shallow.
   git fetch origin \
     '+refs/heads/*:refs/remotes/origin/*' \
-    --depth=1 >/dev/null 2>&1 || true
+    --depth=100 >/dev/null 2>&1 || true
 
 
   # ----------------------------------------------------------
-  # Detect repo type
+  # Detect repository type
   # ----------------------------------------------------------
 
   detected_type=$(detect_repo_type "$workdir")
@@ -416,8 +450,65 @@ process_repo() {
   fi
 
 
+  # ==========================================================
+  # DUPLICATE CHECK #1
+  #
+  # Exact payload is already present in production AGENTS.md.
+  # ==========================================================
+
+  if [ -f AGENTS.md ] && \
+     grep -Fq "$BEGIN_MARKER" AGENTS.md; then
+
+    echo "SKIP: Exact content already exists in production AGENTS.md."
+    echo "Content ID: $CONTENT_HASH"
+
+    cleanup_repo "$workdir"
+
+    return 2
+  fi
+
+
+  # ==========================================================
+  # DUPLICATE CHECK #2
+  #
+  # Existing open PR for same Content ID.
+  # ==========================================================
+
+  existing_pr=$(find_existing_pr "$repo" || true)
+
+
+  if [ -n "$existing_pr" ]; then
+
+    echo "SKIP: Open PR already exists for this content."
+    echo "Content ID: $CONTENT_HASH"
+    echo "PR: $existing_pr"
+
+    cleanup_repo "$workdir"
+
+    return 2
+  fi
+
+
+  # ==========================================================
+  # DUPLICATE CHECK #3
+  #
+  # Same content-specific branch already exists.
+  # ==========================================================
+
+  if remote_branch_exists "$branch"; then
+
+    echo "SKIP: Rollout branch already exists."
+    echo "Branch: $branch"
+    echo "Content ID: $CONTENT_HASH"
+
+    cleanup_repo "$workdir"
+
+    return 2
+  fi
+
+
   # ----------------------------------------------------------
-  # Bulk requires staging
+  # Bulk requires staging branch
   # ----------------------------------------------------------
 
   if [ "$TARGET" != "single" ]; then
@@ -425,8 +516,9 @@ process_repo() {
     if ! staging_branch=$(find_staging_branch "$production_branch"); then
 
       echo "SKIP: No supported staging branch found."
-      echo "Expected one of:"
+      echo "Expected:"
       echo "  staging"
+      echo "or"
       echo "  aws-velocis-staging"
 
       cleanup_repo "$workdir"
@@ -440,22 +532,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Duplicate protection
-  # ----------------------------------------------------------
-
-  if [ -f AGENTS.md ] && \
-     grep -Fq "$BEGIN_MARKER" AGENTS.md; then
-
-    echo "SKIP: Exact content already exists."
-
-    cleanup_repo "$workdir"
-
-    return 2
-  fi
-
-
-  # ----------------------------------------------------------
-  # Create/update AGENTS.md
+  # Update AGENTS.md
   # ----------------------------------------------------------
 
   if [ -f AGENTS.md ]; then
@@ -519,6 +596,8 @@ process_repo() {
     echo "Repository        : $ORG/$repo"
     echo "Detected type     : $detected_type"
     echo "Production branch : $production_branch"
+    echo "Content ID        : $CONTENT_HASH"
+    echo "Rollout branch    : $branch"
 
     if [ "$TARGET" != "single" ]; then
       echo "Staging branch    : $staging_branch"
@@ -533,6 +612,7 @@ process_repo() {
     echo "----------------------------------------------"
     echo "NO branch created."
     echo "NO commit created."
+    echo "NO push performed."
     echo "NO PR created."
     echo "NO merge performed."
     echo "----------------------------------------------"
@@ -544,11 +624,8 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Create working branch FROM PRODUCTION
+  # Git identity
   # ----------------------------------------------------------
-
-  branch="org-action/agents-${BATCH_ID}"
-
 
   git config \
     user.name \
@@ -560,18 +637,11 @@ process_repo() {
     "eshopbox-org-agents[bot]@users.noreply.github.com"
 
 
-  if remote_branch_exists "$branch"; then
+  # ----------------------------------------------------------
+  # Create content-specific working branch from production
+  # ----------------------------------------------------------
 
-    echo "FAILED: Remote working branch already exists:"
-    echo "$branch"
-
-    cleanup_repo "$workdir"
-
-    return 1
-  fi
-
-
-  echo "Creating working branch from $production_branch:"
+  echo "Creating working branch:"
   echo "$branch"
 
 
@@ -603,9 +673,9 @@ process_repo() {
   fi
 
 
-  WORKING_COMMIT=$(git rev-parse HEAD)
+  working_commit=$(git rev-parse HEAD)
 
-  echo "Working commit: $WORKING_COMMIT"
+  echo "Working commit: $working_commit"
 
 
   # ----------------------------------------------------------
@@ -642,7 +712,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Common PR body
+  # PR body
   # ----------------------------------------------------------
 
   pr_body="Organization-level automated AGENTS.md update.
@@ -663,7 +733,7 @@ Content ID:
 $CONTENT_HASH
 
 Working commit:
-$WORKING_COMMIT
+$working_commit
 
 Only AGENTS.md is modified."
 
@@ -671,8 +741,7 @@ Only AGENTS.md is modified."
   # ==========================================================
   # SINGLE
   #
-  # Create PR to production only.
-  # Do NOT merge.
+  # Create production PR only.
   # ==========================================================
 
   if [ "$TARGET" = "single" ]; then
@@ -696,10 +765,10 @@ Only AGENTS.md is modified."
 
 
     echo
-    echo "SUCCESS: Single-repository PR created."
+    echo "SUCCESS: Single repository PR created."
     echo "PR: $production_pr"
     echo
-    echo "No automatic merge was attempted."
+    echo "Manual review/merge required."
 
 
     cleanup_repo "$workdir"
@@ -742,7 +811,7 @@ Only AGENTS.md is modified."
 
   if ! wait_for_checks "$repo" "$staging_pr"; then
 
-    echo "FAILED: Staging PR checks failed."
+    echo "FAILED: Staging checks failed."
     echo "PR remains open:"
     echo "$staging_pr"
 
@@ -755,10 +824,7 @@ Only AGENTS.md is modified."
   # ----------------------------------------------------------
   # Merge staging
   #
-  # CRITICAL:
-  # Use --merge, NOT --squash.
-  #
-  # This preserves WORKING_COMMIT in staging.
+  # Use merge commit, not squash.
   # ----------------------------------------------------------
 
   echo "Merging staging PR..."
@@ -783,24 +849,23 @@ Only AGENTS.md is modified."
 
 
   # ----------------------------------------------------------
-  # Verify exact working commit exists in staging
+  # Verify working commit exists in staging
   # ----------------------------------------------------------
 
   echo "Verifying working commit exists in staging..."
 
 
-  git fetch origin "$staging_branch" --depth=100 >/dev/null 2>&1 || true
+  git fetch origin \
+    "$staging_branch" \
+    --depth=100 >/dev/null 2>&1 || true
 
 
   if ! git merge-base \
     --is-ancestor \
-    "$WORKING_COMMIT" \
+    "$working_commit" \
     "origin/$staging_branch"; then
 
     echo "FAILED: Working commit is not present in staging."
-    echo "Expected commit:"
-    echo "$WORKING_COMMIT"
-    echo
     echo "Production PR will NOT be created."
 
     cleanup_repo "$workdir"
@@ -815,7 +880,7 @@ Only AGENTS.md is modified."
   # ==========================================================
   # BULK STEP 2
   #
-  # SAME ORIGINAL working branch -> production
+  # SAME original working branch -> production
   # ==========================================================
 
   echo
@@ -841,7 +906,7 @@ Only AGENTS.md is modified."
 
 
   # ----------------------------------------------------------
-  # Wait for production required workflows
+  # Wait for production checks
   # ----------------------------------------------------------
 
   if ! wait_for_checks "$repo" "$production_pr"; then
@@ -908,13 +973,14 @@ fi
 
 echo "Content file          : $CONTENT_FILE"
 echo "Content ID            : $CONTENT_HASH"
+echo "Rollout branch        : $ROLLOUT_BRANCH"
 echo "Central Backlog issue : $CENTRAL_BACKLOG_ISSUE"
 echo "Batch ID              : $BATCH_ID"
 echo "=================================================="
 
 
 # ============================================================
-# Single repository
+# Single
 # ============================================================
 
 if [ "$TARGET" = "single" ]; then
