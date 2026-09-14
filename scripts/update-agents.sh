@@ -24,14 +24,15 @@ CONTENT_PATH="$GITHUB_WORKSPACE/$CONTENT_FILE"
 # ============================================================
 
 total=0
-pr_created=0
-merged=0
+single_pr_created=0
+staging_merged=0
+production_merged=0
 skipped=0
 failed=0
 
 
 # ============================================================
-# Validate inputs
+# Validation
 # ============================================================
 
 if [ ! -f "$CONTENT_PATH" ]; then
@@ -49,7 +50,6 @@ if ! [[ "$CENTRAL_BACKLOG_ISSUE" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-
 case "$OPERATION" in
   DRY_RUN|APPLY)
     ;;
@@ -58,7 +58,6 @@ case "$OPERATION" in
     exit 1
     ;;
 esac
-
 
 case "$TARGET" in
   single|backend|frontend|all)
@@ -69,7 +68,6 @@ case "$TARGET" in
     ;;
 esac
 
-
 if [ "$TARGET" = "single" ] && [ -z "$TARGET_REPO" ]; then
   echo "ERROR: TARGET_REPO is required when TARGET=single."
   exit 1
@@ -77,7 +75,7 @@ fi
 
 
 # ============================================================
-# Content marker
+# Content markers
 # ============================================================
 
 CONTENT_HASH=$(sha256sum "$CONTENT_PATH" | awk '{print substr($1,1,12)}')
@@ -87,11 +85,10 @@ END_MARKER="<!-- END ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 
 
 # ============================================================
-# Cleanup
+# Helpers
 # ============================================================
 
 cleanup_repo() {
-
   local workdir="$1"
 
   cd "$GITHUB_WORKSPACE" || true
@@ -99,6 +96,17 @@ cleanup_repo() {
   if [ -n "$workdir" ] && [ -d "$workdir" ]; then
     rm -rf "$workdir"
   fi
+}
+
+
+remote_branch_exists() {
+  local branch="$1"
+
+  git ls-remote \
+    --exit-code \
+    --heads \
+    origin \
+    "$branch" >/dev/null 2>&1
 }
 
 
@@ -111,10 +119,7 @@ detect_repo_type() {
   local dir="$1"
 
 
-  # ----------------------------------------------------------
   # Frontend
-  # ----------------------------------------------------------
-
   if [ -f "$dir/angular.json" ] || \
      [ -f "$dir/vite.config.js" ] || \
      [ -f "$dir/vite.config.ts" ] || \
@@ -129,10 +134,7 @@ detect_repo_type() {
   fi
 
 
-  # ----------------------------------------------------------
   # Backend
-  # ----------------------------------------------------------
-
   if [ -f "$dir/pom.xml" ] || \
      [ -f "$dir/build.gradle" ] || \
      [ -f "$dir/build.gradle.kts" ] || \
@@ -146,10 +148,7 @@ detect_repo_type() {
   fi
 
 
-  # ----------------------------------------------------------
   # Node fallback
-  # ----------------------------------------------------------
-
   if [ -f "$dir/package.json" ]; then
 
     if grep -Eq \
@@ -167,7 +166,6 @@ detect_repo_type() {
       echo "frontend"
       return
     fi
-
   fi
 
 
@@ -185,7 +183,6 @@ matches_target() {
   local detected="$2"
 
 
-  # Explicit single-repo selection always wins.
   if [ "$TARGET" = "single" ]; then
     [ "$repo" = "$TARGET_REPO" ]
     return
@@ -216,14 +213,87 @@ matches_target() {
 
 
 # ============================================================
-# Process one repository
+# Find staging branch
 #
-# Return codes:
+# Supported:
 #
-# 0  = success
+# main              -> staging
+# aws-velocis-main  -> aws-velocis-staging
+#
+# Falls back to staging if available.
+# ============================================================
+
+find_staging_branch() {
+
+  local production_branch="$1"
+
+
+  if [ "$production_branch" = "aws-velocis-main" ]; then
+
+    if remote_branch_exists "aws-velocis-staging"; then
+      echo "aws-velocis-staging"
+      return 0
+    fi
+  fi
+
+
+  if remote_branch_exists "staging"; then
+    echo "staging"
+    return 0
+  fi
+
+
+  if remote_branch_exists "aws-velocis-staging"; then
+    echo "aws-velocis-staging"
+    return 0
+  fi
+
+
+  return 1
+}
+
+
+# ============================================================
+# Wait for required PR checks
+# ============================================================
+
+wait_for_checks() {
+
+  local repo="$1"
+  local pr_url="$2"
+
+
+  echo "Waiting for required workflows/checks..."
+  echo "PR: $pr_url"
+
+
+  # --watch waits until checks complete.
+  #
+  # If any required check fails, this returns non-zero.
+  if ! gh pr checks "$pr_url" \
+    --repo "$ORG/$repo" \
+    --watch \
+    --fail-fast; then
+
+    echo "FAILED: One or more required checks failed."
+    return 1
+  fi
+
+
+  echo "Required checks completed successfully."
+
+  return 0
+}
+
+
+# ============================================================
+# Process repository
+#
+# Return:
+# 0  = dry run success
 # 2  = skipped
-# 10 = PR created + merged automatically
-# 11 = PR created only
+# 10 = bulk fully merged
+# 11 = single PR created
 # 1  = failure
 # ============================================================
 
@@ -234,14 +304,17 @@ process_repo() {
   local repo_info=""
   local archived=""
   local fork=""
-  local default_branch=""
+  local production_branch=""
+  local staging_branch=""
 
   local workdir=""
   local detected_type=""
-  local branch=""
-  local pr_url=""
 
-  local pr_title=""
+  local branch=""
+
+  local staging_pr=""
+  local production_pr=""
+
   local pr_body=""
 
 
@@ -252,7 +325,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Repository metadata
+  # Metadata
   # ----------------------------------------------------------
 
   if ! repo_info=$(gh repo view "$ORG/$repo" \
@@ -268,7 +341,7 @@ process_repo() {
   fi
 
 
-  IFS=$'\t' read -r archived fork default_branch <<< "$repo_info"
+  IFS=$'\t' read -r archived fork production_branch <<< "$repo_info"
 
 
   if [ "$archived" = "true" ]; then
@@ -283,17 +356,17 @@ process_repo() {
   fi
 
 
-  if [ -z "$default_branch" ]; then
-    echo "SKIP: Unable to determine default branch."
+  if [ -z "$production_branch" ]; then
+    echo "SKIP: Unable to determine production/default branch."
     return 2
   fi
 
 
-  echo "Default branch: $default_branch"
+  echo "Production branch: $production_branch"
 
 
   # ----------------------------------------------------------
-  # Clone
+  # Clone production branch
   # ----------------------------------------------------------
 
   workdir=$(mktemp -d)
@@ -301,14 +374,27 @@ process_repo() {
 
   if ! gh repo clone "$ORG/$repo" "$workdir" -- \
     --depth=1 \
-    --branch "$default_branch"; then
+    --branch "$production_branch"; then
 
-    echo "FAILED: Unable to clone repository."
+    echo "FAILED: Clone failed."
 
     cleanup_repo "$workdir"
 
     return 1
   fi
+
+
+  cd "$workdir" || {
+    echo "FAILED: Unable to enter repository."
+    cleanup_repo "$workdir"
+    return 1
+  }
+
+
+  # Fetch branch refs because this clone is shallow.
+  git fetch origin \
+    '+refs/heads/*:refs/remotes/origin/*' \
+    --depth=1 >/dev/null 2>&1 || true
 
 
   # ----------------------------------------------------------
@@ -320,10 +406,6 @@ process_repo() {
   echo "Detected type: $detected_type"
 
 
-  # ----------------------------------------------------------
-  # Filter target
-  # ----------------------------------------------------------
-
   if ! matches_target "$repo" "$detected_type"; then
 
     echo "SKIP: Repository does not match target '$TARGET'."
@@ -334,14 +416,27 @@ process_repo() {
   fi
 
 
-  cd "$workdir" || {
+  # ----------------------------------------------------------
+  # Bulk requires staging
+  # ----------------------------------------------------------
 
-    echo "FAILED: Unable to enter work directory."
+  if [ "$TARGET" != "single" ]; then
 
-    cleanup_repo "$workdir"
+    if ! staging_branch=$(find_staging_branch "$production_branch"); then
 
-    return 1
-  }
+      echo "SKIP: No supported staging branch found."
+      echo "Expected one of:"
+      echo "  staging"
+      echo "  aws-velocis-staging"
+
+      cleanup_repo "$workdir"
+
+      return 2
+    fi
+
+
+    echo "Staging branch   : $staging_branch"
+  fi
 
 
   # ----------------------------------------------------------
@@ -351,7 +446,7 @@ process_repo() {
   if [ -f AGENTS.md ] && \
      grep -Fq "$BEGIN_MARKER" AGENTS.md; then
 
-    echo "SKIP: Exact content already exists in AGENTS.md."
+    echo "SKIP: Exact content already exists."
 
     cleanup_repo "$workdir"
 
@@ -360,7 +455,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Append/create AGENTS.md
+  # Create/update AGENTS.md
   # ----------------------------------------------------------
 
   if [ -f AGENTS.md ]; then
@@ -420,13 +515,15 @@ process_repo() {
     echo "----------------------------------------------"
     echo "DRY RUN"
     echo "----------------------------------------------"
-    echo "Repository : $ORG/$repo"
-    echo "Type       : $detected_type"
-    echo
-    echo "NO branch will be created."
-    echo "NO commit will be created."
-    echo "NO push will happen."
-    echo "NO PR will be created."
+
+    echo "Repository        : $ORG/$repo"
+    echo "Detected type     : $detected_type"
+    echo "Production branch : $production_branch"
+
+    if [ "$TARGET" != "single" ]; then
+      echo "Staging branch    : $staging_branch"
+    fi
+
     echo
     echo "Proposed diff:"
     echo "----------------------------------------------"
@@ -434,7 +531,10 @@ process_repo() {
     git diff -- AGENTS.md
 
     echo "----------------------------------------------"
-    echo "DRY RUN COMPLETE"
+    echo "NO branch created."
+    echo "NO commit created."
+    echo "NO PR created."
+    echo "NO merge performed."
     echo "----------------------------------------------"
 
     cleanup_repo "$workdir"
@@ -444,13 +544,10 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # APPLY
+  # Create working branch FROM PRODUCTION
   # ----------------------------------------------------------
 
   branch="org-action/agents-${BATCH_ID}"
-
-
-  echo "Creating branch: $branch"
 
 
   git config \
@@ -463,17 +560,10 @@ process_repo() {
     "eshopbox-org-agents[bot]@users.noreply.github.com"
 
 
-  # ----------------------------------------------------------
-  # Remote branch safety
-  # ----------------------------------------------------------
+  if remote_branch_exists "$branch"; then
 
-  if git ls-remote \
-    --exit-code \
-    --heads \
-    origin \
-    "$branch" >/dev/null 2>&1; then
-
-    echo "FAILED: Remote branch already exists: $branch"
+    echo "FAILED: Remote working branch already exists:"
+    echo "$branch"
 
     cleanup_repo "$workdir"
 
@@ -481,13 +571,13 @@ process_repo() {
   fi
 
 
-  # ----------------------------------------------------------
-  # Create branch
-  # ----------------------------------------------------------
+  echo "Creating working branch from $production_branch:"
+  echo "$branch"
+
 
   if ! git checkout -b "$branch"; then
 
-    echo "FAILED: Unable to create branch."
+    echo "FAILED: Unable to create working branch."
 
     cleanup_repo "$workdir"
 
@@ -513,11 +603,16 @@ process_repo() {
   fi
 
 
+  WORKING_COMMIT=$(git rev-parse HEAD)
+
+  echo "Working commit: $WORKING_COMMIT"
+
+
   # ----------------------------------------------------------
   # Push
   # ----------------------------------------------------------
 
-  echo "Pushing branch..."
+  echo "Pushing working branch..."
 
 
   if ! git push \
@@ -525,7 +620,17 @@ process_repo() {
     origin \
     "$branch"; then
 
-    echo "FAILED: git push failed."
+    echo "FAILED: Push failed."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  if ! remote_branch_exists "$branch"; then
+
+    echo "FAILED: Working branch not found remotely after push."
 
     cleanup_repo "$workdir"
 
@@ -537,28 +642,8 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Verify remote branch
+  # Common PR body
   # ----------------------------------------------------------
-
-  if ! git ls-remote \
-    --exit-code \
-    --heads \
-    origin \
-    "$branch" >/dev/null 2>&1; then
-
-    echo "FAILED: Branch not found remotely after push."
-
-    cleanup_repo "$workdir"
-
-    return 1
-  fi
-
-
-  # ----------------------------------------------------------
-  # PR title/body
-  # ----------------------------------------------------------
-
-  pr_title="Codex to Main: Update AGENTS.md organization guidance"
 
   pr_body="Organization-level automated AGENTS.md update.
 
@@ -568,7 +653,7 @@ Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
 Repository:
 $ORG/$repo
 
-Repository type detected:
+Repository type:
 $detected_type
 
 Batch:
@@ -577,57 +662,45 @@ $BATCH_ID
 Content ID:
 $CONTENT_HASH
 
+Working commit:
+$WORKING_COMMIT
+
 Only AGENTS.md is modified."
-
-
-  # ----------------------------------------------------------
-  # Create PR
-  # ----------------------------------------------------------
-
-  echo "Creating PR..."
-
-
-  if ! pr_url=$(gh pr create \
-    --repo "$ORG/$repo" \
-    --base "$default_branch" \
-    --head "$branch" \
-    --title "$pr_title" \
-    --body "$pr_body"); then
-
-    echo "FAILED: PR creation failed."
-
-    cleanup_repo "$workdir"
-
-    return 1
-  fi
-
-
-  if [ -z "$pr_url" ]; then
-
-    echo "FAILED: GitHub did not return a PR URL."
-
-    cleanup_repo "$workdir"
-
-    return 1
-  fi
-
-
-  echo "PR created: $pr_url"
 
 
   # ==========================================================
   # SINGLE
   #
-  # Create PR only.
-  # Manual review/merge.
+  # Create PR to production only.
+  # Do NOT merge.
   # ==========================================================
 
   if [ "$TARGET" = "single" ]; then
 
+    echo "Creating production PR..."
+
+
+    if ! production_pr=$(gh pr create \
+      --repo "$ORG/$repo" \
+      --base "$production_branch" \
+      --head "$branch" \
+      --title "Codex to Main: Update AGENTS.md organization guidance" \
+      --body "$pr_body"); then
+
+      echo "FAILED: PR creation failed."
+
+      cleanup_repo "$workdir"
+
+      return 1
+    fi
+
+
     echo
-    echo "SUCCESS: PR created for selected repository."
-    echo "PR: $pr_url"
-    echo "Manual review/merge required."
+    echo "SUCCESS: Single-repository PR created."
+    echo "PR: $production_pr"
+    echo
+    echo "No automatic merge was attempted."
+
 
     cleanup_repo "$workdir"
 
@@ -636,39 +709,185 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # BULK
+  # BULK STEP 1
   #
-  # backend / frontend / all
-  #
-  # Merge immediately using ruleset bypass/admin permission.
+  # Working branch -> staging
   # ==========================================================
 
-  echo "Merging PR automatically..."
+  echo
+  echo "Creating staging PR..."
 
 
-  if gh pr merge "$pr_url" \
+  if ! staging_pr=$(gh pr create \
     --repo "$ORG/$repo" \
-    --squash \
-    --delete-branch \
-    --admin; then
+    --base "$staging_branch" \
+    --head "$branch" \
+    --title "Codex to Staging: Update AGENTS.md organization guidance" \
+    --body "$pr_body"); then
 
-    echo "SUCCESS: PR created and merged automatically."
-    echo "PR: $pr_url"
-
-    cleanup_repo "$workdir"
-
-    return 10
-
-  else
-
-    echo "FAILED: PR was created but automatic merge failed."
-    echo "PR remains open:"
-    echo "$pr_url"
+    echo "FAILED: Staging PR creation failed."
 
     cleanup_repo "$workdir"
 
     return 1
   fi
+
+
+  echo "Staging PR: $staging_pr"
+
+
+  # ----------------------------------------------------------
+  # Wait for staging checks
+  # ----------------------------------------------------------
+
+  if ! wait_for_checks "$repo" "$staging_pr"; then
+
+    echo "FAILED: Staging PR checks failed."
+    echo "PR remains open:"
+    echo "$staging_pr"
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  # ----------------------------------------------------------
+  # Merge staging
+  #
+  # CRITICAL:
+  # Use --merge, NOT --squash.
+  #
+  # This preserves WORKING_COMMIT in staging.
+  # ----------------------------------------------------------
+
+  echo "Merging staging PR..."
+
+
+  if ! gh pr merge "$staging_pr" \
+    --repo "$ORG/$repo" \
+    --merge \
+    --admin; then
+
+    echo "FAILED: Staging merge failed."
+    echo "PR remains open:"
+    echo "$staging_pr"
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  echo "SUCCESS: Staging PR merged."
+
+
+  # ----------------------------------------------------------
+  # Verify exact working commit exists in staging
+  # ----------------------------------------------------------
+
+  echo "Verifying working commit exists in staging..."
+
+
+  git fetch origin "$staging_branch" --depth=100 >/dev/null 2>&1 || true
+
+
+  if ! git merge-base \
+    --is-ancestor \
+    "$WORKING_COMMIT" \
+    "origin/$staging_branch"; then
+
+    echo "FAILED: Working commit is not present in staging."
+    echo "Expected commit:"
+    echo "$WORKING_COMMIT"
+    echo
+    echo "Production PR will NOT be created."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  echo "Verified: working commit exists in staging."
+
+
+  # ==========================================================
+  # BULK STEP 2
+  #
+  # SAME ORIGINAL working branch -> production
+  # ==========================================================
+
+  echo
+  echo "Creating production PR..."
+
+
+  if ! production_pr=$(gh pr create \
+    --repo "$ORG/$repo" \
+    --base "$production_branch" \
+    --head "$branch" \
+    --title "Codex to Main: Update AGENTS.md organization guidance" \
+    --body "$pr_body"); then
+
+    echo "FAILED: Production PR creation failed."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  echo "Production PR: $production_pr"
+
+
+  # ----------------------------------------------------------
+  # Wait for production required workflows
+  # ----------------------------------------------------------
+
+  if ! wait_for_checks "$repo" "$production_pr"; then
+
+    echo "FAILED: Production checks failed."
+    echo "PR remains open:"
+    echo "$production_pr"
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  # ----------------------------------------------------------
+  # Merge production
+  # ----------------------------------------------------------
+
+  echo "Merging production PR..."
+
+
+  if ! gh pr merge "$production_pr" \
+    --repo "$ORG/$repo" \
+    --merge \
+    --delete-branch \
+    --admin; then
+
+    echo "FAILED: Production merge failed."
+    echo "PR remains open:"
+    echo "$production_pr"
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  echo
+  echo "SUCCESS: Repository rollout completed."
+  echo "Staging PR   : $staging_pr"
+  echo "Production PR: $production_pr"
+
+
+  cleanup_repo "$workdir"
+
+  return 10
 }
 
 
@@ -695,7 +914,7 @@ echo "=================================================="
 
 
 # ============================================================
-# SINGLE
+# Single repository
 # ============================================================
 
 if [ "$TARGET" = "single" ]; then
@@ -710,36 +929,25 @@ if [ "$TARGET" = "single" ]; then
   case "$result" in
 
     0)
-
-      # DRY_RUN success
       ;;
-
 
     2)
-
       skipped=$((skipped + 1))
-
       ;;
-
 
     11)
-
-      pr_created=$((pr_created + 1))
-
+      single_pr_created=$((single_pr_created + 1))
       ;;
 
-
     *)
-
       failed=$((failed + 1))
-
       ;;
 
   esac
 
 
 # ============================================================
-# BULK
+# Bulk
 # ============================================================
 
 else
@@ -757,7 +965,6 @@ else
       .name'); then
 
     echo "ERROR: Unable to retrieve organization repositories."
-
     exit 1
   fi
 
@@ -774,32 +981,20 @@ else
     case "$result" in
 
       0)
-
-        # DRY_RUN success
         ;;
-
 
       2)
-
         skipped=$((skipped + 1))
-
         ;;
-
 
       10)
-
-        pr_created=$((pr_created + 1))
-        merged=$((merged + 1))
-
+        staging_merged=$((staging_merged + 1))
+        production_merged=$((production_merged + 1))
         ;;
 
-
       *)
-
         failed=$((failed + 1))
-
         echo "FAILED: $repo"
-
         ;;
 
     esac
@@ -821,16 +1016,17 @@ echo "Repositories checked : $total"
 
 if [ "$OPERATION" = "DRY_RUN" ]; then
 
-  echo "Operation            : DRY_RUN"
-  echo "Skipped              : $skipped"
-  echo "Failed               : $failed"
+  echo "Operation             : DRY_RUN"
+  echo "Skipped               : $skipped"
+  echo "Failed                : $failed"
 
 else
 
-  echo "PRs created          : $pr_created"
-  echo "Merged automatically : $merged"
-  echo "Skipped              : $skipped"
-  echo "Failed               : $failed"
+  echo "Single PRs created    : $single_pr_created"
+  echo "Staging merged        : $staging_merged"
+  echo "Production merged     : $production_merged"
+  echo "Skipped               : $skipped"
+  echo "Failed                : $failed"
 
 fi
 
