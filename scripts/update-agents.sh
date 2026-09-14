@@ -25,13 +25,13 @@ CONTENT_PATH="$GITHUB_WORKSPACE/$CONTENT_FILE"
 
 total=0
 pr_created=0
-auto_merge_enabled=0
+merged=0
 skipped=0
 failed=0
 
 
 # ============================================================
-# Validate input
+# Validate inputs
 # ============================================================
 
 if [ ! -f "$CONTENT_PATH" ]; then
@@ -71,15 +71,13 @@ esac
 
 
 if [ "$TARGET" = "single" ] && [ -z "$TARGET_REPO" ]; then
-  echo "ERROR: TARGET_REPO is required when TARGET=single"
+  echo "ERROR: TARGET_REPO is required when TARGET=single."
   exit 1
 fi
 
 
 # ============================================================
 # Content marker
-#
-# Same exact payload will not be appended twice.
 # ============================================================
 
 CONTENT_HASH=$(sha256sum "$CONTENT_PATH" | awk '{print substr($1,1,12)}')
@@ -187,7 +185,7 @@ matches_target() {
   local detected="$2"
 
 
-  # Explicit repository selection always wins.
+  # Explicit single-repo selection always wins.
   if [ "$TARGET" = "single" ]; then
     [ "$repo" = "$TARGET_REPO" ]
     return
@@ -207,10 +205,8 @@ matches_target() {
 
 
   if [ "$TARGET" = "all" ]; then
-
     [ "$detected" = "backend" ] || \
     [ "$detected" = "frontend" ]
-
     return
   fi
 
@@ -222,11 +218,13 @@ matches_target() {
 # ============================================================
 # Process one repository
 #
-# Return values:
+# Return codes:
 #
-# 0 = success
-# 2 = skipped
-# 1 = failure
+# 0  = success
+# 2  = skipped
+# 10 = PR created + merged automatically
+# 11 = PR created only
+# 1  = failure
 # ============================================================
 
 process_repo() {
@@ -363,8 +361,6 @@ process_repo() {
 
   # ----------------------------------------------------------
   # Append/create AGENTS.md
-  #
-  # Existing content is NEVER replaced.
   # ----------------------------------------------------------
 
   if [ -f AGENTS.md ]; then
@@ -394,8 +390,6 @@ process_repo() {
 
   # ----------------------------------------------------------
   # Safety check
-  #
-  # AGENTS.md must be the only changed file.
   # ----------------------------------------------------------
 
   mapfile -t changed_files < <(
@@ -470,7 +464,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Existing remote branch protection
+  # Remote branch safety
   # ----------------------------------------------------------
 
   if git ls-remote \
@@ -561,13 +555,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # PR title / body
-  #
-  # Matches current org validation:
-  #
-  # Codex to Main: ...
-  #
-  # and includes Central Backlog reference.
+  # PR title/body
   # ----------------------------------------------------------
 
   pr_title="Codex to Main: Update AGENTS.md organization guidance"
@@ -631,7 +619,7 @@ Only AGENTS.md is modified."
   # SINGLE
   #
   # Create PR only.
-  # Do NOT auto-merge.
+  # Manual review/merge.
   # ==========================================================
 
   if [ "$TARGET" = "single" ]; then
@@ -643,7 +631,7 @@ Only AGENTS.md is modified."
 
     cleanup_repo "$workdir"
 
-    return 0
+    return 11
   fi
 
 
@@ -652,21 +640,19 @@ Only AGENTS.md is modified."
   #
   # backend / frontend / all
   #
-  # Enable auto-merge.
-  #
-  # GitHub waits for branch protection / reviews / checks.
+  # Merge immediately using ruleset bypass/admin permission.
   # ==========================================================
 
-  echo "Enabling auto-merge..."
+  echo "Merging PR automatically..."
 
 
   if gh pr merge "$pr_url" \
     --repo "$ORG/$repo" \
     --squash \
     --delete-branch \
-    --auto; then
+    --admin; then
 
-    echo "SUCCESS: PR created and auto-merge enabled."
+    echo "SUCCESS: PR created and merged automatically."
     echo "PR: $pr_url"
 
     cleanup_repo "$workdir"
@@ -675,17 +661,13 @@ Only AGENTS.md is modified."
 
   else
 
-    # PR itself was still successfully created.
-    #
-    # Do not fail entire rollout because auto-merge could not
-    # be enabled for one repository.
-    echo "WARNING: PR created but auto-merge could not be enabled."
+    echo "FAILED: PR was created but automatic merge failed."
     echo "PR remains open:"
     echo "$pr_url"
 
     cleanup_repo "$workdir"
 
-    return 11
+    return 1
   fi
 }
 
@@ -713,9 +695,7 @@ echo "=================================================="
 
 
 # ============================================================
-# SINGLE REPOSITORY
-#
-# NEVER call gh repo list.
+# SINGLE
 # ============================================================
 
 if [ "$TARGET" = "single" ]; then
@@ -731,18 +711,20 @@ if [ "$TARGET" = "single" ]; then
 
     0)
 
-      if [ "$OPERATION" = "DRY_RUN" ]; then
-        echo "DRY RUN successful."
-      else
-        pr_created=$((pr_created + 1))
-      fi
-
+      # DRY_RUN success
       ;;
 
 
     2)
 
       skipped=$((skipped + 1))
+
+      ;;
+
+
+    11)
+
+      pr_created=$((pr_created + 1))
 
       ;;
 
@@ -758,8 +740,6 @@ if [ "$TARGET" = "single" ]; then
 
 # ============================================================
 # BULK
-#
-# backend / frontend / all
 # ============================================================
 
 else
@@ -809,18 +789,7 @@ else
       10)
 
         pr_created=$((pr_created + 1))
-        auto_merge_enabled=$((auto_merge_enabled + 1))
-
-        ;;
-
-
-      11)
-
-        # PR exists, but auto merge wasn't enabled.
-        #
-        # Count PR creation as success,
-        # not repository failure.
-        pr_created=$((pr_created + 1))
+        merged=$((merged + 1))
 
         ;;
 
@@ -859,7 +828,7 @@ if [ "$OPERATION" = "DRY_RUN" ]; then
 else
 
   echo "PRs created          : $pr_created"
-  echo "Auto-merge enabled   : $auto_merge_enabled"
+  echo "Merged automatically : $merged"
   echo "Skipped              : $skipped"
   echo "Failed               : $failed"
 
@@ -871,4 +840,6 @@ echo "=================================================="
 if [ "$failed" -gt 0 ]; then
   exit 1
 fi
+
+
 exit 0
