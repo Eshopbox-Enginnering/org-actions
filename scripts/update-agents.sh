@@ -1,40 +1,113 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -uo pipefail
+
+
+# ============================================================
+# Required configuration
+# ============================================================
 
 ORG="${ORG:?ORG is required}"
 OPERATION="${OPERATION:?OPERATION is required}"
-REPO_TYPE="${REPO_TYPE:?REPO_TYPE is required}"
+TARGET="${TARGET:?TARGET is required}"
 CONTENT_FILE="${CONTENT_FILE:?CONTENT_FILE is required}"
 BATCH_ID="${BATCH_ID:?BATCH_ID is required}"
 
-DRY_RUN_REPO="${DRY_RUN_REPO:-}"
+TARGET_REPO="${TARGET_REPO:-}"
 
 CONTENT_PATH="$GITHUB_WORKSPACE/$CONTENT_FILE"
+
+
+# ============================================================
+# Counters
+# ============================================================
+
+total=0
+updated=0
+skipped=0
+failed=0
+
+
+# ============================================================
+# Validate input
+# ============================================================
 
 if [ ! -f "$CONTENT_PATH" ]; then
   echo "ERROR: Content file not found: $CONTENT_PATH"
   exit 1
 fi
 
+if [ ! -s "$CONTENT_PATH" ]; then
+  echo "ERROR: Content file is empty: $CONTENT_PATH"
+  exit 1
+fi
+
+case "$OPERATION" in
+  DRY_RUN|APPLY)
+    ;;
+  *)
+    echo "ERROR: Invalid operation: $OPERATION"
+    exit 1
+    ;;
+esac
+
+
+case "$TARGET" in
+  single|backend|frontend|all)
+    ;;
+  *)
+    echo "ERROR: Invalid target: $TARGET"
+    exit 1
+    ;;
+esac
+
+
+if [ "$TARGET" = "single" ] && [ -z "$TARGET_REPO" ]; then
+  echo "ERROR: TARGET_REPO is required when TARGET=single"
+  exit 1
+fi
+
+
+# ============================================================
+# Generate content ID
 #
-# Generate an ID from the exact content.
-# This prevents the exact same update being appended twice.
-#
+# This prevents the exact same update from being appended twice.
+# ============================================================
+
 CONTENT_HASH=$(sha256sum "$CONTENT_PATH" | awk '{print substr($1,1,12)}')
 
 BEGIN_MARKER="<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 END_MARKER="<!-- END ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 
 
+# ============================================================
+# Cleanup helper
+# ============================================================
+
+cleanup_repo() {
+
+  local workdir="$1"
+
+  cd "$GITHUB_WORKSPACE" || true
+
+  if [ -n "$workdir" ] && [ -d "$workdir" ]; then
+    rm -rf "$workdir"
+  fi
+}
+
+
+# ============================================================
+# Detect repository type
+# ============================================================
+
 detect_repo_type() {
 
   local dir="$1"
 
-  #
-  # FRONTEND
-  # Strong frontend indicators.
-  #
+
+  # ----------------------------------------------------------
+  # Frontend
+  # ----------------------------------------------------------
 
   if [ -f "$dir/angular.json" ] || \
      [ -f "$dir/vite.config.js" ] || \
@@ -50,10 +123,9 @@ detect_repo_type() {
   fi
 
 
-  #
-  # BACKEND
-  # Strong backend indicators.
-  #
+  # ----------------------------------------------------------
+  # Backend
+  # ----------------------------------------------------------
 
   if [ -f "$dir/pom.xml" ] || \
      [ -f "$dir/build.gradle" ] || \
@@ -68,9 +140,9 @@ detect_repo_type() {
   fi
 
 
-  #
-  # NODE.JS FALLBACK
-  #
+  # ----------------------------------------------------------
+  # Node fallback
+  # ----------------------------------------------------------
 
   if [ -f "$dir/package.json" ]; then
 
@@ -81,6 +153,7 @@ detect_repo_type() {
       echo "backend"
       return
     fi
+
 
     if grep -Eq \
       '"(react|react-dom|@angular/core|vue|next|vite)"' \
@@ -97,16 +170,42 @@ detect_repo_type() {
 }
 
 
-matches_selected_type() {
+# ============================================================
+# Check whether repository should be processed
+# ============================================================
 
-  local detected="$1"
+matches_target() {
 
+  local repo="$1"
+  local detected="$2"
+
+
+  # Single repository takes priority.
   #
-  # "all" intentionally means backend + frontend.
-  # Unknown/infrastructure repos are NOT included.
-  #
+  # Do NOT check frontend/backend classification here.
+  # If user explicitly selected a repo, process that repo.
+  if [ "$TARGET" = "single" ]; then
+    [ "$repo" = "$TARGET_REPO" ]
+    return
+  fi
 
-  if [ "$REPO_TYPE" = "all" ]; then
+
+  if [ "$TARGET" = "backend" ]; then
+    [ "$detected" = "backend" ]
+    return
+  fi
+
+
+  if [ "$TARGET" = "frontend" ]; then
+    [ "$detected" = "frontend" ]
+    return
+  fi
+
+
+  # "all" = all detected backend + frontend repositories.
+  #
+  # Infrastructure / unknown repositories are intentionally excluded.
+  if [ "$TARGET" = "all" ]; then
 
     [ "$detected" = "backend" ] || \
     [ "$detected" = "frontend" ]
@@ -114,13 +213,27 @@ matches_selected_type() {
     return
   fi
 
-  [ "$detected" = "$REPO_TYPE" ]
+
+  return 1
 }
 
+
+# ============================================================
+# Process repository
+# ============================================================
 
 process_repo() {
 
   local repo="$1"
+  local repo_info=""
+  local archived=""
+  local fork=""
+  local default_branch=""
+  local workdir=""
+  local detected_type=""
+  local branch=""
+  local pr_url=""
+
 
   echo
   echo "=================================================="
@@ -128,21 +241,21 @@ process_repo() {
   echo "=================================================="
 
 
-  #
-  # Get repository metadata.
-  #
+  # ----------------------------------------------------------
+  # Read repository metadata
+  # ----------------------------------------------------------
 
-  repo_info=$(gh repo view "$ORG/$repo" \
+  if ! repo_info=$(gh repo view "$ORG/$repo" \
     --json isArchived,isFork,defaultBranchRef \
     --jq '[
       .isArchived,
       .isFork,
-      .defaultBranchRef.name
-    ] | @tsv') || {
+      (.defaultBranchRef.name // "")
+    ] | @tsv'); then
 
-      echo "SKIP: Unable to read repository."
-      return 0
-    }
+    echo "FAILED: Unable to read repository metadata."
+    return 1
+  fi
 
 
   IFS=$'\t' read -r archived fork default_branch <<< "$repo_info"
@@ -150,92 +263,103 @@ process_repo() {
 
   if [ "$archived" = "true" ]; then
     echo "SKIP: Archived repository."
-    return 0
+    return 2
   fi
 
 
   if [ "$fork" = "true" ]; then
     echo "SKIP: Fork repository."
-    return 0
+    return 2
   fi
 
 
   if [ -z "$default_branch" ]; then
     echo "SKIP: Unable to determine default branch."
-    return 0
+    return 2
   fi
 
 
   echo "Default branch: $default_branch"
 
 
-  #
-  # Clone into temporary directory.
-  #
+  # ----------------------------------------------------------
+  # Clone repository
+  # ----------------------------------------------------------
 
   workdir=$(mktemp -d)
 
 
   if ! gh repo clone "$ORG/$repo" "$workdir" -- \
     --depth=1 \
-    --branch "$default_branch" >/dev/null 2>&1; then
+    --branch "$default_branch"; then
 
-    echo "SKIP: Clone failed."
+    echo "FAILED: Unable to clone repository."
 
-    rm -rf "$workdir"
+    cleanup_repo "$workdir"
 
-    return 0
+    return 1
   fi
 
 
-  #
-  # Detect backend/frontend.
-  #
+  # ----------------------------------------------------------
+  # Detect repository type
+  # ----------------------------------------------------------
 
   detected_type=$(detect_repo_type "$workdir")
 
   echo "Detected type: $detected_type"
 
 
-  if ! matches_selected_type "$detected_type"; then
+  # ----------------------------------------------------------
+  # Target filtering
+  # ----------------------------------------------------------
 
-    echo "SKIP: Does not match selected type '$REPO_TYPE'."
+  if ! matches_target "$repo" "$detected_type"; then
 
-    rm -rf "$workdir"
+    echo "SKIP: Repository does not match target '$TARGET'."
 
-    return 0
+    cleanup_repo "$workdir"
+
+    return 2
   fi
 
 
-  cd "$workdir"
+  cd "$workdir" || {
+
+    echo "FAILED: Unable to enter work directory."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  }
 
 
-  #
-  # Duplicate protection.
-  #
+  # ----------------------------------------------------------
+  # Duplicate protection
+  # ----------------------------------------------------------
 
   if [ -f AGENTS.md ] && \
      grep -Fq "$BEGIN_MARKER" AGENTS.md; then
 
-    echo "SKIP: Exact content already exists."
+    echo "SKIP: Exact content already exists in AGENTS.md."
 
-    cd "$GITHUB_WORKSPACE"
+    cleanup_repo "$workdir"
 
-    rm -rf "$workdir"
-
-    return 0
+    return 2
   fi
 
 
+  # ----------------------------------------------------------
+  # Append content
   #
-  # Append content.
-  #
+  # IMPORTANT:
   # Existing AGENTS.md is NEVER replaced.
-  #
+  # ----------------------------------------------------------
 
   if [ -f AGENTS.md ]; then
 
-    echo "Existing AGENTS.md found. Appending content."
+    echo "Existing AGENTS.md found."
+    echo "Appending organization content to bottom."
 
     printf '\n\n%s\n\n' "$BEGIN_MARKER" >> AGENTS.md
 
@@ -245,7 +369,8 @@ process_repo() {
 
   else
 
-    echo "AGENTS.md not found. Creating file."
+    echo "AGENTS.md not found."
+    echo "Creating AGENTS.md."
 
     printf '%s\n\n' "$BEGIN_MARKER" > AGENTS.md
 
@@ -256,11 +381,11 @@ process_repo() {
   fi
 
 
+  # ----------------------------------------------------------
+  # Safety check
   #
-  # SAFETY CHECK
-  #
-  # AGENTS.md must be the only changed file.
-  #
+  # AGENTS.md MUST be the only changed file.
+  # ----------------------------------------------------------
 
   mapfile -t changed_files < <(
     git status --porcelain | sed 's/^...//'
@@ -270,35 +395,32 @@ process_repo() {
   if [ "${#changed_files[@]}" -ne 1 ] || \
      [ "${changed_files[0]}" != "AGENTS.md" ]; then
 
-    echo "ERROR: Unexpected files changed."
+    echo "FAILED: Unexpected files changed."
 
     git status --short
 
-    cd "$GITHUB_WORKSPACE"
-
-    rm -rf "$workdir"
+    cleanup_repo "$workdir"
 
     return 1
   fi
 
 
-  #
+  # ----------------------------------------------------------
   # DRY RUN
-  #
+  # ----------------------------------------------------------
 
   if [ "$OPERATION" = "DRY_RUN" ]; then
 
     echo
-    echo "=============================================="
-    echo "DRY RUN ONLY"
-    echo "=============================================="
-    echo
-    echo "Repository type : $detected_type"
-    echo "Repository      : $ORG/$repo"
+    echo "----------------------------------------------"
+    echo "DRY RUN"
+    echo "----------------------------------------------"
+    echo "Repository : $ORG/$repo"
+    echo "Type       : $detected_type"
     echo
     echo "NO branch will be created."
     echo "NO commit will be created."
-    echo "NOTHING will be pushed."
+    echo "NO push will happen."
     echo "NO PR will be created."
     echo
     echo "Proposed diff:"
@@ -310,17 +432,15 @@ process_repo() {
     echo "DRY RUN COMPLETE"
     echo "----------------------------------------------"
 
-    cd "$GITHUB_WORKSPACE"
-
-    rm -rf "$workdir"
+    cleanup_repo "$workdir"
 
     return 0
   fi
 
 
-  #
+  # ----------------------------------------------------------
   # APPLY
-  #
+  # ----------------------------------------------------------
 
   branch="org-action/agents-${BATCH_ID}"
 
@@ -332,36 +452,121 @@ process_repo() {
     user.name \
     "eshopbox-org-agents[bot]"
 
+
   git config \
     user.email \
     "eshopbox-org-agents[bot]@users.noreply.github.com"
 
 
-  git checkout -b "$branch"
+  # ----------------------------------------------------------
+  # Ensure branch does not already exist remotely
+  # ----------------------------------------------------------
 
+  if git ls-remote \
+    --exit-code \
+    --heads \
+    origin \
+    "$branch" >/dev/null 2>&1; then
+
+    echo "FAILED: Remote branch already exists: $branch"
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  # ----------------------------------------------------------
+  # Create local branch
+  # ----------------------------------------------------------
+
+  if ! git checkout -b "$branch"; then
+
+    echo "FAILED: Unable to create branch."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  # ----------------------------------------------------------
+  # Commit
+  # ----------------------------------------------------------
 
   git add AGENTS.md
 
 
-  git commit \
-    -m "chore: update AGENTS.md"
+  if ! git commit \
+    -m "chore: update AGENTS.md"; then
 
+    echo "FAILED: Unable to create commit."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  # ----------------------------------------------------------
+  # Push
+  #
+  # CRITICAL:
+  # Never continue to PR creation if push fails.
+  # ----------------------------------------------------------
 
   echo "Pushing branch..."
 
 
-  git push origin "$branch"
+  if ! git push \
+    --set-upstream \
+    origin \
+    "$branch"; then
 
+    echo "FAILED: git push failed."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  echo "Branch pushed successfully."
+
+
+  # ----------------------------------------------------------
+  # Verify branch actually exists remotely
+  # ----------------------------------------------------------
+
+  if ! git ls-remote \
+    --exit-code \
+    --heads \
+    origin \
+    "$branch" >/dev/null 2>&1; then
+
+    echo "FAILED: Branch was not found remotely after push."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  # ----------------------------------------------------------
+  # Create PR
+  # ----------------------------------------------------------
 
   echo "Creating PR..."
 
 
-  pr_url=$(gh pr create \
+  if ! pr_url=$(gh pr create \
     --repo "$ORG/$repo" \
     --base "$default_branch" \
     --head "$branch" \
     --title "Update AGENTS.md" \
     --body "Organization-level automated AGENTS.md update.
+
+Repository: $ORG/$repo
 
 Repository type detected: $detected_type
 
@@ -369,130 +574,185 @@ Batch: $BATCH_ID
 
 Content ID: $CONTENT_HASH
 
-Only AGENTS.md is modified.")
+Only AGENTS.md is modified."); then
+
+    echo "FAILED: PR creation failed."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
+
+
+  if [ -z "$pr_url" ]; then
+
+    echo "FAILED: GitHub did not return a PR URL."
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
 
 
   echo "PR created: $pr_url"
 
 
+  # ----------------------------------------------------------
+  # Merge PR
   #
-  # Merge PR.
-  #
-  # GitHub App should be configured as PR-only bypass actor.
-  #
+  # Remove this block if you want manual approval + merge.
+  # ----------------------------------------------------------
 
   echo "Merging PR..."
 
 
-  gh pr merge "$pr_url" \
+  if ! gh pr merge "$pr_url" \
+    --repo "$ORG/$repo" \
     --squash \
-    --delete-branch
+    --delete-branch; then
+
+    echo "FAILED: PR merge failed."
+    echo "PR remains available at: $pr_url"
+
+    cleanup_repo "$workdir"
+
+    return 1
+  fi
 
 
   echo "SUCCESS: $ORG/$repo updated and merged."
 
 
-  cd "$GITHUB_WORKSPACE"
+  cleanup_repo "$workdir"
 
-  rm -rf "$workdir"
+  return 0
 }
 
+
+# ============================================================
+# Header
+# ============================================================
 
 echo "=================================================="
 echo "AGENTS.md organization updater"
 echo "=================================================="
 echo "Organization : $ORG"
 echo "Operation    : $OPERATION"
-echo "Repo type    : $REPO_TYPE"
+echo "Target       : $TARGET"
+
+if [ "$TARGET" = "single" ]; then
+  echo "Repository   : $TARGET_REPO"
+fi
+
 echo "Content file : $CONTENT_FILE"
 echo "Content ID   : $CONTENT_HASH"
+echo "Batch ID     : $BATCH_ID"
 echo "=================================================="
 
 
+# ============================================================
+# SINGLE REPOSITORY
 #
-# DRY RUN
-#
-# Only ONE repository is processed.
-#
+# Most important safety behavior:
+# if single is selected, NEVER enumerate organization repos.
+# ============================================================
 
-if [ "$OPERATION" = "DRY_RUN" ]; then
+if [ "$TARGET" = "single" ]; then
 
-  if [ -z "$DRY_RUN_REPO" ]; then
+  total=1
 
-    echo "ERROR: dry_run_repo is required."
+  process_repo "$TARGET_REPO"
+  result=$?
 
+
+  case "$result" in
+
+    0)
+      updated=$((updated + 1))
+      ;;
+
+    2)
+      skipped=$((skipped + 1))
+      ;;
+
+    *)
+      failed=$((failed + 1))
+      ;;
+
+  esac
+
+
+# ============================================================
+# ORGANIZATION TARGET
+# ============================================================
+
+else
+
+  echo
+  echo "Discovering organization repositories..."
+
+
+  if ! repos=$(gh repo list "$ORG" \
+    --limit 1000 \
+    --json name,isArchived,isFork \
+    --jq '.[] |
+      select(.isArchived == false) |
+      select(.isFork == false) |
+      .name'); then
+
+    echo "ERROR: Unable to retrieve organization repositories."
     exit 1
   fi
 
 
-  process_repo "$DRY_RUN_REPO"
+  for repo in $repos; do
 
-  exit 0
+    total=$((total + 1))
+
+
+    process_repo "$repo"
+    result=$?
+
+
+    case "$result" in
+
+      0)
+        updated=$((updated + 1))
+        ;;
+
+      2)
+        skipped=$((skipped + 1))
+        ;;
+
+      *)
+        failed=$((failed + 1))
+        ;;
+
+    esac
+
+  done
+
 fi
 
 
-#
-# APPLY
-#
-
-if [ "$OPERATION" != "APPLY" ]; then
-
-  echo "ERROR: Invalid operation: $OPERATION"
-
-  exit 1
-fi
-
-
-#
-# Dynamically discover ALL active organization repositories.
-#
-# This means newly created repositories are automatically
-# included in future runs.
-#
-
-repos=$(gh repo list "$ORG" \
-  --limit 1000 \
-  --json name,isArchived,isFork \
-  --jq '.[] |
-    select(.isArchived == false) |
-    select(.isFork == false) |
-    .name')
-
-
-total=0
-success=0
-failed=0
-
-
-for repo in $repos; do
-
-  total=$((total + 1))
-
-  if process_repo "$repo"; then
-
-    success=$((success + 1))
-
-  else
-
-    failed=$((failed + 1))
-
-    echo "FAILED: $repo"
-
-  fi
-
-done
-
+# ============================================================
+# Summary
+# ============================================================
 
 echo
 echo "=================================================="
 echo "ROLLOUT COMPLETE"
 echo "=================================================="
 echo "Repositories checked : $total"
-echo "Processed / skipped  : $success"
-echo "Failed               : $failed"
+echo "Updated               : $updated"
+echo "Skipped               : $skipped"
+echo "Failed                : $failed"
 echo "=================================================="
 
 
 if [ "$failed" -gt 0 ]; then
   exit 1
 fi
+
+
+exit 0
