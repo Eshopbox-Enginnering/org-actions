@@ -27,6 +27,7 @@ total=0
 single_pr_created=0
 staging_merged=0
 production_merged=0
+conflict_resolved=0
 skipped=0
 failed=0
 
@@ -84,6 +85,7 @@ BEGIN_MARKER="<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 END_MARKER="<!-- END ESHOPBOX-AGENTS-UPDATE:$CONTENT_HASH -->"
 
 ROLLOUT_BRANCH="org-action/agents-${CONTENT_HASH}"
+CONFLICT_BRANCH="conflict/resolved/agents-${CONTENT_HASH}"
 
 
 # ============================================================
@@ -97,7 +99,10 @@ cleanup_repo() {
   cd "$GITHUB_WORKSPACE" || true
 
   if [ -n "$workdir" ] && [ -d "$workdir" ]; then
-    rm -rf "$workdir"
+    rm -rf -- "$workdir" 2>/dev/null || {
+      sleep 1
+      rm -rf -- "$workdir" 2>/dev/null || true
+    }
   fi
 }
 
@@ -113,6 +118,25 @@ remote_branch_exists() {
     "refs/heads/$branch" >/dev/null 2>&1
 }
 
+
+delete_remote_branch_if_exists() {
+
+  local branch="$1"
+
+  if remote_branch_exists "$branch"; then
+
+    echo "Deleting remote branch: $branch"
+
+    git push \
+      origin \
+      --delete "$branch" >/dev/null 2>&1 || true
+  fi
+}
+
+
+# ============================================================
+# Detect repository type
+# ============================================================
 
 detect_repo_type() {
 
@@ -173,6 +197,10 @@ detect_repo_type() {
 }
 
 
+# ============================================================
+# Target matching
+# ============================================================
+
 matches_target() {
 
   local repo="$1"
@@ -208,6 +236,31 @@ matches_target() {
 }
 
 
+# ============================================================
+# Production branch validation
+#
+# Bulk must NEVER use arbitrary feature/WIP/default branches.
+# ============================================================
+
+is_supported_production_branch() {
+
+  local branch="$1"
+
+  case "$branch" in
+    main|master|aws-velocis-main)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+
+# ============================================================
+# Find staging branch
+# ============================================================
+
 find_staging_branch() {
 
   local production_branch="$1"
@@ -238,20 +291,226 @@ find_staging_branch() {
 }
 
 
+# ============================================================
+# Find open PR
+# ============================================================
+
 find_open_pr_by_base() {
 
   local repo="$1"
   local base_branch="$2"
+  local head_branch="$3"
 
 
   gh pr list \
     --repo "$ORG/$repo" \
     --state open \
     --base "$base_branch" \
-    --head "$ROLLOUT_BRANCH" \
+    --head "$head_branch" \
     --json url \
     --jq '.[0].url // empty' \
     2>/dev/null || true
+}
+
+
+# ============================================================
+# Append managed content to AGENTS.md
+# ============================================================
+
+apply_agents_content() {
+
+  if [ -f AGENTS.md ] && \
+     grep -Fq "$BEGIN_MARKER" AGENTS.md; then
+
+    echo "Content already present in AGENTS.md."
+
+    return 2
+  fi
+
+
+  if [ -f AGENTS.md ]; then
+
+    printf '\n\n%s\n\n' "$BEGIN_MARKER" >> AGENTS.md
+
+    cat "$CONTENT_PATH" >> AGENTS.md
+
+    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
+
+  else
+
+    printf '%s\n\n' "$BEGIN_MARKER" > AGENTS.md
+
+    cat "$CONTENT_PATH" >> AGENTS.md
+
+    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
+
+  fi
+
+
+  return 0
+}
+
+
+# ============================================================
+# Resolve staging conflict using temporary branch
+#
+# IMPORTANT:
+# - branch is created FROM staging
+# - only AGENTS.md content is applied
+# - conflict branch is merged into staging
+# - conflict branch is deleted
+# - original rollout branch is preserved for production PR
+# ============================================================
+
+resolve_staging_conflict() {
+
+  local repo="$1"
+  local staging_branch="$2"
+
+  local conflict_pr=""
+  local conflict_commit=""
+
+
+  echo
+  echo "Staging conflict detected."
+  echo "Creating temporary conflict-resolution branch."
+
+
+  delete_remote_branch_if_exists "$CONFLICT_BRANCH"
+
+
+  git fetch origin \
+    "$staging_branch" \
+    --depth=100 >/dev/null 2>&1 || true
+
+
+  if ! git checkout \
+    -B "$CONFLICT_BRANCH" \
+    "origin/$staging_branch"; then
+
+    echo "FAILED: Unable to create conflict branch from staging."
+    return 1
+  fi
+
+
+  # Apply only the organization-managed AGENTS content.
+  apply_agents_content
+  apply_result=$?
+
+
+  if [ "$apply_result" -eq 2 ]; then
+
+    echo "Content already exists in staging AGENTS.md."
+    echo "No temporary conflict commit required."
+
+    git checkout "$ROLLOUT_BRANCH" >/dev/null 2>&1 || true
+
+    return 0
+  fi
+
+
+  # Only AGENTS.md may change.
+  mapfile -t conflict_changed_files < <(
+    git status --porcelain | sed 's/^...//'
+  )
+
+
+  if [ "${#conflict_changed_files[@]}" -ne 1 ] || \
+     [ "${conflict_changed_files[0]}" != "AGENTS.md" ]; then
+
+    echo "FAILED: Conflict-resolution branch changed unexpected files."
+
+    git status --short
+
+    return 1
+  fi
+
+
+  git add AGENTS.md
+
+
+  if ! git commit \
+    -m "chore: resolve AGENTS.md rollout for staging"; then
+
+    echo "FAILED: Unable to commit conflict-resolution change."
+    return 1
+  fi
+
+
+  conflict_commit=$(git rev-parse HEAD)
+
+  echo "Conflict-resolution commit: $conflict_commit"
+
+
+  if ! git push \
+    --set-upstream \
+    origin \
+    "$CONFLICT_BRANCH"; then
+
+    echo "FAILED: Unable to push conflict-resolution branch."
+    return 1
+  fi
+
+
+  conflict_pr=$(find_open_pr_by_base \
+    "$repo" \
+    "$staging_branch" \
+    "$CONFLICT_BRANCH")
+
+
+  if [ -z "$conflict_pr" ]; then
+
+    echo "Creating conflict-resolution PR..."
+
+
+    if ! conflict_pr=$(gh pr create \
+      --repo "$ORG/$repo" \
+      --base "$staging_branch" \
+      --head "$CONFLICT_BRANCH" \
+      --title "Codex to Staging: Resolve AGENTS.md rollout conflict" \
+      --body "Automated conflict-resolution branch for organization AGENTS.md rollout.
+
+Central Backlog:
+Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
+
+Repository:
+$ORG/$repo
+
+Content ID:
+$CONTENT_HASH
+
+This branch was created from $staging_branch and only updates AGENTS.md."); then
+
+      echo "FAILED: Unable to create conflict-resolution PR."
+      return 1
+    fi
+  fi
+
+
+  echo "Conflict-resolution PR:"
+  echo "$conflict_pr"
+
+
+  if ! gh pr merge "$conflict_pr" \
+    --repo "$ORG/$repo" \
+    --merge \
+    --delete-branch \
+    --admin; then
+
+    echo "FAILED: Conflict-resolution PR could not be merged."
+    echo "$conflict_pr"
+
+    return 1
+  fi
+
+
+  echo "SUCCESS: Conflict-resolution PR merged to staging."
+
+
+  git checkout "$ROLLOUT_BRANCH" >/dev/null 2>&1 || true
+
+
+  return 0
 }
 
 
@@ -260,11 +519,12 @@ find_open_pr_by_base() {
 #
 # Return codes:
 #
-# 0  = dry run success
-# 2  = skipped
-# 10 = bulk rollout completed
-# 11 = single PR created
-# 1  = failure
+# 0  dry run success
+# 2  skipped
+# 10 bulk completed
+# 11 single PR created
+# 12 bulk completed with conflict-resolution path
+# 1  failure
 # ============================================================
 
 process_repo() {
@@ -287,6 +547,8 @@ process_repo() {
 
   local pr_body=""
   local working_commit=""
+
+  local conflict_used=0
 
 
   echo
@@ -333,11 +595,28 @@ process_repo() {
   fi
 
 
-  echo "Production branch: $production_branch"
+  echo "Default branch: $production_branch"
 
 
   # ----------------------------------------------------------
-  # Clone production/default branch
+  # Bulk production safety
+  # ----------------------------------------------------------
+
+  if [ "$TARGET" != "single" ]; then
+
+    if ! is_supported_production_branch "$production_branch"; then
+
+      echo "SKIP: Unsupported production branch for bulk rollout."
+      echo "Default branch: $production_branch"
+      echo "Allowed: main, master, aws-velocis-main"
+
+      return 2
+    fi
+  fi
+
+
+  # ----------------------------------------------------------
+  # Clone production
   # ----------------------------------------------------------
 
   workdir=$(mktemp -d)
@@ -390,7 +669,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Already merged into production?
+  # Already in production?
   # ----------------------------------------------------------
 
   if [ -f AGENTS.md ] && \
@@ -406,7 +685,7 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Bulk requires staging branch
+  # Bulk requires staging
   # ----------------------------------------------------------
 
   if [ "$TARGET" != "single" ]; then
@@ -414,7 +693,6 @@ process_repo() {
     if ! staging_branch=$(find_staging_branch "$production_branch"); then
 
       echo "SKIP: No supported staging branch found."
-      echo "Expected staging or aws-velocis-staging."
 
       cleanup_repo "$workdir"
 
@@ -422,14 +700,24 @@ process_repo() {
     fi
 
 
+    echo "Production branch: $production_branch"
     echo "Staging branch   : $staging_branch"
+
+
+    if [ "$production_branch" = "$staging_branch" ]; then
+
+      echo "SKIP: Production and staging branch are the same."
+      echo "Branch: $production_branch"
+
+      cleanup_repo "$workdir"
+
+      return 2
+    fi
   fi
 
 
   # ==========================================================
-  # EXISTING BRANCH / PR RESUME
-  #
-  # If previous run created the branch/PR, reuse it.
+  # EXISTING ROLLOUT BRANCH
   # ==========================================================
 
   if remote_branch_exists "$branch"; then
@@ -439,23 +727,21 @@ process_repo() {
 
 
     # --------------------------------------------------------
-    # SINGLE: reuse existing production PR if available
+    # Single
     # --------------------------------------------------------
 
     if [ "$TARGET" = "single" ]; then
 
       production_pr=$(find_open_pr_by_base \
         "$repo" \
-        "$production_branch")
+        "$production_branch" \
+        "$branch")
 
 
       if [ -n "$production_pr" ]; then
 
-        echo "Existing production PR found:"
+        echo "SUCCESS: Existing single-repo PR found."
         echo "$production_pr"
-        echo
-        echo "SUCCESS: Existing PR reused."
-        echo "Manual review/merge required."
 
         cleanup_repo "$workdir"
 
@@ -463,7 +749,7 @@ process_repo() {
       fi
 
 
-      echo "FAILED: Rollout branch exists but no open production PR was found."
+      echo "FAILED: Rollout branch exists but no production PR found."
 
       cleanup_repo "$workdir"
 
@@ -472,21 +758,19 @@ process_repo() {
 
 
     # --------------------------------------------------------
-    # BULK: reuse staging PR if available
+    # Existing staging PR
     # --------------------------------------------------------
 
     staging_pr=$(find_open_pr_by_base \
       "$repo" \
-      "$staging_branch")
+      "$staging_branch" \
+      "$branch")
 
 
     if [ -n "$staging_pr" ]; then
 
-      echo "Existing staging PR found:"
+      echo "Existing staging PR:"
       echo "$staging_pr"
-
-
-      echo "Merging existing staging PR with bypass..."
 
 
       if ! gh pr merge "$staging_pr" \
@@ -494,109 +778,33 @@ process_repo() {
         --merge \
         --admin; then
 
-        echo "FAILED: Existing staging PR could not be merged."
-        echo "$staging_pr"
-
-        cleanup_repo "$workdir"
-
-        return 1
-      fi
+        echo "Direct staging merge failed."
+        echo "Attempting conflict-resolution flow..."
 
 
-      echo "SUCCESS: Existing staging PR merged."
+        if ! resolve_staging_conflict \
+          "$repo" \
+          "$staging_branch"; then
 
-
-      production_pr=$(find_open_pr_by_base \
-        "$repo" \
-        "$production_branch")
-
-
-      if [ -z "$production_pr" ]; then
-
-        echo "Creating production PR from existing rollout branch..."
-
-
-        pr_body="Organization-level automated AGENTS.md update.
-
-Central Backlog:
-Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
-
-Repository:
-$ORG/$repo
-
-Repository type:
-$detected_type
-
-Batch:
-$BATCH_ID
-
-Content ID:
-$CONTENT_HASH
-
-Only AGENTS.md is modified."
-
-
-        if ! production_pr=$(gh pr create \
-          --repo "$ORG/$repo" \
-          --base "$production_branch" \
-          --head "$branch" \
-          --title "Codex to Main: Update AGENTS.md organization guidance" \
-          --body "$pr_body"); then
-
-          echo "FAILED: Production PR creation failed."
+          echo "FAILED: Unable to resolve staging conflict."
 
           cleanup_repo "$workdir"
 
           return 1
         fi
 
-      else
 
-        echo "Existing production PR found:"
-        echo "$production_pr"
-
+        conflict_used=1
       fi
 
 
-      echo "Merging production PR with bypass..."
+    else
+
+      echo "Existing rollout branch has no staging PR."
+      echo "Creating staging PR..."
 
 
-      if ! gh pr merge "$production_pr" \
-        --repo "$ORG/$repo" \
-        --merge \
-        --delete-branch \
-        --admin; then
-
-        echo "FAILED: Production PR could not be merged."
-        echo "$production_pr"
-
-        cleanup_repo "$workdir"
-
-        return 1
-      fi
-
-
-      echo
-      echo "SUCCESS: Existing rollout resumed and completed."
-      echo "Staging PR   : $staging_pr"
-      echo "Production PR: $production_pr"
-
-      cleanup_repo "$workdir"
-
-      return 10
-    fi
-
-
-    # --------------------------------------------------------
-    # Branch exists but staging PR does not.
-    # Create staging PR from existing branch.
-    # --------------------------------------------------------
-
-    echo "Rollout branch exists but staging PR does not."
-    echo "Creating staging PR..."
-
-
-    pr_body="Organization-level automated AGENTS.md update.
+      pr_body="Organization-level automated AGENTS.md update.
 
 Central Backlog:
 Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
@@ -604,11 +812,75 @@ Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
 Repository:
 $ORG/$repo
 
-Repository type:
-$detected_type
+Content ID:
+$CONTENT_HASH
 
-Batch:
-$BATCH_ID
+Only AGENTS.md is modified."
+
+
+      if ! staging_pr=$(gh pr create \
+        --repo "$ORG/$repo" \
+        --base "$staging_branch" \
+        --head "$branch" \
+        --title "Codex to Staging: Update AGENTS.md organization guidance" \
+        --body "$pr_body"); then
+
+        echo "FAILED: Staging PR creation failed."
+
+        cleanup_repo "$workdir"
+
+        return 1
+      fi
+
+
+      if ! gh pr merge "$staging_pr" \
+        --repo "$ORG/$repo" \
+        --merge \
+        --admin; then
+
+        echo "Direct staging merge failed."
+        echo "Attempting conflict-resolution flow..."
+
+
+        if ! resolve_staging_conflict \
+          "$repo" \
+          "$staging_branch"; then
+
+          echo "FAILED: Unable to resolve staging conflict."
+
+          cleanup_repo "$workdir"
+
+          return 1
+        fi
+
+
+        conflict_used=1
+      fi
+    fi
+
+
+    # --------------------------------------------------------
+    # Production PR
+    # --------------------------------------------------------
+
+    production_pr=$(find_open_pr_by_base \
+      "$repo" \
+      "$production_branch" \
+      "$branch")
+
+
+    if [ -z "$production_pr" ]; then
+
+      echo "Creating production PR..."
+
+
+      pr_body="Organization-level automated AGENTS.md update.
+
+Central Backlog:
+Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
+
+Repository:
+$ORG/$repo
 
 Content ID:
 $CONTENT_HASH
@@ -616,56 +888,19 @@ $CONTENT_HASH
 Only AGENTS.md is modified."
 
 
-    if ! staging_pr=$(gh pr create \
-      --repo "$ORG/$repo" \
-      --base "$staging_branch" \
-      --head "$branch" \
-      --title "Codex to Staging: Update AGENTS.md organization guidance" \
-      --body "$pr_body"); then
+      if ! production_pr=$(gh pr create \
+        --repo "$ORG/$repo" \
+        --base "$production_branch" \
+        --head "$branch" \
+        --title "Codex to Main: Update AGENTS.md organization guidance" \
+        --body "$pr_body"); then
 
-      echo "FAILED: Staging PR creation failed."
+        echo "FAILED: Production PR creation failed."
 
-      cleanup_repo "$workdir"
+        cleanup_repo "$workdir"
 
-      return 1
-    fi
-
-
-    echo "Staging PR created:"
-    echo "$staging_pr"
-
-
-    if ! gh pr merge "$staging_pr" \
-      --repo "$ORG/$repo" \
-      --merge \
-      --admin; then
-
-      echo "FAILED: Staging PR could not be merged."
-
-      cleanup_repo "$workdir"
-
-      return 1
-    fi
-
-
-    echo "SUCCESS: Staging PR merged."
-
-
-    echo "Creating production PR..."
-
-
-    if ! production_pr=$(gh pr create \
-      --repo "$ORG/$repo" \
-      --base "$production_branch" \
-      --head "$branch" \
-      --title "Codex to Main: Update AGENTS.md organization guidance" \
-      --body "$pr_body"); then
-
-      echo "FAILED: Production PR creation failed."
-
-      cleanup_repo "$workdir"
-
-      return 1
+        return 1
+      fi
     fi
 
 
@@ -675,7 +910,8 @@ Only AGENTS.md is modified."
       --delete-branch \
       --admin; then
 
-      echo "FAILED: Production merge failed."
+      echo "FAILED: Production PR could not be merged."
+      echo "$production_pr"
 
       cleanup_repo "$workdir"
 
@@ -684,11 +920,17 @@ Only AGENTS.md is modified."
 
 
     echo
-    echo "SUCCESS: Existing rollout branch completed."
-    echo "Staging PR   : $staging_pr"
+    echo "SUCCESS: Existing rollout completed."
     echo "Production PR: $production_pr"
 
+
     cleanup_repo "$workdir"
+
+
+    if [ "$conflict_used" -eq 1 ]; then
+      return 12
+    fi
+
 
     return 10
   fi
@@ -698,39 +940,8 @@ Only AGENTS.md is modified."
   # NEW ROLLOUT
   # ==========================================================
 
+  apply_agents_content
 
-  # ----------------------------------------------------------
-  # Modify AGENTS.md
-  # ----------------------------------------------------------
-
-  if [ -f AGENTS.md ]; then
-
-    echo "Existing AGENTS.md found."
-    echo "Appending content."
-
-    printf '\n\n%s\n\n' "$BEGIN_MARKER" >> AGENTS.md
-
-    cat "$CONTENT_PATH" >> AGENTS.md
-
-    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
-
-  else
-
-    echo "AGENTS.md not found."
-    echo "Creating AGENTS.md."
-
-    printf '%s\n\n' "$BEGIN_MARKER" > AGENTS.md
-
-    cat "$CONTENT_PATH" >> AGENTS.md
-
-    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
-
-  fi
-
-
-  # ----------------------------------------------------------
-  # Safety check
-  # ----------------------------------------------------------
 
   mapfile -t changed_files < <(
     git status --porcelain | sed 's/^...//'
@@ -751,7 +962,7 @@ Only AGENTS.md is modified."
 
 
   # ----------------------------------------------------------
-  # DRY RUN
+  # Dry run
   # ----------------------------------------------------------
 
   if [ "$OPERATION" = "DRY_RUN" ]; then
@@ -764,26 +975,18 @@ Only AGENTS.md is modified."
     echo "Repository        : $ORG/$repo"
     echo "Detected type     : $detected_type"
     echo "Production branch : $production_branch"
-    echo "Content ID        : $CONTENT_HASH"
-    echo "Rollout branch    : $branch"
 
     if [ "$TARGET" != "single" ]; then
       echo "Staging branch    : $staging_branch"
     fi
 
     echo
-    echo "Proposed diff:"
-    echo "----------------------------------------------"
-
     git diff -- AGENTS.md
 
-    echo "----------------------------------------------"
+    echo
     echo "NO branch created."
-    echo "NO commit created."
-    echo "NO push performed."
     echo "NO PR created."
     echo "NO merge performed."
-    echo "----------------------------------------------"
 
     cleanup_repo "$workdir"
 
@@ -806,7 +1009,7 @@ Only AGENTS.md is modified."
 
 
   # ----------------------------------------------------------
-  # Create working branch FROM production/default branch
+  # Create rollout branch FROM production
   # ----------------------------------------------------------
 
   echo "Creating rollout branch:"
@@ -823,17 +1026,13 @@ Only AGENTS.md is modified."
   fi
 
 
-  # ----------------------------------------------------------
-  # Commit
-  # ----------------------------------------------------------
-
   git add AGENTS.md
 
 
   if ! git commit \
     -m "chore: update AGENTS.md"; then
 
-    echo "FAILED: Unable to create commit."
+    echo "FAILED: Unable to commit AGENTS.md."
 
     cleanup_repo "$workdir"
 
@@ -844,13 +1043,6 @@ Only AGENTS.md is modified."
   working_commit=$(git rev-parse HEAD)
 
   echo "Working commit: $working_commit"
-
-
-  # ----------------------------------------------------------
-  # Push
-  # ----------------------------------------------------------
-
-  echo "Pushing rollout branch..."
 
 
   if ! git push \
@@ -864,9 +1056,6 @@ Only AGENTS.md is modified."
 
     return 1
   fi
-
-
-  echo "Branch pushed successfully."
 
 
   # ----------------------------------------------------------
@@ -897,15 +1086,10 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # SINGLE
-  #
-  # Create production PR only.
+  # Single
   # ==========================================================
 
   if [ "$TARGET" = "single" ]; then
-
-    echo "Creating production PR..."
-
 
     if ! production_pr=$(gh pr create \
       --repo "$ORG/$repo" \
@@ -924,7 +1108,7 @@ Only AGENTS.md is modified."
 
     echo
     echo "SUCCESS: Single repository PR created."
-    echo "PR: $production_pr"
+    echo "$production_pr"
     echo "Manual review/merge required."
 
 
@@ -935,12 +1119,9 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # BULK STEP 1
-  #
-  # working branch -> staging
+  # Bulk staging
   # ==========================================================
 
-  echo
   echo "Creating staging PR..."
 
 
@@ -963,33 +1144,35 @@ Only AGENTS.md is modified."
   echo "$staging_pr"
 
 
-  echo "Merging staging PR with bypass..."
-
-
   if ! gh pr merge "$staging_pr" \
     --repo "$ORG/$repo" \
     --merge \
     --admin; then
 
-    echo "FAILED: Staging PR could not be merged."
-    echo "$staging_pr"
+    echo "Direct staging merge failed."
+    echo "Attempting conflict-resolution flow..."
 
-    cleanup_repo "$workdir"
 
-    return 1
+    if ! resolve_staging_conflict \
+      "$repo" \
+      "$staging_branch"; then
+
+      echo "FAILED: Unable to resolve staging conflict."
+
+      cleanup_repo "$workdir"
+
+      return 1
+    fi
+
+
+    conflict_used=1
   fi
 
 
-  echo "SUCCESS: Staging PR merged."
-
-
   # ==========================================================
-  # BULK STEP 2
-  #
-  # SAME original rollout branch -> production
+  # Bulk production
   # ==========================================================
 
-  echo
   echo "Creating production PR..."
 
 
@@ -1010,9 +1193,6 @@ Only AGENTS.md is modified."
 
   echo "Production PR:"
   echo "$production_pr"
-
-
-  echo "Merging production PR with bypass..."
 
 
   if ! gh pr merge "$production_pr" \
@@ -1038,6 +1218,12 @@ Only AGENTS.md is modified."
 
   cleanup_repo "$workdir"
 
+
+  if [ "$conflict_used" -eq 1 ]; then
+    return 12
+  fi
+
+
   return 10
 }
 
@@ -1060,6 +1246,7 @@ fi
 echo "Content file          : $CONTENT_FILE"
 echo "Content ID            : $CONTENT_HASH"
 echo "Rollout branch        : $ROLLOUT_BRANCH"
+echo "Conflict branch       : $CONFLICT_BRANCH"
 echo "Central Backlog issue : $CENTRAL_BACKLOG_ISSUE"
 echo "Batch ID              : $BATCH_ID"
 echo "=================================================="
@@ -1144,6 +1331,12 @@ else
         production_merged=$((production_merged + 1))
         ;;
 
+      12)
+        staging_merged=$((staging_merged + 1))
+        production_merged=$((production_merged + 1))
+        conflict_resolved=$((conflict_resolved + 1))
+        ;;
+
       *)
         failed=$((failed + 1))
         echo "FAILED: $repo"
@@ -1177,6 +1370,7 @@ else
   echo "Single PRs created    : $single_pr_created"
   echo "Staging merged        : $staging_merged"
   echo "Production merged     : $production_merged"
+  echo "Conflicts resolved    : $conflict_resolved"
   echo "Skipped               : $skipped"
   echo "Failed                : $failed"
 
