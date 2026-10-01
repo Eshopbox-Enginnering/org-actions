@@ -22,9 +22,10 @@ on:
 
 jobs:
   check-commits:
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    # runs-on:
+    #   group: checks-runners
+    #   labels: checks-runner
+    runs-on: ubuntu-24.04
 
     timeout-minutes: 10
 
