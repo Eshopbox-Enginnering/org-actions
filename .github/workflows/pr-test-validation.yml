@@ -223,14 +223,29 @@ jobs:
           MISSING=0
           MISSING_LIST=""
 
+          # A source file is covered when the PR changes a test in the same package
+          # whose name starts with the class name and ends in Test/Tests/IT. This
+          # accepts both FooTest.java and per-method splits like FooBarMethodTest.java.
+          has_test() {
+            local test_dir="$1" cls="$2" t name rest
+            while IFS= read -r t; do
+              [[ "$t" == "$test_dir/"* ]] || continue
+              name="${t#"$test_dir"/}"
+              [[ "$name" == */* ]] && continue
+              [[ "$name" == "$cls"* ]] || continue
+              rest="${name#"$cls"}"
+              [[ "$rest" =~ ^[A-Za-z0-9_]*(Test|Tests|IT)\.java$ ]] && return 0
+            done < changed_files.txt
+            return 1
+          }
+
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             rel_path="$(echo "$f" | sed 's|^src/main/java/||')"
-            t1="src/test/java/${rel_path%.java}Test.java"
-            t2="src/test/java/${rel_path%.java}Tests.java"
-            t3="src/test/java/${rel_path%.java}IT.java"
+            test_dir="src/test/java/$(dirname "$rel_path")"
+            cls="$(basename "$rel_path" .java)"
 
-            if grep -qFx "$t1" changed_files.txt || grep -qFx "$t2" changed_files.txt || grep -qFx "$t3" changed_files.txt; then
+            if has_test "$test_dir" "$cls"; then
               echo "✅ Found test for $f"
             else
               echo "❌ Missing test for $f"
