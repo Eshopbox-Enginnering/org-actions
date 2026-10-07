@@ -13,9 +13,10 @@ permissions:
 
 jobs:
   validate-pr-title-and-ticket:
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+   # runs-on:
+   #   group: checks-runners
+   #   labels: checks-runner
+    runs-on: [self-hosted, Linux, X64, checks-runner, aws-checks-runner]
   # runs-on: ubuntu-24.04
     timeout-minutes: 5
 
