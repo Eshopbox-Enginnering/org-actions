@@ -71,10 +71,7 @@ jobs:
         with:
           distribution: corretto
           java-version: '17'
-          cache: maven
-          cache-dependency-path: |
-            base/**/pom.xml
-            pr/**/pom.xml
+          # Maven caching disabled: checks-runner has inconsistent workspace paths.
 
       - name: List files changed by the PR
         env:
