@@ -15,7 +15,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  detect-java:
+    name: Detect supported Java repository
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
+    outputs:
+      supported: ${{ steps.detect.outputs.supported }}
+    steps:
+      - name: Check out PR revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Detect Maven Java project
+        id: detect
+        shell: bash
+        run: |
+          if [ -f pom.xml ] && find . -type f -path '*/src/main/java/*.java' -print -quit | grep -q .; then
+            echo "supported=true" >> "$GITHUB_OUTPUT"
+            echo "Java Maven project detected: coverage will run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "supported=false" >> "$GITHUB_OUTPUT"
+            echo "Coverage skipped: no root pom.xml with Java sources (non-Java or unsupported build)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   coverage:
+    needs: detect-java
+    if: ${{ needs.detect-java.outputs.supported == 'true' }}
     runs-on:
       group: checks-runners
       labels: checks-runner
