@@ -1,0 +1,336 @@
+name: Java Test Coverage
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: java-test-coverage-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out base revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out PR revision
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: corretto
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: |
+            base/**/pom.xml
+            pr/**/pom.xml
+
+      - name: List files changed by the PR
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git -C pr fetch --no-tags ../base "$BASE_SHA"
+          git -C pr diff --name-only -z "$BASE_SHA...HEAD" > changed-files.txt
+
+      - name: Run base and PR tests with JaCoCo
+        # Keep both results even when Maven fails. The final gate checks exit codes
+        # AND test XML; ignoring test failures here lets Maven finish all tests.
+        run: |
+          set +e
+          for revision in base pr; do
+            (
+              cd "$revision" || exit 1
+              mvn --batch-mode --no-transfer-progress \
+                -Dmaven.test.failure.ignore=true \
+                -DskipTests=false -Dmaven.test.skip=false \
+                -DfailIfNoTests=true -DforkCount=1 \
+                clean org.jacoco:jacoco-maven-plugin:0.8.14:prepare-agent verify
+              test_status=$?
+              # Generate partial coverage even after a test/build failure.
+              mvn --batch-mode --no-transfer-progress \
+                org.jacoco:jacoco-maven-plugin:0.8.14:report
+              report_status=$?
+              if [ "$test_status" -ne 0 ]; then
+                exit "$test_status"
+              fi
+              exit "$report_status"
+            ) 2>&1 | tee "$revision-maven.log"
+            echo "${PIPESTATUS[0]}" > "$revision.status"
+          done
+          exit 0
+
+      - name: Build coverage and test report
+        id: report
+        if: ${{ always() && !cancelled() }}
+        run: |
+          python3 <<'PYTHON'
+          import html
+          import json
+          import os
+          import re
+          from fractions import Fraction
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          errors = []
+          test_labels = {}
+          test_sources = {}
+
+          def safe(value):
+              return html.escape(str(value)).replace('|', '&#124;').replace('\n', ' ').replace('\r', ' ')
+
+          def counter(node):
+              line = node.find("counter[@type='LINE']")
+              if line is None:
+                  return None
+              covered = int(line.get('covered', 0))
+              total = covered + int(line.get('missed', 0))
+              return (covered, total) if total else None
+
+          def percent(value):
+              return f'{100 * value[0] / value[1]:.4f}% ({value[0]}/{value[1]})' if value else 'N/A'
+
+          def read_revision(label):
+              status_file = Path(f'{label}.status')
+              status = status_file.read_text().strip() if status_file.exists() else 'not run'
+              if status != '0':
+                  errors.append(f'{label}: Maven failed or did not run (status {status}).')
+              root = Path(label)
+              totals = [0, 0]
+              files = {}
+              reports = sorted(root.glob('**/target/site/jacoco/jacoco.xml'))
+              if not reports:
+                  errors.append(f'{label}: JaCoCo XML report is missing.')
+              for report in reports:
+                  try:
+                      xml = ET.parse(report).getroot()
+                      total = counter(xml)
+                      if total:
+                          totals[0] += total[0]
+                          totals[1] += total[1]
+                      # Each module's report belongs to its own source tree.
+                      module = report.parents[3].relative_to(root)
+                      for package in xml.findall('package'):
+                          for source in package.findall('sourcefile'):
+                              path = module / 'src/main/java' / package.get('name', '') / source.get('name')
+                              files[path.as_posix()] = counter(source)
+                  except (ET.ParseError, ValueError, TypeError) as exc:
+                      errors.append(f'{label}: Invalid JaCoCo report: {exc}')
+              coverage = tuple(totals) if totals[1] else None
+              if coverage is None:
+                  errors.append(f'{label}: No measurable line coverage; cannot compare.')
+
+              tests = []
+              test_reports = sorted(root.glob('**/target/surefire-reports/TEST-*.xml'))
+              test_reports += sorted(root.glob('**/target/failsafe-reports/TEST-*.xml'))
+              for report in test_reports:
+                  try:
+                      xml = ET.parse(report).getroot()
+                      cases = list(xml.iter('testcase'))
+                      # Suite-level failures must also fail the gate.
+                      for suite in xml.iter('testsuite'):
+                          if int(suite.get('failures', 0)) or int(suite.get('errors', 0)):
+                              errors.append(f'{label}: Failed test suite in {report.relative_to(root)}.')
+                      for case in cases:
+                          failed = any(case.find(tag) is not None for tag in ('failure', 'error', 'flakyFailure', 'flakyError', 'rerunFailure', 'rerunError'))
+                          state = 'FAIL' if failed else 'SKIP' if case.find('skipped') is not None else 'PASS'
+                          name = f"{case.get('classname', '')}.{case.get('name', '')}"
+                          classname = case.get('classname', '')
+                          test_labels[name] = (classname, case.get('name', ''))
+                          module = report.parents[2].relative_to(root)
+                          source = classname.split('$', 1)[0].replace('.', '/') + '.java'
+                          test_sources[name] = (module / 'src/test/java' / source).as_posix()
+                          tests.append((name, state))
+                          if failed:
+                              errors.append(f'{label}: Test failed: {name}')
+                  except (ET.ParseError, ValueError) as exc:
+                      errors.append(f'{label}: Invalid test report: {exc}')
+              if not tests:
+                  errors.append(f'{label}: No test results found.')
+              return coverage, files, sorted(tests)
+
+          base, base_files, base_tests = read_revision('base')
+          pr, pr_files, pr_tests = read_revision('pr')
+          delta = 'N/A'
+          if base and pr:
+              # Compare exact fractions: rounding must never hide a decrease.
+              difference = Fraction(pr[0], pr[1]) - Fraction(base[0], base[1])
+              delta = f'{float(difference * 100):+.4f} percentage points'
+              if difference < 0:
+                  errors.append('PR line coverage is lower than base line coverage.')
+          changed_path = Path('changed-files.txt')
+          if changed_path.exists():
+              changed = changed_path.read_bytes().decode('utf-8', errors='replace').split('\0')
+          else:
+              changed = []
+              errors.append('Changed-file list is missing.')
+
+          # Preserve the complete human-readable report in the job summary only.
+          sections = [
+              '# Coverage trial',
+              '**Result: ' + ('FAIL' if errors else 'PASS') + '**',
+              '| Revision | Line coverage |\n| --- | --- |\n'
+              f'| Base | {percent(base)} |\n| PR | {percent(pr)} |\n\nChange: **{delta}**',
+              'Comparison uses the event base SHA and PR head SHA. N/A means no measurable coverage for that file (for example a non-Java, new, or deleted file).',
+          ]
+          if errors:
+              sections.append('## Gate failures')
+              sections.extend('- ' + safe(error) for error in errors)
+          sections.append('## Coverage per changed file\n\n| File | Base | PR |\n| --- | --- | --- |')
+          for path in filter(None, changed):
+              sections.append(f'| {safe(path)} | {percent(base_files.get(path))} | {percent(pr_files.get(path))} |')
+          for label, tests in [('Base', base_tests), ('PR', pr_tests)]:
+              sections.append(f'## {label}: every test\n\n| Test | Result |\n| --- | --- |')
+              sections.extend(f'| {safe(name)} | {state} |' for name, state in tests)
+              if not tests:
+                  sections.append('| No test results available | N/A |')
+
+          full_report = '\n\n'.join(sections) + '\n'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(full_report)
+
+          base_names = {name for name, _ in base_tests}
+
+          def readable(method):
+              # Preserve acronyms while splitting camelCase and snake_case.
+              words = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1 \2', method)
+              words = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', words)
+              words = words.replace('_', ' ')
+              words = re.sub(r'\b[A-Z][a-z]', lambda match: match[0].lower(), words)
+              return safe(words[:1].upper() + words[1:])
+
+          sections = [
+              '# Coverage trial',
+              '**Result: ' + ('FAIL' if errors else 'PASS') + '**',
+              f'Line coverage: **{percent(base)} → {percent(pr)}**\n\nChange: **{delta}**',
+              '## Tests',
+          ]
+          changed_tests = set(changed)
+          other_passed = 0
+          skipped = 0
+          previous_class = None
+          for name, state in pr_tests:
+              # Skipped tests are counted, rather than presented as passes.
+              if state == 'SKIP':
+                  skipped += 1
+                  continue
+              if test_sources[name] not in changed_tests and state != 'FAIL':
+                  other_passed += 1
+                  continue
+              classname, method = test_labels[name]
+              if classname != previous_class:
+                  sections.append('### ' + safe(classname))
+                  previous_class = classname
+              icon = '❌' if state == 'FAIL' else '✅'
+              marker = ' 🆕' if name not in base_names else ''
+              sections.append(f'- {icon} {readable(method)}{marker}')
+          if previous_class is None:
+              sections.append('No tests to list.')
+          sections.append(f'Other tests: {other_passed} passed · {skipped} skipped')
+
+          comments = []
+          current = ''
+          class_heading = ''
+          for section in sections:
+              # Keep room for the sticky comment marker and continuation heading.
+              while len(section) > 48000:
+                  if current:
+                      comments.append(current)
+                      current = ''
+                  comments.append(section[:48000])
+                  section = section[48000:]
+              if len(current) + len(section) + 2 > 48000:
+                  comments.append(current)
+                  current = '# Coverage trial (continued)\n\n'
+                  if section.startswith('- ') and class_heading:
+                      current += class_heading + '\n\n'
+              if section.startswith('### '):
+                  class_heading = section
+              current += section + '\n\n'
+          if current:
+              comments.append(current)
+          Path('comments.json').write_text(json.dumps(comments))
+          Path('gate.json').write_text(json.dumps({'passed': not errors, 'errors': errors}))
+          PYTHON
+
+      - name: Post sticky PR comments
+        if: ${{ always() && !cancelled() && steps.report.outcome == 'success' }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const bodies = JSON.parse(fs.readFileSync('comments.json', 'utf8'));
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const prefix = '<!-- coverage-trial:';
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+            const previous = comments.filter(c =>
+              c.user.login === 'github-actions[bot]' && c.body.startsWith(prefix));
+            for (let i = 0; i < bodies.length; i++) {
+              const marker = `${prefix}${i} -->`;
+              const body = `${marker}\n${bodies[i]}`;
+              const existing = previous.find(c => c.body.startsWith(marker));
+              if (existing) {
+                await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body});
+              } else {
+                await github.rest.issues.createComment({owner, repo, issue_number, body});
+              }
+            }
+            for (const comment of previous) {
+              const index = Number(comment.body.split('-->')[0].slice(prefix.length).trim());
+              if (index >= bodies.length) {
+                await github.rest.issues.deleteComment({owner, repo, comment_id: comment.id});
+              }
+            }
+
+      - name: Upload coverage, test reports, and Maven logs
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-trial-${{ github.event.pull_request.number }}
+          retention-days: 14
+          path: |
+            base/**/target/site/jacoco/
+            pr/**/target/site/jacoco/
+            base/**/target/surefire-reports/
+            pr/**/target/surefire-reports/
+            base/**/target/failsafe-reports/
+            pr/**/target/failsafe-reports/
+            *-maven.log
+            *.status
+            comments.json
+            gate.json
+
+      - name: Enforce tests and coverage
+        if: ${{ always() && !cancelled() }}
+        run: |
+          python3 <<'PYTHON'
+          import json
+          from pathlib import Path
+          gate = Path('gate.json')
+          if not gate.exists():
+              raise SystemExit('Coverage report did not complete.')
+          result = json.loads(gate.read_text())
+          if not result['passed']:
+              raise SystemExit('\n'.join(result['errors']))
+          print('All tests passed and PR line coverage did not decrease.')
+          PYTHON
