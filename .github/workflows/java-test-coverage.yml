@@ -88,7 +88,7 @@ jobs:
             const reason = process.env.SUPPORTED === 'false'
               ? 'Not a supported Java Maven repository; coverage check skipped.'
               : process.env.REASON;
-            const body = `${marker}\n# Java Test Coverage\n\n**Result: NOT APPLICABLE**\n\n${reason}\n\nNo tests required for this change.`;
+            const body = `${marker}\n# ℹ️ Test Coverage: Not Applicable\n\n${reason}\n\n✅ Coverage validation skipped. No new tests required.`;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100
             });
@@ -280,8 +280,8 @@ jobs:
 
           # Preserve the complete human-readable report in the job summary only.
           sections = [
-              '# Coverage trial',
-              '**Result: ' + ('FAIL' if errors else 'PASS') + '**',
+              '# Java Test Coverage',
+              '**Result: ' + ('❌ Failed' if errors else '✅ Passed') + '**',
               '| Revision | Line coverage |\n| --- | --- |\n'
               f'| Base | {percent(base)} |\n| PR | {percent(pr)} |\n\nChange: **{delta}**',
               'Comparison uses the event base SHA and PR head SHA. N/A means no measurable coverage for that file (for example a non-Java, new, or deleted file).',
@@ -313,8 +313,8 @@ jobs:
               return safe(words[:1].upper() + words[1:])
 
           sections = [
-              '# Coverage trial',
-              '**Result: ' + ('FAIL' if errors else 'PASS') + '**',
+              '# Java Test Coverage',
+              '**Result: ' + ('❌ Failed' if errors else '✅ Passed') + '**',
               f'Line coverage: **{percent(base)} → {percent(pr)}**\n\nChange: **{delta}**',
               '## Tests',
           ]
@@ -354,7 +354,7 @@ jobs:
                   section = section[48000:]
               if len(current) + len(section) + 2 > 48000:
                   comments.append(current)
-                  current = '# Coverage trial (continued)\n\n'
+                  current = '# Java Test Coverage (continued)\n\n'
                   if section.startswith('- ') and class_heading:
                       current += class_heading + '\n\n'
               if section.startswith('### '):
