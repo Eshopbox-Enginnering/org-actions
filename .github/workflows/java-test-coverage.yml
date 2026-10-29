@@ -33,7 +33,7 @@ jobs:
         id: detect
         shell: bash
         run: |
-          if [ -f pom.xml ] && find . -type f -path '*/src/main/java/*.java' -print -quit | grep -q .; then
+          if [ -f pom.xml ] && find . -type f -path '*/src/main/java/*' -name '*.java' -print -quit | grep -q .; then
             echo "supported=true" >> "$GITHUB_OUTPUT"
             echo "Java Maven project detected: coverage will run." >> "$GITHUB_STEP_SUMMARY"
           else
