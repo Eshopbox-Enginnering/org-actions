@@ -70,7 +70,7 @@ jobs:
   not-applicable:
     name: Coverage not applicable
     needs: detect-java
-    if: ${{ needs.detect-java.outputs.supported == 'false' || needs.detect-java.outputs.relevant == 'false' }}
+    if: ${{ always() && needs.detect-java.result == 'success' && (needs.detect-java.outputs.supported == 'false' || needs.detect-java.outputs.relevant == 'false') }}
     runs-on:
       group: checks-runners
       labels: checks-runner
@@ -108,7 +108,7 @@ jobs:
 
   coverage:
     needs: detect-java
-    if: ${{ needs.detect-java.outputs.supported == 'true' && needs.detect-java.outputs.relevant == 'true' }}
+    if: ${{ always() && needs.detect-java.result == 'success' && needs.detect-java.outputs.supported == 'true' && needs.detect-java.outputs.relevant == 'true' }}
     runs-on:
       group: checks-runners
       labels: checks-runner
