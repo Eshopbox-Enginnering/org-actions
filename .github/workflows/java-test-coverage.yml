@@ -138,6 +138,14 @@ jobs:
           java-version: '17'
           # Maven caching disabled: checks-runner has inconsistent workspace paths.
 
+      - name: Install Maven
+        run: |
+          if ! command -v mvn &>/dev/null; then
+            curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz \
+              | sudo tar -xz -C /opt
+            echo "/opt/apache-maven-3.9.6/bin" >> "$GITHUB_PATH"
+          fi
+
       - name: List files changed by the PR
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
