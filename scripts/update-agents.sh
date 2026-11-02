@@ -318,38 +318,51 @@ find_open_pr_by_base() {
 # ============================================================
 
 apply_agents_content() {
+  python3 - "$CONTENT_PATH" "$CONTENT_HASH" <<'PY'
+import pathlib
+import re
+import sys
 
-  if [ -f AGENTS.md ] && \
-     grep -Fq "$BEGIN_MARKER" AGENTS.md; then
+source = pathlib.Path(sys.argv[1]).read_bytes()
+content_hash = sys.argv[2]
+path = pathlib.Path("AGENTS.md")
+original = path.read_bytes() if path.exists() else b""
+newline = b"\r\n" if b"\r\n" in original else b"\n"
 
-    echo "Content already present in AGENTS.md."
+# Require matching marker forms and matching legacy hashes.
+pattern = re.compile(
+    rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE(?P<suffix>:[a-f0-9]{12})? -->[ \t]*\r?\n"
+    rb".*?"
+    rb"^<!-- END ESHOPBOX-AGENTS-UPDATE(?P=suffix) -->[ \t]*(?:\r?\n|$)",
+    re.DOTALL,
+)
+matches = list(pattern.finditer(original))
+begins = len(re.findall(rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE", original))
+ends = len(re.findall(rb"(?m)^<!-- END ESHOPBOX-AGENTS-UPDATE", original))
+if begins != len(matches) or ends != len(matches):
+    print("ERROR: Mismatched or malformed organization-managed markers.")
+    sys.exit(1)
 
-    return 2
-  fi
-
-
-  if [ -f AGENTS.md ]; then
-
-    printf '\n\n%s\n\n' "$BEGIN_MARKER" >> AGENTS.md
-
-    cat "$CONTENT_PATH" >> AGENTS.md
-
-    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
-
-  else
-
-    printf '%s\n\n' "$BEGIN_MARKER" > AGENTS.md
-
-    cat "$CONTENT_PATH" >> AGENTS.md
-
-    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
-
-  fi
-
-
-  return 0
+# Keep payload bytes intact, adding only a missing terminal newline.
+payload = source if source.endswith((b"\n", b"\r")) else source + newline
+managed = (
+    b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE -->" + newline
+    + payload
+    + b"<!-- END ESHOPBOX-AGENTS-UPDATE -->" + newline
+)
+# Preserve unmanaged bytes and their line endings.
+unmanaged = pattern.sub(b"", original)
+if matches:
+    unmanaged = unmanaged.rstrip(b"\r\n")
+updated = unmanaged + (newline + newline if unmanaged else b"") + managed
+if updated == original:
+    print("Organization-managed AGENTS.md content already current.")
+    sys.exit(2)
+path.write_bytes(updated)
+print("Updated organization-managed AGENTS.md content:", content_hash)
+PY
+  return $?
 }
-
 
 # ============================================================
 # Resolve staging conflict using temporary branch
@@ -396,6 +409,10 @@ resolve_staging_conflict() {
   # Apply only the organization-managed AGENTS content.
   apply_agents_content
   apply_result=$?
+  if [ "$apply_result" -ne 0 ] && [ "$apply_result" -ne 2 ]; then
+    echo "FAILED: Unable to update managed AGENTS.md block."
+    return 1
+  fi
 
 
   if [ "$apply_result" -eq 2 ]; then
@@ -941,7 +958,16 @@ Only AGENTS.md is modified."
   # ==========================================================
 
   apply_agents_content
-
+  apply_result=$?
+  if [ "$apply_result" -eq 2 ]; then
+    echo "SKIP: Organization-managed AGENTS.md content is already current."
+    cleanup_repo "$workdir"
+    return 2
+  elif [ "$apply_result" -ne 0 ]; then
+    echo "FAILED: Unable to update managed AGENTS.md block."
+    cleanup_repo "$workdir"
+    return 1
+  fi
 
   mapfile -t changed_files < <(
     git status --porcelain | sed 's/^...//'
