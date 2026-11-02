@@ -343,23 +343,33 @@ if begins != len(matches) or ends != len(matches):
     print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
 
-# Keep payload bytes intact, adding only a missing terminal newline.
+# Keep each rollout in its own immutable, hash-identified section.
+# Never delete an older managed block or repository-owned instructions.
 payload = source if source.endswith((b"\n", b"\r")) else source + newline
-managed = (
-    b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE -->" + newline
-    + payload
-    + b"<!-- END ESHOPBOX-AGENTS-UPDATE -->" + newline
-)
-# Preserve unmanaged bytes and their line endings.
-unmanaged = pattern.sub(b"", original)
-if matches:
-    unmanaged = unmanaged.rstrip(b"\r\n")
-updated = unmanaged + (newline + newline if unmanaged else b"") + managed
-if updated == original:
+suffix = b":" + content_hash.encode("ascii")
+begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+end = b"<!-- END ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+managed = begin + newline + payload + end + newline
+
+# A rerun of the same content is idempotent. A changed payload is a new
+# rollout; older sections remain intact for an explicit, reviewed migration.
+existing = [m for m in matches if m.group("suffix") == suffix]
+if existing:
+    if len(existing) != 1 or original[existing[0].start():existing[0].end()].rstrip(b"\r\n") != managed.rstrip(b"\r\n"):
+        print("ERROR: Existing managed section with this content hash differs; refusing overwrite.")
+        sys.exit(1)
     print("Organization-managed AGENTS.md content already current.")
     sys.exit(2)
+
+# Legacy unversioned blocks can contain conflicting instructions. Do not
+# silently replace them or append potentially contradictory guidance.
+if any(m.group("suffix") is None for m in matches):
+    print("ERROR: Legacy unversioned managed section exists; manual migration required.")
+    sys.exit(1)
+
+updated = original.rstrip(b"\r\n") + (newline + newline if original.strip() else b"") + managed
 path.write_bytes(updated)
-print("Updated organization-managed AGENTS.md content:", content_hash)
+print("Appended organization-managed AGENTS.md content:", content_hash)
 PY
   return $?
 }
