@@ -350,7 +350,8 @@ seen_hashes = set()
 for match in matches:
     suffix = match.group("suffix")
     if suffix is None:
-        continue
+        print("ERROR: Legacy unversioned managed section exists; manual migration required.")
+        sys.exit(1)
     if suffix in seen_hashes:
         print("ERROR: Duplicate organization-managed content hash.")
         sys.exit(1)
