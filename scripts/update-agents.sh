@@ -393,7 +393,8 @@ if mode == "check":
     print("Managed sections validated.")
     sys.exit(0)
 
-updated = (original.rstrip(b"\r\n") + newline + newline if original.strip() else b"") + managed
+prefix = original.rstrip(b"\r\n") if original.strip() else b""
+updated = prefix + (newline + newline if prefix else b"") + managed
 path.write_bytes(updated)
 print("Appended organization-managed AGENTS.md content:", content_hash)
 PY
