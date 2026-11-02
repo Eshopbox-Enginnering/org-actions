@@ -318,7 +318,7 @@ find_open_pr_by_base() {
 # ============================================================
 
 apply_agents_content() {
-  python3 - "$CONTENT_PATH" "$CONTENT_HASH" <<'PY'
+  python3 - "$CONTENT_PATH" "$CONTENT_HASH" "${1:-apply}" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -326,6 +326,7 @@ import sys
 
 source = pathlib.Path(sys.argv[1]).read_bytes()
 content_hash = sys.argv[2]
+mode = sys.argv[3]
 path = pathlib.Path("AGENTS.md")
 original = path.read_bytes() if path.exists() else b""
 newline = b"\r\n" if b"\r\n" in original else b"\n"
@@ -333,7 +334,7 @@ newline = b"\r\n" if b"\r\n" in original else b"\n"
 # Require matching marker forms and matching legacy hashes.
 pattern = re.compile(
     rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE(?P<suffix>:[a-f0-9]{12})? -->[ \t]*\r?\n"
-    rb".*?"
+    rb"(?P<body>.*?)"
     rb"^<!-- END ESHOPBOX-AGENTS-UPDATE(?P=suffix) -->[ \t]*(?:\r?\n|$)",
     re.DOTALL,
 )
@@ -354,9 +355,13 @@ for match in matches:
         print("ERROR: Duplicate organization-managed content hash.")
         sys.exit(1)
     seen_hashes.add(suffix)
-    block = original[match.start():match.end()]
-    body = block.split(b"\n", 1)[1].rsplit(b"<!-- END ESHOPBOX-AGENTS-UPDATE", 1)[0]
-    if hashlib.sha256(body).hexdigest()[:12].encode("ascii") != suffix[1:]:
+    body = match.group("body")
+    candidates = [body]
+    if body.endswith(b"\r\n"):
+        candidates.append(body[:-2])
+    elif body.endswith(b"\n"):
+        candidates.append(body[:-1])
+    if suffix[1:] not in {hashlib.sha256(candidate).hexdigest()[:12].encode("ascii") for candidate in candidates}:
         print("ERROR: Existing managed section hash mismatch.")
         sys.exit(1)
 
@@ -383,6 +388,10 @@ if existing:
 if any(m.group("suffix") is None for m in matches):
     print("ERROR: Legacy unversioned managed section exists; manual migration required.")
     sys.exit(1)
+
+if mode == "check":
+    print("Managed sections validated.")
+    sys.exit(0)
 
 updated = (original.rstrip(b"\r\n") + newline + newline if original.strip() else b"") + managed
 path.write_bytes(updated)
@@ -718,7 +727,7 @@ process_repo() {
 
   # Always validate complete managed blocks, even when this hash is present.
   # apply_agents_content returns 2 only for a verified exact match.
-  apply_agents_content
+  apply_agents_content check
   validation_result=$?
   if [ "$validation_result" -eq 2 ]; then
     echo "SKIP: Validated content already exists in production AGENTS.md."
@@ -729,8 +738,7 @@ process_repo() {
     cleanup_repo "$workdir"
     return 1
   fi
-  # Restore the working tree; new rollout applies the change after branch checks.
-  git restore -- AGENTS.md 2>/dev/null || rm -f AGENTS.md
+
 
 
   # ----------------------------------------------------------
