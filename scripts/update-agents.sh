@@ -319,37 +319,52 @@ find_open_pr_by_base() {
 
 apply_agents_content() {
 
-  if [ -f AGENTS.md ] && \
-     grep -Fq "$BEGIN_MARKER" AGENTS.md; then
+  # Replace previous organization-managed blocks rather than appending
+  # another hash-specific block on every content update.
+  # Preserve all repository-owned instructions outside those blocks.
+  python3 - "$CONTENT_PATH" "$CONTENT_HASH" <<'PY'
+import pathlib
+import re
+import sys
 
-    echo "Content already present in AGENTS.md."
+source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+content_hash = sys.argv[2]
+path = pathlib.Path("AGENTS.md")
+original = path.read_text(encoding="utf-8") if path.exists() else ""
 
-    return 2
-  fi
+# Supports legacy hash-specific markers and the new stable markers.
+pattern = re.compile(
+    r"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE(?::[a-f0-9]{12})? -->[ \t]*\n"
+    r".*?"
+    r"^<!-- END ESHOPBOX-AGENTS-UPDATE(?::[a-f0-9]{12})? -->[ \t]*(?:\n|$)",
+    re.DOTALL,
+)
+matches = list(pattern.finditer(original))
+# Do not modify an unexpectedly malformed managed block.
+begin_count = len(re.findall(r"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE", original))
+end_count = len(re.findall(r"(?m)^<!-- END ESHOPBOX-AGENTS-UPDATE", original))
+if begin_count != len(matches) or end_count != len(matches):
+    print("ERROR: Unmatched organization-managed AGENTS.md markers.")
+    sys.exit(1)
 
+managed = (
+    "<!-- BEGIN ESHOPBOX-AGENTS-UPDATE -->\n"
+    + source + "\n"
+    + "<!-- END ESHOPBOX-AGENTS-UPDATE -->"
+)
+# Keep the original unmanaged text; normalize only whitespace around
+# previously managed sections.
+unmanaged = pattern.sub("", original).rstrip()
+updated = (unmanaged + "\n\n" if unmanaged else "") + managed + "\n"
+if updated == original:
+    print("Organization-managed AGENTS.md content already current.")
+    sys.exit(2)
 
-  if [ -f AGENTS.md ]; then
-
-    printf '\n\n%s\n\n' "$BEGIN_MARKER" >> AGENTS.md
-
-    cat "$CONTENT_PATH" >> AGENTS.md
-
-    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
-
-  else
-
-    printf '%s\n\n' "$BEGIN_MARKER" > AGENTS.md
-
-    cat "$CONTENT_PATH" >> AGENTS.md
-
-    printf '\n\n%s\n' "$END_MARKER" >> AGENTS.md
-
-  fi
-
-
-  return 0
+path.write_text(updated, encoding="utf-8")
+print("Updated organization-managed AGENTS.md content:", content_hash)
+PY
+  return $?
 }
-
 
 # ============================================================
 # Resolve staging conflict using temporary branch
