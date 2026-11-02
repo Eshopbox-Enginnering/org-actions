@@ -318,13 +318,15 @@ find_open_pr_by_base() {
 # ============================================================
 
 apply_agents_content() {
-  python3 - "$CONTENT_PATH" "$CONTENT_HASH" <<'PY'
+  python3 - "$CONTENT_PATH" "$CONTENT_HASH" "${1:-apply}" <<'PY'
+import hashlib
 import pathlib
 import re
 import sys
 
 source = pathlib.Path(sys.argv[1]).read_bytes()
 content_hash = sys.argv[2]
+mode = sys.argv[3]
 path = pathlib.Path("AGENTS.md")
 original = path.read_bytes() if path.exists() else b""
 newline = b"\r\n" if b"\r\n" in original else b"\n"
@@ -332,7 +334,7 @@ newline = b"\r\n" if b"\r\n" in original else b"\n"
 # Require matching marker forms and matching legacy hashes.
 pattern = re.compile(
     rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE(?P<suffix>:[a-f0-9]{12})? -->[ \t]*\r?\n"
-    rb".*?"
+    rb"(?P<body>.*?)"
     rb"^<!-- END ESHOPBOX-AGENTS-UPDATE(?P=suffix) -->[ \t]*(?:\r?\n|$)",
     re.DOTALL,
 )
@@ -343,23 +345,66 @@ if begins != len(matches) or ends != len(matches):
     print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
 
-# Keep payload bytes intact, adding only a missing terminal newline.
+# Verify all previously managed hash sections, not just the current payload.
+seen_hashes = set()
+for match in matches:
+    suffix = match.group("suffix")
+    if suffix is None:
+        print("ERROR: Legacy unversioned managed section exists; manual migration required.")
+        sys.exit(1)
+    if suffix in seen_hashes:
+        print("ERROR: Duplicate organization-managed content hash.")
+        sys.exit(1)
+    seen_hashes.add(suffix)
+    body = match.group("body")
+    # Historical appenders surrounded payloads with up to one extra
+    # blank line on each side. Only recognize that exact delimiter padding.
+    linebreak = b"\r\n" if b"\r\n" in body else b"\n"
+    candidates = {body}
+    for leading in (b"", linebreak):
+        if not body.startswith(leading):
+            continue
+        trimmed = body[len(leading):]
+        for trailing_count in (0, 1, 2):
+            trailing = linebreak * trailing_count
+            if not trailing or trimmed.endswith(trailing):
+                candidates.add(trimmed[:-len(trailing)] if trailing else trimmed)
+    if suffix[1:] not in {hashlib.sha256(candidate).hexdigest()[:12].encode("ascii") for candidate in candidates}:
+        print("ERROR: Existing managed section hash mismatch.")
+        sys.exit(1)
+
+# Keep each rollout in its own immutable, hash-identified section.
+# Never delete an older managed block or repository-owned instructions.
 payload = source if source.endswith((b"\n", b"\r")) else source + newline
-managed = (
-    b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE -->" + newline
-    + payload
-    + b"<!-- END ESHOPBOX-AGENTS-UPDATE -->" + newline
-)
-# Preserve unmanaged bytes and their line endings.
-unmanaged = pattern.sub(b"", original)
-if matches:
-    unmanaged = unmanaged.rstrip(b"\r\n")
-updated = unmanaged + (newline + newline if unmanaged else b"") + managed
-if updated == original:
+suffix = b":" + content_hash.encode("ascii")
+begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+end = b"<!-- END ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+managed = begin + newline + payload + end + newline
+
+# A rerun of the same content is idempotent. A changed payload is a new
+# rollout; older sections remain intact for an explicit, reviewed migration.
+existing = [m for m in matches if m.group("suffix") == suffix]
+if existing:
+    if len(existing) != 1 or original[existing[0].start():existing[0].end()].rstrip(b"\r\n") != managed.rstrip(b"\r\n"):
+        print("ERROR: Existing managed section with this content hash differs; refusing overwrite.")
+        sys.exit(1)
     print("Organization-managed AGENTS.md content already current.")
     sys.exit(2)
+
+# Legacy unversioned blocks can contain conflicting instructions. Do not
+# silently replace them or append potentially contradictory guidance.
+if any(m.group("suffix") is None for m in matches):
+    print("ERROR: Legacy unversioned managed section exists; manual migration required.")
+    sys.exit(1)
+
+if mode == "check":
+    print("Managed sections validated.")
+    sys.exit(0)
+
+prefix = original.rstrip(b"\r\n") if original.strip() else b""
+updated = prefix + (newline + newline if prefix else b"") + managed
 path.write_bytes(updated)
-print("Updated organization-managed AGENTS.md content:", content_hash)
+print("Appended organization-managed AGENTS.md content:", content_hash)
 PY
   return $?
 }
@@ -689,16 +734,20 @@ process_repo() {
   # Already in production?
   # ----------------------------------------------------------
 
-  if [ -f AGENTS.md ] && \
-     grep -Fq "$BEGIN_MARKER" AGENTS.md; then
-
-    echo "SKIP: Exact content already exists in production AGENTS.md."
-    echo "Content ID: $CONTENT_HASH"
-
+  # Always validate complete managed blocks, even when this hash is present.
+  # apply_agents_content returns 2 only for a verified exact match.
+  apply_agents_content check
+  validation_result=$?
+  if [ "$validation_result" -eq 2 ]; then
+    echo "SKIP: Validated content already exists in production AGENTS.md."
     cleanup_repo "$workdir"
-
     return 2
+  elif [ "$validation_result" -ne 0 ]; then
+    echo "FAILED: Production AGENTS.md validation failed."
+    cleanup_repo "$workdir"
+    return 1
   fi
+
 
 
   # ----------------------------------------------------------
@@ -738,6 +787,48 @@ process_repo() {
   # ==========================================================
 
   if remote_branch_exists "$branch"; then
+
+    # Reuse only branches whose entire change is the exact safe update
+    # applied to this production revision. Never merge a legacy/destructive
+    # branch, even if its name matches the current content hash.
+    if ! git fetch origin "$branch" --depth=100 >/dev/null 2>&1; then
+      echo "FAILED: Cannot inspect existing rollout branch."
+      cleanup_repo "$workdir"
+      return 1
+    fi
+
+    apply_agents_content
+    validation_result=$?
+    if [ "$validation_result" -ne 0 ]; then
+      echo "FAILED: Cannot generate safe expected AGENTS.md."
+      cleanup_repo "$workdir"
+      return 1
+    fi
+
+    expected_agents=$(mktemp)
+    cp AGENTS.md "$expected_agents"
+    if git ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+      git restore --worktree -- AGENTS.md
+    else
+      rm -f AGENTS.md
+    fi
+
+    branch_files=$(git diff --name-only "origin/$production_branch" "origin/$branch")
+    if [ "$branch_files" != "AGENTS.md" ] || \
+       ! git show "origin/$branch:AGENTS.md" | cmp -s - "$expected_agents"; then
+      echo "FAILED: Existing rollout branch is not an exact safe production-based update."
+      echo "Recreate and review it manually; never auto-merge destructive content."
+      rm -f "$expected_agents"
+      cleanup_repo "$workdir"
+      return 1
+    fi
+    rm -f "$expected_agents"
+
+    if [ "$OPERATION" = "DRY_RUN" ]; then
+      echo "DRY RUN: Existing safe rollout branch verified; no merges performed."
+      cleanup_repo "$workdir"
+      return 0
+    fi
 
     echo "Existing rollout branch found:"
     echo "$branch"
