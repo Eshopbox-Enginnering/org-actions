@@ -319,6 +319,7 @@ find_open_pr_by_base() {
 
 apply_agents_content() {
   python3 - "$CONTENT_PATH" "$CONTENT_HASH" <<'PY'
+import hashlib
 import pathlib
 import re
 import sys
@@ -342,6 +343,22 @@ ends = len(re.findall(rb"(?m)^<!-- END ESHOPBOX-AGENTS-UPDATE", original))
 if begins != len(matches) or ends != len(matches):
     print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
+
+# Verify all previously managed hash sections, not just the current payload.
+seen_hashes = set()
+for match in matches:
+    suffix = match.group("suffix")
+    if suffix is None:
+        continue
+    if suffix in seen_hashes:
+        print("ERROR: Duplicate organization-managed content hash.")
+        sys.exit(1)
+    seen_hashes.add(suffix)
+    block = original[match.start():match.end()]
+    body = block.split(b"\n", 1)[1].rsplit(b"<!-- END ESHOPBOX-AGENTS-UPDATE", 1)[0]
+    if hashlib.sha256(body).hexdigest()[:12].encode("ascii") != suffix[1:]:
+        print("ERROR: Existing managed section hash mismatch.")
+        sys.exit(1)
 
 # Keep each rollout in its own immutable, hash-identified section.
 # Never delete an older managed block or repository-owned instructions.
@@ -367,7 +384,7 @@ if any(m.group("suffix") is None for m in matches):
     print("ERROR: Legacy unversioned managed section exists; manual migration required.")
     sys.exit(1)
 
-updated = original.rstrip(b"\r\n") + (newline + newline if original.strip() else b"") + managed
+updated = (original.rstrip(b"\r\n") + newline + newline if original.strip() else b"") + managed
 path.write_bytes(updated)
 print("Appended organization-managed AGENTS.md content:", content_hash)
 PY
@@ -699,16 +716,21 @@ process_repo() {
   # Already in production?
   # ----------------------------------------------------------
 
-  if [ -f AGENTS.md ] && \
-     grep -Fq "$BEGIN_MARKER" AGENTS.md; then
-
-    echo "SKIP: Exact content already exists in production AGENTS.md."
-    echo "Content ID: $CONTENT_HASH"
-
+  # Always validate complete managed blocks, even when this hash is present.
+  # apply_agents_content returns 2 only for a verified exact match.
+  apply_agents_content
+  validation_result=$?
+  if [ "$validation_result" -eq 2 ]; then
+    echo "SKIP: Validated content already exists in production AGENTS.md."
     cleanup_repo "$workdir"
-
     return 2
+  elif [ "$validation_result" -ne 0 ]; then
+    echo "FAILED: Production AGENTS.md validation failed."
+    cleanup_repo "$workdir"
+    return 1
   fi
+  # Restore the working tree; new rollout applies the change after branch checks.
+  git restore -- AGENTS.md 2>/dev/null || rm -f AGENTS.md
 
 
   # ----------------------------------------------------------
@@ -748,6 +770,13 @@ process_repo() {
   # ==========================================================
 
   if remote_branch_exists "$branch"; then
+
+    # Existing branches may contain AGENTS.md produced by the destructive
+    # updater. Never merge them without a separately reviewed migration.
+    echo "FAILED: Existing rollout branch requires manual validation/recreation."
+    echo "$branch"
+    cleanup_repo "$workdir"
+    return 1
 
     echo "Existing rollout branch found:"
     echo "$branch"
