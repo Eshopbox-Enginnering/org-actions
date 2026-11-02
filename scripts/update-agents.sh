@@ -318,49 +318,47 @@ find_open_pr_by_base() {
 # ============================================================
 
 apply_agents_content() {
-
-  # Replace previous organization-managed blocks rather than appending
-  # another hash-specific block on every content update.
-  # Preserve all repository-owned instructions outside those blocks.
   python3 - "$CONTENT_PATH" "$CONTENT_HASH" <<'PY'
 import pathlib
 import re
 import sys
 
-source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+source = pathlib.Path(sys.argv[1]).read_bytes()
 content_hash = sys.argv[2]
 path = pathlib.Path("AGENTS.md")
-original = path.read_text(encoding="utf-8") if path.exists() else ""
+original = path.read_bytes() if path.exists() else b""
+newline = b"\r\n" if b"\r\n" in original else b"\n"
 
-# Supports legacy hash-specific markers and the new stable markers.
+# Require matching marker forms and matching legacy hashes.
 pattern = re.compile(
-    r"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE(?::[a-f0-9]{12})? -->[ \t]*\n"
-    r".*?"
-    r"^<!-- END ESHOPBOX-AGENTS-UPDATE(?::[a-f0-9]{12})? -->[ \t]*(?:\n|$)",
+    rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE(?P<suffix>:[a-f0-9]{12})? -->[ \t]*\r?\n"
+    rb".*?"
+    rb"^<!-- END ESHOPBOX-AGENTS-UPDATE(?P=suffix) -->[ \t]*(?:\r?\n|$)",
     re.DOTALL,
 )
 matches = list(pattern.finditer(original))
-# Do not modify an unexpectedly malformed managed block.
-begin_count = len(re.findall(r"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE", original))
-end_count = len(re.findall(r"(?m)^<!-- END ESHOPBOX-AGENTS-UPDATE", original))
-if begin_count != len(matches) or end_count != len(matches):
-    print("ERROR: Unmatched organization-managed AGENTS.md markers.")
+begins = len(re.findall(rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE", original))
+ends = len(re.findall(rb"(?m)^<!-- END ESHOPBOX-AGENTS-UPDATE", original))
+if begins != len(matches) or ends != len(matches):
+    print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
 
+# Keep payload bytes intact, adding only a missing terminal newline.
+payload = source if source.endswith((b"\n", b"\r")) else source + newline
 managed = (
-    "<!-- BEGIN ESHOPBOX-AGENTS-UPDATE -->\n"
-    + source + "\n"
-    + "<!-- END ESHOPBOX-AGENTS-UPDATE -->"
+    b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE -->" + newline
+    + payload
+    + b"<!-- END ESHOPBOX-AGENTS-UPDATE -->" + newline
 )
-# Keep the original unmanaged text; normalize only whitespace around
-# previously managed sections.
-unmanaged = pattern.sub("", original).rstrip()
-updated = (unmanaged + "\n\n" if unmanaged else "") + managed + "\n"
+# Preserve unmanaged bytes and their line endings.
+unmanaged = pattern.sub(b"", original)
+if matches:
+    unmanaged = unmanaged.rstrip(b"\r\n")
+updated = unmanaged + (newline + newline if unmanaged else b"") + managed
 if updated == original:
     print("Organization-managed AGENTS.md content already current.")
     sys.exit(2)
-
-path.write_text(updated, encoding="utf-8")
+path.write_bytes(updated)
 print("Updated organization-managed AGENTS.md content:", content_hash)
 PY
   return $?
@@ -411,6 +409,10 @@ resolve_staging_conflict() {
   # Apply only the organization-managed AGENTS content.
   apply_agents_content
   apply_result=$?
+  if [ "$apply_result" -ne 0 ] && [ "$apply_result" -ne 2 ]; then
+    echo "FAILED: Unable to update managed AGENTS.md block."
+    return 1
+  fi
 
 
   if [ "$apply_result" -eq 2 ]; then
@@ -956,7 +958,16 @@ Only AGENTS.md is modified."
   # ==========================================================
 
   apply_agents_content
-
+  apply_result=$?
+  if [ "$apply_result" -eq 2 ]; then
+    echo "SKIP: Organization-managed AGENTS.md content is already current."
+    cleanup_repo "$workdir"
+    return 2
+  elif [ "$apply_result" -ne 0 ]; then
+    echo "FAILED: Unable to update managed AGENTS.md block."
+    cleanup_repo "$workdir"
+    return 1
+  fi
 
   mapfile -t changed_files < <(
     git status --porcelain | sed 's/^...//'
