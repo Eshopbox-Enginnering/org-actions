@@ -78,6 +78,19 @@ class EngineeringGuidelineSyncTests(unittest.TestCase):
                 diff = ''.join(sync.preview(before, after, 'guide.md'))
                 self.assertTrue(diff)
 
+    def test_fetch_remote_branch_uses_explicit_tracking_refspec(self):
+        from unittest.mock import patch
+        with patch.object(sync, 'cmd') as mock_cmd:
+            sync.fetch_remote_branch(Path('/tmp/repo'), 'staging')
+        self.assertEqual(
+            mock_cmd.call_args.args,
+            ('git', 'fetch', '--depth=100', 'origin',
+             '+refs/heads/staging:refs/remotes/origin/staging'))
+
+    def test_fetch_remote_branch_rejects_invalid_ref(self):
+        with self.assertRaises(ValueError):
+            sync.fetch_remote_branch(Path('/tmp/repo'), '../staging')
+
     def test_reject_symlink_destination(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
