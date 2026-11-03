@@ -19,39 +19,58 @@ fail_diagnostics() {
   local exit_code=$?
   trap - ERR EXIT
   if [[ "$exit_code" -eq 0 ]]; then return; fi
-  notice "::error title=EKS rollout failed::${reason}"
-  add_summary "### ❌ EKS deployment failed"
+  echo ""
+  echo "==================== EKS ROLLOUT FAILED ===================="
+  echo "Release:     ${release}"
+  echo "Reason:      ${reason}"
+  echo "Owner:       ${owner}"
+  echo "Next action: ${action}"
+  echo "Deployment:  ${namespace}/${deployment:-not discovered}"
+  echo "Expected:    ${expected_image}"
+  echo "::error title=EKS rollout failed::${reason}. ${action}"
+  add_summary "## ❌ EKS rollout failed"
   add_summary ""
-  add_summary "| Field | Value |"
+  add_summary "| Field | Details |"
   add_summary "| --- | --- |"
-  add_summary "| Namespace | \`${namespace}\` |"
-  add_summary "| Release | \`${release}\` |"
-  add_summary "| Deployment | \`${deployment:-not discovered}\` |"
-  add_summary "| Expected image | \`${expected_image}\` |"
-  add_summary "| Reason | ${reason} |"
-  add_summary "| Suggested owner | ${owner} |"
-  add_summary "| Next action | ${action} |"
+  add_summary "| Deployment | ${namespace}/${deployment:-not discovered} |"
+  add_summary "| Failure | **${reason}** |"
+  add_summary "| Owner | ${owner} |"
+  add_summary "| Next step | ${action} |"
+  add_summary "| Expected image | ${expected_image} |"
+  if [[ -z "$deployment" ]]; then return "$exit_code"; fi
+
+  local counts selector pod events
+  counts="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.spec.replicas}{" desired, "}{.status.updatedReplicas}{" updated, "}{.status.readyReplicas}{" ready, "}{.status.availableReplicas}{" available"}' 2>/dev/null || true)"
+  echo "Replicas:    ${counts:-unavailable}"
+  add_summary "| Replicas | ${counts:-unavailable} |"
   add_summary ""
-  add_summary "Inspect the failed **Verify EKS deployment** step logs for pod diagnostics."
-  echo "---- Kubernetes diagnostics ----"
-  [[ -n "$deployment" ]] && kubectl get deployment "$deployment" -n "$namespace" -o wide || true
-  if [[ -n "$deployment" ]]; then
-    kubectl describe deployment "$deployment" -n "$namespace" || true
-    local selector
-    selector="$(kubectl get deployment "$deployment" -n "$namespace" -o go-template='{{range $k,$v := .spec.selector.matchLabels}}{{printf "%s=%s," $k $v}}{{end}}' 2>/dev/null || true)"
-    selector="${selector%,}"
-    if [[ -n "$selector" ]]; then
-      kubectl get pods -n "$namespace" -l "$selector" -o wide || true
-      while read -r pod; do
-        [[ -n "$pod" ]] || continue
-        kubectl describe pod "$pod" -n "$namespace" || true
-        kubectl logs "$pod" -n "$namespace" --all-containers=true --tail=40 --max-log-requests=5 || true
-        kubectl logs "$pod" -n "$namespace" --all-containers=true --previous --tail=25 --max-log-requests=5 || true
-      done < <(kubectl get pods -n "$namespace" -l "$selector" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
-    fi
+  add_summary "### Pod status and warnings"
+  add_summary "Check the failed step for the affected pods and their recent Warning events."
+
+  selector="$(kubectl get deployment "$deployment" -n "$namespace" -o go-template='{{range $k,$v := .spec.selector.matchLabels}}{{printf "%s=%s," $k $v}}{{end}}' 2>/dev/null || true)"
+  selector="${selector%,}"
+  if [[ -z "$selector" ]]; then
+    echo "No pod selector found; inspect the deployment manually."
+    return "$exit_code"
   fi
-  kubectl get events -n "$namespace" --sort-by='.lastTimestamp' 2>/dev/null | tail -n 70 || true
+
+  echo ""
+  echo "PODS (deployment only)"
+  kubectl get pods -n "$namespace" -l "$selector" -o custom-columns='NAME:.metadata.name,PHASE:.status.phase,READY:.status.containerStatuses[*].ready,NODE:.spec.nodeName' 2>/dev/null || true
+  echo ""
+  echo "RECENT POD WARNINGS (deployment only)"
+  while IFS= read -r pod; do
+    [[ -n "$pod" ]] || continue
+    events="$(kubectl get events -n "$namespace" --field-selector "involvedObject.kind=Pod,involvedObject.name=$pod,type=Warning" --sort-by='.lastTimestamp' -o custom-columns='REASON:.reason,MESSAGE:.message' --no-headers 2>/dev/null | tail -n 5 || true)"
+    [[ -n "$events" ]] || continue
+    echo "--- ${pod} ---"
+    printf '%s\n' "$events"
+  done < <(kubectl get pods -n "$namespace" -l "$selector" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+  echo ""
+  echo "For deeper investigation: kubectl describe pod <pod-name> -n ${namespace}"
+  return "$exit_code"
 }
+
 trap fail_diagnostics ERR EXIT
 
 # Match the actual deployed Helm release rather than assuming Helm's chart name.
@@ -127,8 +146,10 @@ desired="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.s
 ready="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.status.readyReplicas}')"
 available="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.status.availableReplicas}')"
 desired="${desired:-1}"; ready="${ready:-0}"; available="${available:-0}"
-if (( desired < 1 || ready < desired || available < desired )); then
-  reason="Deployment replicas are not all Ready/Available (desired=${desired}, ready=${ready}, available=${available})"
+updated="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.status.updatedReplicas}')"
+updated="${updated:-0}"
+if (( desired < 1 || updated < desired || ready < desired || available < desired )); then
+  reason="Rollout replicas incomplete (desired=${desired}, updated=${updated}, ready=${ready}, available=${available})"
   action="Inspect pod readiness and deployment conditions."
   exit 1
 fi
