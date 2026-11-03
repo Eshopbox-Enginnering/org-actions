@@ -29,6 +29,16 @@ Run [Sync Engineering Guidelines](../.github/workflows/sync-engineering-guidelin
 
 **File sync behavior:** missing destination = create; differing bytes = replace the entire file; identical bytes = skip. Only exact selected paths in `docs/engineering-guidelines/` are managed; nothing is deleted automatically.
 
+## Make AI coding tools follow these guidelines
+
+The `docs/engineering-guidelines/` directory is the destination for reference documents, **not an automatically discovered AI rules directory**. Copying Markdown alone does not guarantee that agents consult it.
+
+1. Add the content of [ai-agent-guidance.md](ai-agent-guidance.md) to each repository's **existing root `AGENTS.md`**, using a clearly marked organization-managed section. Preserve repository-specific instructions; do not replace the entire file. Codex and compatible agents then discover the guidance when working in that repository.
+2. For GitHub Copilot, optionally create `.github/instructions/engineering-guidelines.instructions.md` with `applyTo: "**/*"` and an instruction to consult the applicable documents under `docs/engineering-guidelines/`. This file is distinct from the guidelines themselves.
+3. If a repository uses Claude Code or Cursor, keep its recognized `CLAUDE.md` or `.cursor/rules/` entry point in sync with a short reference. Do not assume `AGENTS.md` is picked up identically by every tool.
+
+**Important:** The new Sync Engineering Guidelines workflow deliberately does not edit `AGENTS.md` or tool-specific instruction files. To activate AI discovery across all repos, perform a separate, reviewed rollout of the reference text using the existing AGENTS updater; do not silently modify these files during document sync. Agents may still fail to follow instructions, so test with a representative code review/change that requires the 401 or caching guideline.
+
 ## Safety and workflow limits
 
 - Backend/frontend detection follows the existing AGENTS updater's build-file heuristics. Unknown repositories are skipped; use `single` for an explicitly named repo with a recognizable build file.
