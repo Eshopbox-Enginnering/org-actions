@@ -137,6 +137,15 @@ def find_pr(repo, base, branch, state='open'):
     return prs[0] if prs else None
 
 
+def fetch_remote_branch(root, branch):
+    # A single-branch shallow clone does not populate origin/<other-branch>
+    # when fetching a branch by name. Install its remote-tracking ref explicitly.
+    if not re.fullmatch(r'[A-Za-z0-9_./-]+', branch) or '..' in branch:
+        raise ValueError('Invalid remote branch')
+    refspec = f'+refs/heads/{branch}:refs/remotes/origin/{branch}'
+    cmd('git', 'fetch', '--depth=100', 'origin', refspec, cwd=root)
+
+
 def find_staging(root, production):
     choices = ('aws-velocis-staging', 'staging') if production == 'aws-velocis-main' else ('staging', 'aws-velocis-staging')
     for name in choices:
@@ -177,7 +186,7 @@ def process(repo, org, selected, contents, phase, operation, issue):
             return 'blocked'
         if phase == 'staging':
             # Never bring production-only code into a staging PR.
-            cmd('git', 'fetch', 'origin', staging, '--depth=100', cwd=root)
+            fetch_remote_branch(root, staging)
             cmd('git', 'checkout', '-B', 'guidelines-staging-base', f'origin/{staging}', cwd=root)
         plan = diff_plan(root, entries, contents)
         edits = [item for item in plan if item[1] != 'SKIP']
@@ -221,7 +230,7 @@ def process(repo, org, selected, contents, phase, operation, issue):
             branch = staging_pr['headRefName']
             # Verify every selected file is actually staged with current canonical
             # bytes before producing a PR against production.
-            cmd('git', 'fetch', 'origin', staging, '--depth=100', cwd=root)
+            fetch_remote_branch(root, staging)
             for entry in entries:
                 destination = entry['destination']
                 staged = subprocess.run(
@@ -235,7 +244,7 @@ def process(repo, org, selected, contents, phase, operation, issue):
             if not branch_exists:
                 print(f'{name}: BLOCK staged source branch not available: {branch}')
                 return 'blocked'
-            cmd('git', 'fetch', 'origin', branch, '--depth=100', cwd=root)
+            fetch_remote_branch(root, branch)
             for entry in entries:
                 destination = entry['destination']
                 head = subprocess.run(('git', 'show', f'origin/{branch}:{destination}'),
