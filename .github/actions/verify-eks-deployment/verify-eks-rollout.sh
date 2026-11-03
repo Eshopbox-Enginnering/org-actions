@@ -58,7 +58,7 @@ trap fail_diagnostics ERR EXIT
 mapfile -t deployments < <(kubectl get deployments -n "$namespace" -l "app.kubernetes.io/instance=${release}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 if (( ${#deployments[@]} != 1 )); then
   # Some historical charts use custom Helm labels. Fall back only to a uniquely named deployment.
-  mapfile -t deployments < <(kubectl get deployments -n "$namespace" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -Fx "${release}-eshopbox" || true)
+  mapfile -t deployments < <(kubectl get deployments -n "$namespace" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -Ex "$(printf '%s' "${release}" | sed 's/[][\\.^$*+?{}|()]/\\\\&/g')(-eshopbox)?" || true)
 fi
 if (( ${#deployments[@]} != 1 )); then
   reason="Unable to uniquely identify deployment for Helm release ${release}"
@@ -76,7 +76,13 @@ if ! grep -Fxq "$expected_image" <<< "$images"; then
 fi
 
 # kubectl rollout status fails on deadline, authorization failure, or incomplete rollout.
-if ! kubectl rollout status "deployment/${deployment}" -n "$namespace" --timeout="${timeout}s"; then
+revision="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.metadata.annotations.deployment\\.kubernetes\\.io/revision}' 2>/dev/null || true)"
+if [[ -z "$revision" ]]; then
+  reason="Unable to read Deployment revision for rollout verification"
+  action="Check Deployment metadata and Kubernetes API access."
+  exit 1
+fi
+if ! kubectl rollout status "deployment/${deployment}" -n "$namespace" --revision="$revision" --timeout="${timeout}s"; then
   reason="Rollout timed out or failed"
   action="Inspect pod conditions and events to determine the underlying issue."
   selector="$(kubectl get deployment "$deployment" -n "$namespace" -o go-template='{{range $k,$v := .spec.selector.matchLabels}}{{printf "%s=%s," $k $v}}{{end}}' 2>/dev/null || true)"
@@ -104,6 +110,15 @@ if ! kubectl rollout status "deployment/${deployment}" -n "$namespace" --timeout
     owner="Application development and Infrastructure/DevOps"
     action="Check probe endpoints, startup time, application logs, and probe thresholds."
   fi
+  exit 1
+fi
+
+# Recheck the image after rollout; do not report an overlapping later release as our success.
+images_after="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{range .spec.template.spec.containers[*]}{.image}{"\\n"}{end}')"
+revision_after="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.metadata.annotations.deployment\\.kubernetes\\.io/revision}')"
+if [[ "$revision_after" != "$revision" ]] || ! grep -Fxq "$expected_image" <<< "$images_after"; then
+  reason="Deployment was superseded by another release during verification"
+  action="Check concurrent deployment runs and confirm which release should be deployed."
   exit 1
 fi
 
