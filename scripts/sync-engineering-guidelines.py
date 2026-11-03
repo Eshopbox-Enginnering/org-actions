@@ -200,13 +200,25 @@ def process(repo, org, selected, contents, phase, operation, issue):
             e['destination'].encode() + b'\0' + contents[e['source_url']]
             for e in sorted(entries, key=lambda x: x['destination'])
         )).hexdigest()[:12]
-        branch = f'org-action/guidelines-{kind}-{digest}'
+        branch_prefix = f'org-action/guidelines-{kind}-{digest}-'
         target_base = staging if phase == 'staging' else production
-        if phase == 'production':
-            staging_pr = find_pr(full, staging, branch, state='merged')
-            if not staging_pr or not staging_pr['mergedAt']:
-                print(f'{name}: BLOCK staging PR for {branch} has not merged')
+        if phase == 'staging':
+            # Include the staging base revision: a later drift on the same
+            # central file creates a new branch and a new reviewable PR.
+            staging_base = cmd('git', 'rev-parse', 'HEAD', cwd=root)[:10]
+            branch = branch_prefix + staging_base
+        else:
+            merged = gh_json('pr', 'list', '--repo', full, '--base', staging,
+                             '--state', 'merged', '--json',
+                             'headRefName,mergedAt,url', '--limit', '100')
+            candidates = [item for item in merged
+                          if item['headRefName'].startswith(branch_prefix)]
+            if not candidates:
+                print(f'{name}: BLOCK no merged staging PR for current guideline content')
                 return 'blocked'
+            candidates.sort(key=lambda item: item['mergedAt'], reverse=True)
+            staging_pr = candidates[0]
+            branch = staging_pr['headRefName']
             # Verify every selected file is actually staged with current canonical
             # bytes before producing a PR against production.
             cmd('git', 'fetch', 'origin', staging, '--depth=100', cwd=root)
@@ -231,14 +243,24 @@ def process(repo, org, selected, contents, phase, operation, issue):
                 if head.returncode or head.stdout != contents[entry['source_url']]:
                     print(f'{name}: BLOCK production PR head does not contain canonical file: {destination}')
                     return 'blocked'
+            # A staging-origin branch may contain unrelated commits. Refuse
+            # production rollout if the PR would include anything else.
+            changed = cmd('git', 'diff', '--name-only', f'origin/{production}',
+                          f'origin/{branch}', cwd=root).splitlines()
+            allowed = {entry['destination'] for entry in entries}
+            if any(name not in allowed for name in changed):
+                print(f'{name}: BLOCK production PR would include unrelated files: '
+                      + ', '.join(name for name in changed if name not in allowed))
+                return 'blocked'
         existing_pr = find_pr(full, target_base, branch)
         if existing_pr:
             print(f"{name}: EXISTING OPEN PR {existing_pr['url']}")
             return 'skipped'
-        # Previously merged or closed PRs do not count as current synchronization.
+        # Reusing an old historical branch would hide drift. A new staging
+        # base SHA normally yields a fresh branch; fail closed if it does not.
         historical_pr = find_pr(full, target_base, branch, state='all')
         if historical_pr:
-            print(f'{name}: BLOCK historical branch name must be renewed after drift: {branch}')
+            print(f'{name}: BLOCK historical PR already used this exact branch: {branch}')
             return 'blocked'
 
         branch_exists = bool(cmd('git', 'ls-remote', '--heads', 'origin', branch, cwd=root, check=False))
