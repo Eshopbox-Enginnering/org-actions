@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "backend": [
+    {
+      "id": "401",
+      "source_url": "engineering-guidelines/backend/eshopbox-401-error-handling-preserve-enhance.md",
+      "destination": "docs/engineering-guidelines/eshopbox-401-error-handling-preserve-enhance.md"
+    },
+    {
+      "id": "cache",
+      "source_url": "engineering-guidelines/backend/eshopbox-cache-usage-guidelines.md",
+      "destination": "docs/engineering-guidelines/eshopbox-cache-usage-guidelines.md"
+    },
+    {
+      "id": "logging",
+      "source_url": "engineering-guidelines/backend/Eshopbox_Structured_Logging_Guidelines_v2.md",
+      "destination": "docs/engineering-guidelines/Eshopbox_Structured_Logging_Guidelines_v2.md"
+    },
+    {
+      "id": "429",
+      "source_url": "engineering-guidelines/backend/Eshopbox_429_Outbound_API_Guidelines_v2.md",
+      "destination": "docs/engineering-guidelines/Eshopbox_429_Outbound_API_Guidelines_v2.md"
+    },
+    {
+      "id": "status",
+      "source_url": "engineering-guidelines/backend/HTTP_Status_Codes_Reference.md",
+      "destination": "docs/engineering-guidelines/HTTP_Status_Codes_Reference.md"
+    }
+  ],
+  "frontend": []
+}
