@@ -9,12 +9,12 @@ This workflow distributes Markdown engineering standards to supported Eshopbox r
 ```json
 {
   "id": "cache",
-  "source_url": "https://github.com/user-attachments/files/34269757/eshopbox-cache-usage-guidelines.md",
+  "source_url": "engineering-guidelines/backend/eshopbox-cache-usage-guidelines.md",
   "destination": "docs/engineering-guidelines/eshopbox-cache-usage-guidelines.md"
 }
 ```
 
-The initial backend catalog contains the five files from [Central Backlog #7218](https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/7218#issuecomment-6575357434). The frontend catalog is initially empty: add future frontend-only entries there, or use the one-off input described below. You may use either a GitHub issue attachment URL or a checked-in file under `engineering-guidelines/` as the `source_url`. Prefer checked-in sources for long-term stability and reviewable source updates.
+The backend source documents are now committed under `engineering-guidelines/backend/`, and the catalog refers to those checked-in files. The initial backend catalog contains the five files from [Central Backlog #7218](https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/7218#issuecomment-6575357434). The frontend catalog is initially empty: add future frontend-only entries there, or use the one-off input described below. You may use either a GitHub issue attachment URL or a checked-in file under `engineering-guidelines/` as the `source_url`. Prefer checked-in sources for long-term stability and reviewable source updates.
 
 ## Run workflow
 
@@ -43,9 +43,9 @@ The `docs/engineering-guidelines/` directory is the destination for reference do
 
 - Backend/frontend detection follows the existing AGENTS updater's build-file heuristics. Unknown repositories are skipped; use `single` for an explicitly named repo with a recognizable build file.
 - Workflow creates PRs but never merges them. It keeps all normal review, CI, branch protection, and CODEOWNER checks.
-- Pre-existing rollout branches without an identifiable PR are blocked rather than overwritten. Production requires the matching merged staging PR and the original rollout branch. **Preserve the rollout branch** through production.
+- Pre-existing rollout branches without an identifiable PR are blocked rather than overwritten. Production requires a matching merged staging PR and checks that both the staging branch and PR head contain every selected canonical document; any unrelated production PR file changes are blocked. **Preserve the rollout branch** through production.
 - Only production/default branches `main`, `master`, or `aws-velocis-main` and a corresponding staging branch are supported.
-- Source attachments are fetched at run time, limited to approved GitHub attachment origins and 1 MiB UTF-8 text. An inaccessible source fails safely before repository writes.
+- Checked-in source files are read from this workflow repository. Optional one-off GitHub attachments are fetched at run time with HTTPS and 1 MiB UTF-8 limits. Inaccessible sources fail before repository writes.
 - Try `target=single,operation=DRY_RUN` first, then `APPLY,phase=staging` before organization-wide deployment.
 
 ## Tests
