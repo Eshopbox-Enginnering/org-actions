@@ -76,7 +76,7 @@ if ! grep -Fxq "$expected_image" <<< "$images"; then
 fi
 
 # kubectl rollout status fails on deadline, authorization failure, or incomplete rollout.
-revision="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.metadata.annotations.deployment\\.kubernetes\\.io/revision}' 2>/dev/null || true)"
+revision="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}' 2>/dev/null || true)"
 if [[ -z "$revision" ]]; then
   reason="Unable to read Deployment revision for rollout verification"
   action="Check Deployment metadata and Kubernetes API access."
@@ -114,8 +114,8 @@ if ! kubectl rollout status "deployment/${deployment}" -n "$namespace" --revisio
 fi
 
 # Recheck the image after rollout; do not report an overlapping later release as our success.
-images_after="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{range .spec.template.spec.containers[*]}{.image}{"\\n"}{end}')"
-revision_after="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.metadata.annotations.deployment\\.kubernetes\\.io/revision}')"
+images_after="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{range .spec.template.spec.containers[*]}{.image}{"\n"}{end}')"
+revision_after="$(kubectl get deployment "$deployment" -n "$namespace" -o jsonpath='{.metadata.annotations.deployment\.kubernetes\.io/revision}')"
 if [[ "$revision_after" != "$revision" ]] || ! grep -Fxq "$expected_image" <<< "$images_after"; then
   reason="Deployment was superseded by another release during verification"
   action="Check concurrent deployment runs and confirm which release should be deployed."
