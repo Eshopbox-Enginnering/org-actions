@@ -215,7 +215,7 @@ def process(repo, org, selected, contents, phase, operation, issue):
                 + '\n'.join(f'- {action}: `{dest}` (SHA256 {sha})' for dest, action, sha, _ in edits)
                 + '\n\nOnly selected docs/engineering-guidelines files may change. Manual review and merge required.')
         url = cmd('gh', 'pr', 'create', '--repo', full, '--base', target_base,
-                  '--head', branch, '--title', f'docs to {target_base}: Sync engineering guidelines (#{issue})',
+                  '--head', branch, '--title', f'docs to {"Staging" if phase == "staging" else "Main"}: Sync engineering guidelines (#{issue})',
                   '--body', body)
         print(f'{name}: CREATED PR {url}')
         return 'created'
