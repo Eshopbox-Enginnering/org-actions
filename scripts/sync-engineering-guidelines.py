@@ -105,10 +105,11 @@ def detect_type(root):
     pkg = root / 'package.json'
     if pkg.exists():
         contents = pkg.read_text(errors='replace')
-        if any(x in contents for x in ('"@angular/core"', '"react"', '"vue"', '"next"', '"vite"')):
-            return 'frontend'
-        if any(x in contents for x in ('"express"', '"fastify"', '"koa"', '"@nestjs/core"')):
+        # Match update-agents.sh: backend wins for mixed Node projects.
+        if any(x in contents for x in ('"express"', '"fastify"', '"koa"', '"nestjs"', '"@nestjs/core"')):
             return 'backend'
+        if any(x in contents for x in ('"react"', '"react-dom"', '"@angular/core"', '"vue"', '"next"', '"vite"')):
+            return 'frontend'
     return 'unknown'
 
 
@@ -130,10 +131,29 @@ def gh_json(*args):
     return json.loads(cmd('gh', *args))
 
 
-def find_pr(repo, base, branch):
+def find_pr(repo, base, branch, state='open'):
     prs = gh_json('pr', 'list', '--repo', repo, '--base', base, '--head', branch,
-                  '--state', 'all', '--json', 'url,state,mergedAt', '--limit', '100')
+                  '--state', state, '--json', 'url,state,mergedAt', '--limit', '100')
     return prs[0] if prs else None
+
+
+def find_staging(root, production):
+    choices = ('aws-velocis-staging', 'staging') if production == 'aws-velocis-main' else ('staging', 'aws-velocis-staging')
+    for name in choices:
+        if cmd('git', 'ls-remote', '--heads', 'origin', name, cwd=root, check=False):
+            return name
+    return None
+
+
+def preview(before, after, dest):
+    if before == after:
+        return []
+    delta = list(difflib.unified_diff(
+        before.decode('utf-8').splitlines(keepends=True),
+        after.decode('utf-8').splitlines(keepends=True),
+        fromfile=dest + ' (existing)', tofile=dest + ' (central)'))
+    # splitlines(keepends=True) retains CRLF and terminal newline distinctions.
+    return delta or [f'Byte-only difference for {dest}: {len(before)} -> {len(after)} bytes\n']
 
 
 def process(repo, org, selected, contents, phase, operation, issue):
@@ -151,6 +171,14 @@ def process(repo, org, selected, contents, phase, operation, issue):
             print(f'{name}: SKIP type={kind}, no matching selected guidelines')
             return 'skipped'
         entries = selected[kind]
+        staging = find_staging(root, production)
+        if not staging:
+            print(f'{name}: BLOCK no supported staging branch')
+            return 'blocked'
+        if phase == 'staging':
+            # Never bring production-only code into a staging PR.
+            cmd('git', 'fetch', 'origin', staging, '--depth=100', cwd=root)
+            cmd('git', 'checkout', '-B', 'guidelines-staging-base', f'origin/{staging}', cwd=root)
         plan = diff_plan(root, entries, contents)
         edits = [item for item in plan if item[1] != 'SKIP']
         for dest, action, sha, _ in plan:
@@ -159,22 +187,15 @@ def process(repo, org, selected, contents, phase, operation, issue):
             for dest, action, _, after in edits:
                 target = root / dest
                 before = target.read_bytes() if target.exists() else b''
-                diff = list(difflib.unified_diff(
-                    before.decode('utf-8').splitlines(), after.decode('utf-8').splitlines(),
-                    fromfile=dest + ' (existing)', tofile=dest + ' (central)', lineterm=''))
-                print('\n'.join(diff[:120]))
+                diff = preview(before, after, dest)
+                print(''.join(diff[:120]))
                 if len(diff) > 120:
                     print(f'... {len(diff) - 120} more diff lines omitted')
             return 'planned' if edits else 'skipped'
         if not edits:
             return 'skipped'
 
-        staging = 'aws-velocis-staging' if production == 'aws-velocis-main' else 'staging'
-        if not cmd('git', 'ls-remote', '--heads', 'origin', staging, cwd=root, check=False):
-            print(f'{name}: BLOCK no staging branch ({staging})')
-            return 'blocked'
-
-        # Stable branch across staging + production runs, including retries.
+         # Stable branch across staging + production runs, including retries.
         digest = hashlib.sha256(b''.join(
             e['destination'].encode() + b'\0' + contents[e['source_url']]
             for e in sorted(entries, key=lambda x: x['destination'])
@@ -182,14 +203,43 @@ def process(repo, org, selected, contents, phase, operation, issue):
         branch = f'org-action/guidelines-{kind}-{digest}'
         target_base = staging if phase == 'staging' else production
         if phase == 'production':
-            staging_pr = find_pr(full, staging, branch)
+            staging_pr = find_pr(full, staging, branch, state='merged')
             if not staging_pr or not staging_pr['mergedAt']:
                 print(f'{name}: BLOCK staging PR for {branch} has not merged')
                 return 'blocked'
+            # Verify every selected file is actually staged with current canonical
+            # bytes before producing a PR against production.
+            cmd('git', 'fetch', 'origin', staging, '--depth=100', cwd=root)
+            for entry in entries:
+                destination = entry['destination']
+                staged = subprocess.run(
+                    ('git', 'show', f'origin/{staging}:{destination}'),
+                    cwd=root, capture_output=True)
+                if staged.returncode or staged.stdout != contents[entry['source_url']]:
+                    print(f'{name}: BLOCK staging file is missing or differs from canonical: {destination}')
+                    return 'blocked'
+            # Production head already exists, but must represent all desired edits.
+            branch_exists = bool(cmd('git', 'ls-remote', '--heads', 'origin', branch, cwd=root, check=False))
+            if not branch_exists:
+                print(f'{name}: BLOCK staged source branch not available: {branch}')
+                return 'blocked'
+            cmd('git', 'fetch', 'origin', branch, '--depth=100', cwd=root)
+            for entry in entries:
+                destination = entry['destination']
+                head = subprocess.run(('git', 'show', f'origin/{branch}:{destination}'),
+                                      cwd=root, capture_output=True)
+                if head.returncode or head.stdout != contents[entry['source_url']]:
+                    print(f'{name}: BLOCK production PR head does not contain canonical file: {destination}')
+                    return 'blocked'
         existing_pr = find_pr(full, target_base, branch)
         if existing_pr:
-            print(f"{name}: EXISTING PR {existing_pr['url']} ({existing_pr['state']})")
+            print(f"{name}: EXISTING OPEN PR {existing_pr['url']}")
             return 'skipped'
+        # Previously merged or closed PRs do not count as current synchronization.
+        historical_pr = find_pr(full, target_base, branch, state='all')
+        if historical_pr:
+            print(f'{name}: BLOCK historical branch name must be renewed after drift: {branch}')
+            return 'blocked'
 
         branch_exists = bool(cmd('git', 'ls-remote', '--heads', 'origin', branch, cwd=root, check=False))
         if phase == 'staging':
