@@ -62,6 +62,22 @@ class EngineeringGuidelineSyncTests(unittest.TestCase):
             target.write_bytes(b'new\n')
             self.assertEqual(sync.diff_plan(root, entry, content)[0][1], 'SKIP')
 
+    def test_node_backend_wins_over_react_frontend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'package.json').write_text('{"dependencies":{"express":"1","react":"2"}}')
+            self.assertEqual(sync.detect_type(root), 'backend')
+            (root / 'package.json').write_text('{"dependencies":{"react-dom":"2"}}')
+            self.assertEqual(sync.detect_type(root), 'frontend')
+            (root / 'package.json').write_text('{"dependencies":{"nestjs":"2"}}')
+            self.assertEqual(sync.detect_type(root), 'backend')
+
+    def test_preview_shows_line_ending_and_final_newline_changes(self):
+        for before, after in ((b'abc\\r\\n', b'abc\\n'), (b'abc', b'abc\\n')):
+            with self.subTest(before=before):
+                diff = ''.join(sync.preview(before, after, 'guide.md'))
+                self.assertTrue(diff)
+
     def test_reject_symlink_destination(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
