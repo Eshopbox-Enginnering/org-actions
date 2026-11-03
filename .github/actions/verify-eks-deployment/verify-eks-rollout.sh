@@ -58,7 +58,7 @@ trap fail_diagnostics ERR EXIT
 mapfile -t deployments < <(kubectl get deployments -n "$namespace" -l "app.kubernetes.io/instance=${release}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 if (( ${#deployments[@]} != 1 )); then
   # Some historical charts use custom Helm labels. Fall back only to a uniquely named deployment.
-  mapfile -t deployments < <(kubectl get deployments -n "$namespace" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -Ex "$(printf '%s' "${release}" | sed 's/[][\\.^$*+?{}|()]/\\\\&/g')(-eshopbox)?" || true)
+  mapfile -t deployments < <(kubectl get deployments -n "$namespace" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep -Fx -e "${release}" -e "${release}-eshopbox" || true)
 fi
 if (( ${#deployments[@]} != 1 )); then
   reason="Unable to uniquely identify deployment for Helm release ${release}"
