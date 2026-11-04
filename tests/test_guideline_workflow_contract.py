@@ -57,6 +57,27 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
                 self.assertIn("  pull_request:", trigger)
                 self.assertNotIn("  workflow_dispatch:", trigger)
 
+    def test_guideline_exemption_requires_current_production_base(self):
+        source = self.contents(".github/workflows/check-commits-in-staging.yml")
+        self.assertIn('git merge-base --is-ancestor "origin/$BASE" "origin/$SOURCE"', source)
+        self.assertIn('docs_only=false', source)
+        self.assertIn('git diff --quiet "origin/$COMPARE" "origin/$SOURCE"', source)
+
+    def test_supported_branch_names_match_pr_title_validation(self):
+        workflow = self.contents(".github/workflows/pr-ticket-validation.yml")
+        script = self.contents("scripts/sync-engineering-guidelines.py")
+        for name in ("staging", "main", "master",
+                     "aws-velocis-main", "aws-velocis-staging"):
+            with self.subTest(name=name):
+                self.assertIn(name, workflow)
+        self.assertIn("f'feature to {target_base}:", script)
+
+    def test_runbook_describes_immediate_dual_pr_creation(self):
+        readme = self.contents("engineering-guidelines/README.md")
+        self.assertIn("One manual APPLY run creates both PRs", readme)
+        self.assertNotIn("scheduled promotion workflow then creates", readme)
+        self.assertIn("rerun that check after merging staging", readme)
+
     def test_guidelines_have_org_compliant_pr_titles(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
         self.assertIn("f'feature to", source)
