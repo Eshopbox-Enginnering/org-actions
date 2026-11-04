@@ -422,7 +422,7 @@ def process(repo, org, selected, contents, phase, operation, issue,
             body += (f'\n\nStaging PR: {staging_pr["url"]}' if staging_pr
                      else '\n\nStaging already contains all selected canonical guidelines.')
         url = cmd('gh', 'pr', 'create', '--repo', full, '--base', target_base,
-                  '--head', branch, '--title', f'feature to {"Staging" if phase == "staging" else "Main"}: Sync engineering guidelines (#{issue})',
+                  '--head', branch, '--title', f'feature to {target_base}: Sync engineering guidelines (#{issue})',
                   '--body', body)
         print(f'{name}: CREATED PR {url}')
         if phase == 'staging' and stage_pr_holder is not None:
