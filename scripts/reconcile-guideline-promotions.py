@@ -56,7 +56,7 @@ def eligible(pr, repository):
         return None
     if not head[len(prefix):].isalnum():
         return None
-    if pr.get("head", {}).get("repo", {}).get("full_name") != repository:
+    if (pr.get("head", {}).get("repo") or {}).get("full_name") not in (None, repository):
         return None
     return meta
 
