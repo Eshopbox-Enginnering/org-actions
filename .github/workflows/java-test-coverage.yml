@@ -111,6 +111,24 @@ jobs:
       labels: checks-runner
     # runs-on: ubuntu-24.04
     timeout-minutes: 45
+    services:
+      ajio-mysql:
+        image: ${{ github.repository == 'Eshopbox-Enginnering/esb-ajio-integration' && 'mysql:8.0' || '' }}
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: ajio_local
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+      ajio-redis:
+        image: ${{ github.repository == 'Eshopbox-Enginnering/esb-ajio-integration' && 'redis:7-alpine' || '' }}
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
       - name: Check out base revision
         uses: actions/checkout@v5
@@ -149,6 +167,101 @@ jobs:
         run: |
           git -C pr fetch --no-tags ../base "$BASE_SHA"
           git -C pr diff --name-only -z "$BASE_SHA...HEAD" > changed-files.txt
+
+      - name: Prepare isolated AJIO test configuration
+        if: ${{ github.repository == 'Eshopbox-Enginnering/esb-ajio-integration' }}
+        env:
+          MYSQL_PORT: ${{ job.services.ajio-mysql.ports['3306'] }}
+          REDIS_PORT: ${{ job.services.ajio-redis.ports['6379'] }}
+        run: |
+          python3 <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          # Supply the same test-only harness even to older base/PR revisions.
+          # Production resources, existing tests and dependency declarations stay intact.
+          files = {
+              'src/test/resources/application.properties': """\
+          # Isolated local/CI test services; never load the production application settings.
+          # Cloud Tasks is mocked by the test listener; ordinary beans initialize eagerly.
+          environment=local
+          project_id=ajio-local
+          numberOfMessagedPulled=1
+          integrationType=ajio
+          dataSourceClassName=com.mysql.cj.jdbc.Driver
+          dataSource.url=jdbc:mysql://127.0.0.1:13306/ajio_local?allowPublicKeyRetrieval=true
+          dataSource.user=root
+          dataSource.password=
+          dataSourceClassNameCS=com.mysql.cj.jdbc.Driver
+          dataSource.urlCS=jdbc:mysql://127.0.0.1:13306/ajio_local?allowPublicKeyRetrieval=true
+          dataSource.userCS=root
+          dataSource.passwordCS=
+          hibernate.dialect=org.hibernate.dialect.MySQL8Dialect
+          hibernate.hikari.maximumPoolSize=2
+          hibernate.hikari.minimumIdle=1
+          hibernate.hikari.maximumPoolSizeCS=2
+          hibernate.hikari.minimumIdleCS=1
+          spring.data.redis.host=127.0.0.1
+          spring.data.redis.port=16379
+          spring.data.redis.password=
+          aws.s3.region=ap-south-1
+          aws.s3.access-key-id=
+          aws.s3.secret-access-key=
+          service-base-url=http://127.0.0.1:8080
+          location_id=asia-south1
+          management.endpoints.web.exposure.include=health,prometheus
+          """,
+              'src/test/resources/META-INF/spring.factories': """\
+          org.springframework.test.context.TestExecutionListener=com.ajio.support.CloudTasksTestExecutionListener
+          """,
+              'src/test/resources/mockito-extensions/org.mockito.plugins.MockMaker': """\
+          mock-maker-inline
+          """,
+              'src/test/java/com/ajio/support/CloudTasksTestExecutionListener.java': """\
+          package com.ajio.support;
+
+          import com.google.cloud.tasks.v2.CloudTasksClient;
+          import org.mockito.MockedStatic;
+          import org.mockito.Mockito;
+          import org.springframework.test.context.TestContext;
+          import org.springframework.test.context.support.AbstractTestExecutionListener;
+
+          /** Replaces only the cloud client factory before Spring eagerly creates beans. */
+          public class CloudTasksTestExecutionListener extends AbstractTestExecutionListener {
+              private MockedStatic<CloudTasksClient> factory;
+
+              @Override
+              public int getOrder() {
+                  return HIGHEST_PRECEDENCE;
+              }
+
+              @Override
+              public void beforeTestClass(TestContext testContext) {
+                  factory = Mockito.mockStatic(CloudTasksClient.class);
+                  factory.when(CloudTasksClient::create).thenReturn(Mockito.mock(CloudTasksClient.class));
+              }
+
+              @Override
+              public void afterTestClass(TestContext testContext) {
+                  if (factory != null) {
+                      factory.close();
+                  }
+              }
+          }
+          """,
+          }
+          mysql_port = str(int(os.environ['MYSQL_PORT']))
+          redis_port = str(int(os.environ['REDIS_PORT']))
+          properties = 'src/test/resources/application.properties'
+          files[properties] = files[properties].replace(':13306/', f':{mysql_port}/')
+          files[properties] = files[properties].replace('spring.data.redis.port=16379',
+                                                      f'spring.data.redis.port={redis_port}')
+          for revision in ('base', 'pr'):
+              for relative, contents in files.items():
+                  target = Path(revision) / relative
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_text(contents)
+          PYTHON
 
       - name: Run base and PR tests with JaCoCo
         # Keep both results even when Maven fails. The final gate checks exit codes
@@ -269,8 +382,10 @@ jobs:
 
           base, base_files, base_tests = read_revision('base')
           pr, pr_files, pr_tests = read_revision('pr')
-          delta = 'N/A'
-          if base and pr:
+          # Partial coverage from failed or empty test runs is not comparable.
+          # Keep the gate red for those failures without inventing a regression.
+          delta = 'Not compared: tests, builds, or reports are invalid.' if errors else 'N/A'
+          if base and pr and not errors:
               # Compare exact fractions: rounding must never hide a decrease.
               difference = Fraction(pr[0], pr[1]) - Fraction(base[0], base[1])
               delta = f'{float(difference * 100):+.4f} percentage points'
