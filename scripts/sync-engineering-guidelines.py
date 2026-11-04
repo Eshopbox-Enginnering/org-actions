@@ -181,6 +181,12 @@ def find_merged_staging_candidates(full, staging, branch_prefix, promotion_pr=No
             if item['headRefName'].startswith(branch_prefix)]
 
 
+def production_pr_covers_pending_edits(changed_paths, edits):
+    """Only reuse an open main PR whose file scope is still complete."""
+    pending = {dest for dest, _, _, _ in edits}
+    return bool(changed_paths) and set(changed_paths) == pending
+
+
 def find_existing_production_guideline_pr(full, production, kind, digest):
     """Find an open production PR for this exact guideline content."""
     prs = gh_json('pr', 'list', '--repo', full, '--base', production,
@@ -325,8 +331,8 @@ def process(repo, org, selected, contents, phase, operation, issue,
                     # noncanonical on production. An old PR can have a valid
                     # payload but omit a document changed on main after it
                     # was opened; reusing it would silently leave drift.
-                    pending = {dest for dest, _, _, _ in edits}
-                    if not changed or changed != pending:
+                    if not production_pr_covers_pending_edits(changed, edits):
+                        pending = {dest for dest, _, _, _ in edits}
                         print(f'{name}: BLOCK existing production PR scope '
                               f'no longer matches pending edits: '
                               f'PR={sorted(changed)} pending={sorted(pending)}')
