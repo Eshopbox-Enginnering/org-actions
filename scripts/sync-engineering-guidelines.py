@@ -98,10 +98,12 @@ def detect_type(root):
                 'vue.config.js', 'next.config.js', 'next.config.ts', 'next.config.mjs')
     backend = ('pom.xml', 'build.gradle', 'build.gradle.kts', 'go.mod',
                'requirements.txt', 'pyproject.toml', 'composer.json')
-    if any((root / name).exists() for name in frontend):
-        return 'frontend'
+    # A PHP backend may also contain Vite assets; backend build metadata
+    # takes precedence to avoid misclassifying eshopbox-wms-api.
     if any((root / name).exists() for name in backend):
         return 'backend'
+    if any((root / name).exists() for name in frontend):
+        return 'frontend'
     pkg = root / 'package.json'
     if pkg.exists():
         contents = pkg.read_text(errors='replace')
@@ -217,7 +219,7 @@ def process(repo, org, selected, contents, phase, operation, issue,
         kind = detect_type(root)
         if kind not in selected or not selected[kind]:
             print(f'{name}: BLOCK type={kind}, no matching selected guidelines')
-            return 'blocked' if promotion_pr is not None else 'skipped'
+            return 'blocked' if (promotion_pr is not None or require_production) else 'skipped'
         entries = selected[kind]
         staging = find_staging(root, production)
         if not staging:
@@ -346,6 +348,8 @@ def process(repo, org, selected, contents, phase, operation, issue,
                             print(f'{name}: BLOCK existing production PR content mismatch: {dest}')
                             return 'blocked'
                     print(f"{name}: EXISTING OPEN PR {prior['url']}")
+                    if stage_pr_holder is not None:
+                        stage_pr_holder['number'] = prior['number']
                     return 'skipped_open_pr'
             branch = (f'org-action/guidelines-prod-{kind}-{digest}-synced'
                       if allow_synced_staging else
@@ -355,7 +359,7 @@ def process(repo, org, selected, contents, phase, operation, issue,
         existing_pr = find_pr(full, target_base, branch)
         if existing_pr:
             print(f"{name}: EXISTING OPEN PR {existing_pr['url']}")
-            if phase == 'staging' and stage_pr_holder is not None:
+            if stage_pr_holder is not None:
                 stage_pr_holder['number'] = existing_pr['number']
             return 'skipped_open_pr' if promotion_pr is not None else 'skipped'
         # Reusing an old historical branch would hide drift. A new staging
@@ -406,7 +410,7 @@ def process(repo, org, selected, contents, phase, operation, issue,
         body = ('Central Backlog: https://github.com/' + org + '/Central-Backlog/issues/' + issue
                 + '\n\nCentral guideline sync, type: ' + kind + ', phase: ' + phase + '.\n\n'
                 + '\n'.join(f'- {action}: `{dest}` (SHA256 {sha})' for dest, action, sha, _ in edits)
-                + '\n\nOnly selected docs/engineering-guidelines files may change. Manual review and merge required.')
+                + '\n\nOnly selected docs/engineering-guidelines files may change. Automated guideline rollout; only selected files may change.')
         if phase == 'staging':
             details = {
                 'file_id': next((entry['id'] for entry in entries), 'all') if len(entries) == 1 else 'all',
@@ -425,7 +429,7 @@ def process(repo, org, selected, contents, phase, operation, issue,
                   '--head', branch, '--title', f'feature to {target_base}: Sync engineering guidelines (#{issue})',
                   '--body', body)
         print(f'{name}: CREATED PR {url}')
-        if phase == 'staging' and stage_pr_holder is not None:
+        if stage_pr_holder is not None:
             stage_pr_holder['number'] = int(url.rstrip('/').rsplit('/', 1)[-1])
         return 'created'
 
