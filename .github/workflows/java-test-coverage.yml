@@ -17,9 +17,7 @@ concurrency:
 jobs:
   detect-java:
     name: Detect supported Java repository
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    runs-on: ubuntu-latest
     outputs:
       supported: ${{ steps.detect.outputs.supported }}
       relevant: ${{ steps.changes.outputs.relevant }}
@@ -71,9 +69,7 @@ jobs:
     name: Coverage not applicable
     needs: detect-java
     if: ${{ always() && needs.detect-java.result == 'success' && (needs.detect-java.outputs.supported == 'false' || needs.detect-java.outputs.relevant == 'false') }}
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    runs-on: ubuntu-latest
     steps:
       - name: Post not-applicable coverage result
         uses: actions/github-script@v8
