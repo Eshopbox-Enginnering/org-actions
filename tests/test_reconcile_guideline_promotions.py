@@ -56,6 +56,22 @@ class GuidelinePromotionTests(unittest.TestCase):
         self.assertIsNone(reconcile.decode_metadata(
             "<!-- eshopbox-guideline-sync:v1 " + json.dumps(bad) + " -->"))
 
+    def test_recent_prs_paginates_beyond_first_hundred(self):
+        first = {"items": [{"number": i} for i in range(100)], "total_count": 125}
+        second = {"items": [{"number": i} for i in range(100, 125)], "total_count": 125}
+        with patch.object(reconcile, 'gh_api', side_effect=[first, second]) as api:
+            results = reconcile.recent_prs()
+        self.assertEqual(len(results), 125)
+        self.assertEqual(api.call_count, 2)
+        self.assertIn('page=2', api.call_args.args[0])
+
+    def test_recent_prs_one_page(self):
+        with patch.object(reconcile, 'gh_api', return_value={
+            'items': [{'number': 7}], 'total_count': 1
+        }) as api:
+            self.assertEqual(len(reconcile.recent_prs()), 1)
+        self.assertEqual(api.call_count, 1)
+
     def test_promote_invokes_existing_script_with_explicit_merged_pr(self):
         with patch.object(reconcile.subprocess, "run") as call:
             call.return_value.returncode = 0
