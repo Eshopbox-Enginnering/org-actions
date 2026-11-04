@@ -147,6 +147,20 @@ class EngineeringGuidelineSyncTests(unittest.TestCase):
                 'org/repo', 'main', 'backend', 'abcdef012345')
         self.assertIsNone(result)
 
+    def test_reused_production_pr_must_cover_all_pending_edits(self):
+        changed = {'docs/engineering-guidelines/b.md'}
+        edits = [
+            ('docs/engineering-guidelines/a.md', 'REPLACE', 'sha-a', b'a'),
+            ('docs/engineering-guidelines/b.md', 'REPLACE', 'sha-b', b'b'),
+        ]
+        self.assertFalse(sync.production_pr_covers_pending_edits(changed, edits))
+        self.assertTrue(sync.production_pr_covers_pending_edits(
+            {'docs/engineering-guidelines/a.md',
+             'docs/engineering-guidelines/b.md'}, edits))
+        self.assertFalse(sync.production_pr_covers_pending_edits(
+            changed | {'README.md'}, edits))
+        self.assertFalse(sync.production_pr_covers_pending_edits(set(), edits))
+
     def test_duplicate_production_prs_fail_closed(self):
         from unittest.mock import patch
         with patch.object(sync, 'gh_json', return_value=[
