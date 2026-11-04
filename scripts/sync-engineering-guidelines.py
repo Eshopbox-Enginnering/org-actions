@@ -181,7 +181,7 @@ def find_merged_staging_candidates(full, staging, branch_prefix, promotion_pr=No
             if item['headRefName'].startswith(branch_prefix)]
 
 
-def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None, allow_open_staging=False, stage_pr_holder=None, require_production=False):
+def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None, allow_open_staging=False, stage_pr_holder=None, require_production=False, allow_synced_staging=False):
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
     if production not in ALLOWED_BRANCHES:
@@ -218,6 +218,10 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                     print(f'... {len(diff) - 120} more diff lines omitted')
             return 'planned' if edits else 'skipped'
         if not edits:
+            if phase == 'staging' and stage_pr_holder is not None:
+                # No new staging PR needed. The orchestrator must still check
+                # whether production requires a separate guidelines PR.
+                stage_pr_holder['staging_current'] = True
             return 'already_synced' if (promotion_pr is not None or require_production) else 'skipped'
 
          # Stable branch across staging + production runs, including retries.
@@ -233,15 +237,23 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
         else:
             # A production PR must be based on production, not on the
             # staging rollout branch (which can include unrelated commits).
-            candidates = find_merged_staging_candidates(
-                full, staging, branch_prefix, promotion_pr,
-                allow_open=allow_open_staging)
-            if not candidates:
-                print(f'{name}: BLOCK matching staging PR has not been merged')
-                return 'blocked'
-            candidates.sort(key=lambda item: item['mergedAt'], reverse=True)
-            staging_pr = candidates[0]
-            if allow_open_staging:
+            if allow_synced_staging:
+                # No staging changes are required. Production may still lag.
+                # Verify all selected canonical bytes on the staging branch
+                # before creating the independently reviewable main PR.
+                fetch_remote_branch(root, staging)
+                check_ref = f'origin/{staging}'
+                staging_pr = None
+            else:
+                candidates = find_merged_staging_candidates(
+                    full, staging, branch_prefix, promotion_pr,
+                    allow_open=allow_open_staging)
+                if not candidates:
+                    print(f'{name}: BLOCK matching guideline staging PR not found')
+                    return 'blocked'
+                candidates.sort(key=lambda item: item['mergedAt'] or '', reverse=True)
+                staging_pr = candidates[0]
+            if allow_open_staging and not allow_synced_staging:
                 head_branch = staging_pr['headRefName']
                 if not cmd('git', 'ls-remote', '--heads', 'origin', head_branch,
                            cwd=root, check=False):
@@ -269,7 +281,7 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                           f'actual={sorted(changes)} expected={sorted(expected)}')
                     return 'blocked'
                 check_ref = f'origin/{head_branch}'
-            else:
+            elif not allow_synced_staging:
                 fetch_remote_branch(root, staging)
                 check_ref = f'origin/{staging}'
             for entry in entries:
@@ -280,7 +292,9 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                 if staged.returncode or staged.stdout != contents[entry['source_url']]:
                     print(f'{name}: BLOCK staged guideline content differs: {destination}')
                     return 'blocked'
-            branch = f'org-action/guidelines-prod-{kind}-{digest}-pr{staging_pr["number"]}'
+            branch = (f'org-action/guidelines-prod-{kind}-{digest}-synced'
+                      if allow_synced_staging else
+                      f'org-action/guidelines-prod-{kind}-{digest}-pr{staging_pr["number"]}')
             # Idempotency across changes to the main branch: lookup by merged
             # staging PR identity rather than the moving production SHA.
         existing_pr = find_pr(full, target_base, branch)
@@ -350,7 +364,8 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
             }
             body += '\n\n<!-- eshopbox-guideline-sync:v1 ' + json.dumps(details, sort_keys=True) + ' -->'
         else:
-            body += f'\n\nStaging PR: {staging_pr["url"]}'
+            body += (f'\n\nStaging PR: {staging_pr["url"]}' if staging_pr
+                     else '\n\nStaging already contains all selected canonical guidelines.')
         url = cmd('gh', 'pr', 'create', '--repo', full, '--base', target_base,
                   '--head', branch, '--title', f'feature to {"Staging" if phase == "staging" else "Main"}: Sync engineering guidelines (#{issue})',
                   '--body', body)
