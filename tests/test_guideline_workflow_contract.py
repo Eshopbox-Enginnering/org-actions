@@ -43,6 +43,20 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         self.assertIn('git diff --quiet "origin/$COMPARE" "origin/$SOURCE"', workflow)
         self.assertIn("enforcing normal commit check", workflow)
 
+    def test_ruleset_workflows_retain_pull_request_triggers(self):
+        for name in (
+            "check-commits-in-staging.yml",
+            "pr-test-validation.yml",
+            "pr-ticket-validation.yml",
+            "check-sync-with-main.yml",
+            "java-test-coverage.yml",
+        ):
+            with self.subTest(name=name):
+                content = self.contents(".github/workflows/" + name)
+                trigger = content.split("\\non:\\n", 1)[1].split("\\njobs:", 1)[0]
+                self.assertIn("  pull_request:", trigger)
+                self.assertNotIn("  workflow_dispatch:", trigger)
+
     def test_guidelines_have_org_compliant_pr_titles(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
         self.assertIn("f'feature to", source)
