@@ -62,6 +62,16 @@ class EngineeringGuidelineSyncTests(unittest.TestCase):
             target.write_bytes(b'new\n')
             self.assertEqual(sync.diff_plan(root, entry, content)[0][1], 'SKIP')
 
+    def test_php_backend_preferred_to_vite_frontend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'vite.config.js').write_text('export default {}')
+            (root / 'package.json').write_text('{"devDependencies":{"vite":"5"}}')
+            (root / 'composer.json').write_text('{"require":{"php":"^8"}}')
+            self.assertEqual(sync.detect_type(root), 'backend')
+            (root / 'composer.json').unlink()
+            self.assertEqual(sync.detect_type(root), 'frontend')
+
     def test_node_backend_wins_over_react_frontend(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
