@@ -88,7 +88,7 @@ def rollout(repo, org, selected, contents, issue):
     if first == "blocked":
         return "blocked"
     if holder.get("number"):
-        kind = next((key for key, value in selected.items() if value), None)
+        kind = holder.get('kind')
         # Read staging PR target (supports staging and aws-velocis-staging).
         staging_pr = sync.gh_json(
             "pr", "view", str(holder["number"]), "--repo", full,
@@ -102,7 +102,7 @@ def rollout(repo, org, selected, contents, issue):
     elif not holder.get("staging_current"):
         return first
     else:
-        kind = next((key for key, value in selected.items() if value), None)
+        kind = holder.get('kind')
         entries = selected.get(kind, []) if kind else []
 
     # Recheck main only after staging is confirmed merged.
