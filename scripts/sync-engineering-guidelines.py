@@ -133,7 +133,7 @@ def gh_json(*args):
 
 def find_pr(repo, base, branch, state='open'):
     prs = gh_json('pr', 'list', '--repo', repo, '--base', base, '--head', branch,
-                  '--state', state, '--json', 'url,state,mergedAt', '--limit', '100')
+                  '--state', state, '--json', 'number,url,state,mergedAt', '--limit', '100')
     return prs[0] if prs else None
 
 
@@ -165,12 +165,12 @@ def preview(before, after, dest):
     return delta or [f'Byte-only difference for {dest}: {len(before)} -> {len(after)} bytes\n']
 
 
-def find_merged_staging_candidates(full, staging, branch_prefix, promotion_pr=None):
+def find_merged_staging_candidates(full, staging, branch_prefix, promotion_pr=None, allow_open=False):
     if promotion_pr is not None:
         # Explicit numbered lookup survives more than 100 staging PRs.
         exact = gh_json('pr', 'view', str(promotion_pr), '--repo', full,
                         '--json', 'number,headRefName,baseRefName,mergedAt,url')
-        if (exact.get('mergedAt') and exact.get('baseRefName') == staging
+        if ((allow_open or exact.get('mergedAt')) and exact.get('baseRefName') == staging
                 and exact.get('headRefName', '').startswith(branch_prefix)):
             return [exact]
         return []
@@ -181,7 +181,7 @@ def find_merged_staging_candidates(full, staging, branch_prefix, promotion_pr=No
             if item['headRefName'].startswith(branch_prefix)]
 
 
-def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None):
+def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None, allow_open_staging=False, stage_pr_holder=None):
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
     if production not in ALLOWED_BRANCHES:
@@ -234,7 +234,8 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
             # A production PR must be based on production, not on the
             # staging rollout branch (which can include unrelated commits).
             candidates = find_merged_staging_candidates(
-                full, staging, branch_prefix, promotion_pr)
+                full, staging, branch_prefix, promotion_pr,
+                allow_open=allow_open_staging)
             if not candidates:
                 print(f'{name}: BLOCK matching staging PR has not been merged')
                 return 'blocked'
