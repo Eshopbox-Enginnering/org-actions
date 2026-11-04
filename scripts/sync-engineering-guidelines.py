@@ -165,6 +165,22 @@ def preview(before, after, dest):
     return delta or [f'Byte-only difference for {dest}: {len(before)} -> {len(after)} bytes\n']
 
 
+def find_merged_staging_candidates(full, staging, branch_prefix, promotion_pr=None):
+    if promotion_pr is not None:
+        # Explicit numbered lookup survives more than 100 staging PRs.
+        exact = gh_json('pr', 'view', str(promotion_pr), '--repo', full,
+                        '--json', 'number,headRefName,baseRefName,mergedAt,url')
+        if (exact.get('mergedAt') and exact.get('baseRefName') == staging
+                and exact.get('headRefName', '').startswith(branch_prefix)):
+            return [exact]
+        return []
+    merged = gh_json('pr', 'list', '--repo', full, '--base', staging,
+                     '--state', 'merged', '--json',
+                     'number,headRefName,mergedAt,url', '--limit', '100')
+    return [item for item in merged
+            if item['headRefName'].startswith(branch_prefix)]
+
+
 def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None):
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
@@ -217,20 +233,8 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
         else:
             # A production PR must be based on production, not on the
             # staging rollout branch (which can include unrelated commits).
-            if promotion_pr is not None:
-                # An exact promotion must not depend on a capped PR listing.
-                exact = gh_json('pr', 'view', str(promotion_pr), '--repo', full,
-                                '--json', 'number,headRefName,baseRefName,mergedAt,url')
-                candidates = ([exact] if exact.get('mergedAt')
-                              and exact.get('baseRefName') == staging
-                              and exact.get('headRefName', '').startswith(branch_prefix)
-                              else [])
-            else:
-                merged = gh_json('pr', 'list', '--repo', full, '--base', staging,
-                                 '--state', 'merged', '--json',
-                                 'number,headRefName,mergedAt,url', '--limit', '100')
-                candidates = [item for item in merged
-                              if item['headRefName'].startswith(branch_prefix)]
+            candidates = find_merged_staging_candidates(
+                full, staging, branch_prefix, promotion_pr)
             if not candidates:
                 print(f'{name}: BLOCK matching staging PR has not been merged')
                 return 'blocked'
