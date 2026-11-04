@@ -80,6 +80,29 @@ jobs:
             exit 1
           fi
 
+          # Central guideline rollouts use an independent production commit.
+          # Allow it only after exactly those docs are already in staging.
+          if [[ "${SOURCE:-}" == org-action/guidelines-prod-* ]]; then
+            git fetch origin "$BASE" --quiet
+            mapfile -t PR_FILES < <(git diff --name-only "origin/$BASE...origin/$SOURCE")
+            if [[ "${#PR_FILES[@]}" -gt 0 ]]; then
+              docs_only=true
+              for path in "${PR_FILES[@]}"; do
+                if [[ ! "$path" =~ ^docs/engineering-guidelines/[A-Za-z0-9_.-]+\\.md$ ]] ||
+                   ! git cat-file -e "origin/$COMPARE:$path" 2>/dev/null ||
+                   ! git diff --quiet "origin/$COMPARE" "origin/$SOURCE" -- "$path"; then
+                  docs_only=false
+                  break
+                fi
+              done
+              if [[ "$docs_only" == true ]]; then
+                echo "Verified docs-only rollout: all PR files match staging."
+                exit 0
+              fi
+            fi
+            echo "Guideline rollout failed staged-file verification; enforcing normal commit check."
+          fi
+
           # Ignore merge commits.
           # Find commits present in source branch but missing from compare branch.
           PR_COMMITS=$(
