@@ -181,7 +181,7 @@ def find_merged_staging_candidates(full, staging, branch_prefix, promotion_pr=No
             if item['headRefName'].startswith(branch_prefix)]
 
 
-def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None, allow_open_staging=False, stage_pr_holder=None):
+def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None, allow_open_staging=False, stage_pr_holder=None, require_production=False):
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
     if production not in ALLOWED_BRANCHES:
@@ -218,7 +218,7 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                     print(f'... {len(diff) - 120} more diff lines omitted')
             return 'planned' if edits else 'skipped'
         if not edits:
-            return 'already_synced' if promotion_pr is not None else 'skipped'
+            return 'already_synced' if (promotion_pr is not None or require_production) else 'skipped'
 
          # Stable branch across staging + production runs, including retries.
         digest = hashlib.sha256(b''.join(
@@ -252,8 +252,21 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                            f'origin/{head_branch}', cwd=root)
                 changes = set(cmd('git', 'diff', '--name-only', base,
                                   f'origin/{head_branch}', cwd=root).splitlines())
-                if changes != {entry['destination'] for entry in entries}:
-                    print(f'{name}: BLOCK staging PR includes unexpected file changes')
+                # Catalog entries already canonical on staging are not
+                # changed by the staging PR. Require exactly the remaining
+                # managed paths, never the entire selected catalog.
+                expected = set()
+                for entry in entries:
+                    dest = entry['destination']
+                    existing = subprocess.run(
+                        ('git', 'show', f'origin/{staging}:{dest}'),
+                        cwd=root, capture_output=True)
+                    if (existing.returncode or
+                            existing.stdout != contents[entry['source_url']]):
+                        expected.add(dest)
+                if not expected or changes != expected:
+                    print(f'{name}: BLOCK staging PR file scope mismatch: '
+                          f'actual={sorted(changes)} expected={sorted(expected)}')
                     return 'blocked'
                 check_ref = f'origin/{head_branch}'
             else:
