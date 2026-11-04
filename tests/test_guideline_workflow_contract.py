@@ -11,8 +11,8 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
 
     def test_sync_workflow_runs_dual_pr_creator(self):
         workflow = self.contents(".github/workflows/sync-engineering-guidelines.yml")
-        self.assertIn("python3 scripts/sync-guidelines-dual-pr.py", workflow)
-        self.assertNotIn("python3 scripts/sync-engineering-guidelines.py", workflow)
+        self.assertIn("python3 scripts/sync-guidelines-auto-merge.py", workflow)
+        self.assertNotIn("python3 scripts/sync-guidelines-dual-pr.py", workflow)
 
     def test_lightweight_checks_do_not_use_checks_runner(self):
         for name in (
@@ -74,9 +74,9 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
 
     def test_runbook_describes_immediate_dual_pr_creation(self):
         readme = self.contents("engineering-guidelines/README.md")
-        self.assertIn("One manual APPLY run creates both PRs", readme)
+        self.assertIn("One manual APPLY run creates and merges both PRs", readme)
         self.assertNotIn("scheduled promotion workflow then creates", readme)
-        self.assertIn("rerun that check after merging staging", readme)
+        self.assertIn("merge staging first", readme)
 
     def test_guidelines_have_org_compliant_pr_titles(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
