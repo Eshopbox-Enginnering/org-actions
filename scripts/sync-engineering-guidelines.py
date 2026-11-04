@@ -221,6 +221,8 @@ def process(repo, org, selected, contents, phase, operation, issue,
             print(f'{name}: BLOCK type={kind}, no matching selected guidelines')
             return 'blocked' if (promotion_pr is not None or require_production) else 'skipped'
         entries = selected[kind]
+        if stage_pr_holder is not None:
+            stage_pr_holder['kind'] = kind
         staging = find_staging(root, production)
         if not staging:
             print(f'{name}: BLOCK no supported staging branch')
