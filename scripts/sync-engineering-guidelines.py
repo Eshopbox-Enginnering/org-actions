@@ -321,9 +321,15 @@ def process(repo, org, selected, contents, phase, operation, issue,
                                f'origin/{prior_branch}', cwd=root)
                     changed = set(cmd('git', 'diff', '--name-only', base,
                                       f'origin/{prior_branch}', cwd=root).splitlines())
-                    if not changed or not changed.issubset(
-                            {entry['destination'] for entry in entries}):
-                        print(f'{name}: BLOCK existing production PR has unexpected changes')
+                    # The PR must update *every* file that is currently
+                    # noncanonical on production. An old PR can have a valid
+                    # payload but omit a document changed on main after it
+                    # was opened; reusing it would silently leave drift.
+                    pending = {dest for dest, _, _, _ in edits}
+                    if not changed or changed != pending:
+                        print(f'{name}: BLOCK existing production PR scope '
+                              f'no longer matches pending edits: '
+                              f'PR={sorted(changed)} pending={sorted(pending)}')
                         return 'blocked'
                     for entry in entries:
                         dest = entry['destination']
