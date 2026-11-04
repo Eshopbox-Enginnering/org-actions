@@ -76,7 +76,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         readme = self.contents("engineering-guidelines/README.md")
         self.assertIn("One manual APPLY run creates and merges both PRs", readme)
         self.assertNotIn("scheduled promotion workflow then creates", readme)
-        self.assertIn("merge staging first", readme)
+        self.assertIn("staging first, then production", readme)
 
     def test_guidelines_have_org_compliant_pr_titles(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
