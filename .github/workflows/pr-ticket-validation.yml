@@ -76,7 +76,7 @@ jobs:
             };
 
             const titleRegex =
-              /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex|claude|seer|seers)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
+              /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex|claude|seer|seers)\s+to\s+(staging|main|master|aws-velocis-main|aws-velocis-staging)\s*(?::|\|)\s*(.+)$/i;
 
             const shortRefRegex =
               /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
@@ -95,7 +95,7 @@ jobs:
               "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex, Claude, Seer, Seers",
               "",
               "Allowed targets:",
-              "  Staging, Main",
+              "  Staging, Main, Master, aws-velocis-main, aws-velocis-staging",
               "",
               "Examples:",
               "  Bug to Main: Unnecessary Fulfillment Locations Visible in Shopify Location Config",
