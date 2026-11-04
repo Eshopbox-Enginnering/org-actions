@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   detect-java:
+    if: ${{ github.repository != 'Eshopbox-Enginnering/org-actions' }}
     name: Detect supported Java repository
     runs-on: ubuntu-latest
     outputs:
