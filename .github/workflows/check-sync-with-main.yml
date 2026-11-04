@@ -14,6 +14,10 @@ on:
         default: staging
         type: string
 
+  pull_request:
+    branches:
+      # - staging
+
 permissions:
   contents: read
 
