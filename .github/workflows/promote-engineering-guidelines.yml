@@ -5,23 +5,36 @@ on:
     # Runs automatically after staging merges, generally within 15 minutes.
     - cron: '*/15 * * * *'
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/promote-engineering-guidelines.yml'
+      - 'scripts/sync-engineering-guidelines.py'
+      - 'scripts/reconcile-guideline-promotions.py'
+      - 'tests/test_*guideline*.py'
 
 concurrency:
   group: engineering-guidelines-promotion
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run guideline tests
+        run: |
+          python3 -m py_compile scripts/sync-engineering-guidelines.py scripts/reconcile-guideline-promotions.py
+          python3 -m unittest discover -s tests -p 'test_*guideline*.py' -v
+
   promote:
+    if: github.event_name != 'pull_request'
+    needs: test
     runs-on: ubuntu-latest
     environment: agents-org-production
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Validate Python source and unit tests
-        run: |
-          python3 -m py_compile scripts/sync-engineering-guidelines.py scripts/reconcile-guideline-promotions.py
-          python3 -m unittest discover -s tests -p 'test_*guideline*.py' -v
       - name: Create GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v2
