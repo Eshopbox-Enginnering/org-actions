@@ -98,12 +98,15 @@ def detect_type(root):
                 'vue.config.js', 'next.config.js', 'next.config.ts', 'next.config.mjs')
     backend = ('pom.xml', 'build.gradle', 'build.gradle.kts', 'go.mod',
                'requirements.txt', 'pyproject.toml', 'composer.json')
-    # A PHP backend may also contain Vite assets; backend build metadata
-    # takes precedence to avoid misclassifying eshopbox-wms-api.
-    if any((root / name).exists() for name in backend):
+    # PHP backend projects often bundle Vite-generated frontend assets.
+    # Treat composer.json as an explicit backend signal, retaining the
+    # previous frontend-first classification for other mixed projects.
+    if (root / 'composer.json').exists():
         return 'backend'
     if any((root / name).exists() for name in frontend):
         return 'frontend'
+    if any((root / name).exists() for name in backend):
+        return 'backend'
     pkg = root / 'package.json'
     if pkg.exists():
         contents = pkg.read_text(errors='replace')
