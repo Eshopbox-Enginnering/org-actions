@@ -277,9 +277,9 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                 'kind': kind,
                 'digest': digest,
             }
-            body += '\\n\\n<!-- eshopbox-guideline-sync:v1 ' + json.dumps(details, sort_keys=True) + ' -->'
+            body += '\n\n<!-- eshopbox-guideline-sync:v1 ' + json.dumps(details, sort_keys=True) + ' -->'
         else:
-            body += f'\\n\\nStaging PR: {staging_pr["url"]}'
+            body += f'\n\nStaging PR: {staging_pr["url"]}'
         url = cmd('gh', 'pr', 'create', '--repo', full, '--base', target_base,
                   '--head', branch, '--title', f'docs to {"Staging" if phase == "staging" else "Main"}: Sync engineering guidelines (#{issue})',
                   '--body', body)
@@ -289,6 +289,7 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--promotion-pr', type=int, default=None)
     for field in ('operation', 'target', 'repository', 'phase', 'file-id',
                   'source-url', 'destination', 'source-scope', 'issue', 'org'):
         parser.add_argument('--' + field, default='')
@@ -326,7 +327,7 @@ def main():
             continue
         try:
             outcome = process(repo, args.org, selected, contents, args.phase,
-                              args.operation, args.issue)
+                              args.operation, args.issue, promotion_pr=args.promotion_pr)
         except Exception as error:
             outcome = 'error'
             print(f"{repo['name']}: ERROR {error}", file=sys.stderr)
