@@ -53,7 +53,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 content = self.contents(".github/workflows/" + name)
-                trigger = content.split("\\non:\\n", 1)[1].split("\\njobs:", 1)[0]
+                trigger = content.split("\non:\n", 1)[1].split("\njobs:", 1)[0]
                 self.assertIn("  pull_request:", trigger)
                 self.assertNotIn("  workflow_dispatch:", trigger)
 
