@@ -91,6 +91,29 @@ class EngineeringGuidelineSyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sync.fetch_remote_branch(Path('/tmp/repo'), '../staging')
 
+    def test_exact_promotion_fetches_pr_by_number_without_list_limit(self):
+        from unittest.mock import patch
+        pr = {'number': 145, 'headRefName': 'org-action/guidelines-backend-abcd12345678-a1',
+              'baseRefName': 'staging', 'mergedAt': '2026-11-04T00:00:00Z'}
+        with patch.object(sync, 'gh_json', return_value=pr) as api:
+            result = sync.find_merged_staging_candidates(
+                'Eshopbox-Enginnering/inventory-engine', 'staging',
+                'org-action/guidelines-backend-abcd12345678-', 145)
+        self.assertEqual(result, [pr])
+        self.assertEqual(api.call_args.args[:3], ('pr', 'view', '145'))
+
+    def test_exact_promotion_rejects_wrong_base_or_open_pr(self):
+        from unittest.mock import patch
+        for base, merged in (('main', '2026-11-04T00:00:00Z'),
+                             ('staging', None)):
+            with self.subTest(base=base, merged=merged):
+                pr = {'headRefName': 'org-action/guidelines-backend-abcd12345678-a1',
+                      'baseRefName': base, 'mergedAt': merged}
+                with patch.object(sync, 'gh_json', return_value=pr):
+                    self.assertEqual(sync.find_merged_staging_candidates(
+                        'Eshopbox-Enginnering/inventory-engine', 'staging',
+                        'org-action/guidelines-backend-abcd12345678-', 145), [])
+
     def test_reject_symlink_destination(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
