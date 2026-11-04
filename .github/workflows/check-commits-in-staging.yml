@@ -22,6 +22,7 @@ on:
 
 jobs:
   check-commits:
+    if: ${{ github.repository != 'Eshopbox-Enginnering/org-actions' }}
     #runs-on:
     #  group: checks-runners
     #  labels: checks-runner
@@ -78,6 +79,38 @@ jobs:
           else
             echo "::error::Unable to determine PR source branch."
             exit 1
+          fi
+
+          # Central guideline rollouts use an independent production commit.
+          # Allow it only after exactly those docs are already in staging.
+          if [[ "${SOURCE:-}" == org-action/guidelines-prod-* ]]; then
+            git fetch origin "$BASE" --quiet
+            # Verify the prospective merge, not just the source branch.
+            # If main moved since PR creation, merging can combine edits
+            # into content that differs from staging. Fail closed until the
+            # production branch is updated from the latest main.
+            if ! git merge-base --is-ancestor "origin/$BASE" "origin/$SOURCE"; then
+              echo "Guideline production PR is behind $BASE; normal commit check applies."
+              docs_only=false
+            else
+              docs_only=true
+            fi
+            mapfile -t PR_FILES < <(git diff --name-only "origin/$BASE...origin/$SOURCE")
+            if [[ "${#PR_FILES[@]}" -gt 0 ]]; then
+              for path in "${PR_FILES[@]}"; do
+                if [[ ! "$path" =~ ^docs/engineering-guidelines/[A-Za-z0-9_.-]+\.md$ ]] ||
+                   ! git cat-file -e "origin/$COMPARE:$path" 2>/dev/null ||
+                   ! git diff --quiet "origin/$COMPARE" "origin/$SOURCE" -- "$path"; then
+                  docs_only=false
+                  break
+                fi
+              done
+              if [[ "$docs_only" == true ]]; then
+                echo "Verified docs-only rollout: all PR files match staging."
+                exit 0
+              fi
+            fi
+            echo "Guideline rollout failed staged-file verification; enforcing normal commit check."
           fi
 
           # Ignore merge commits.

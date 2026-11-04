@@ -13,10 +13,8 @@ permissions:
 
 jobs:
   validate-tests:
-    if: ${{ github.head_ref != 'conflict/remove-text-recharge-to-avoid' }}
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    if: ${{ github.repository != 'Eshopbox-Enginnering/org-actions' && github.head_ref != 'conflict/remove-text-recharge-to-avoid' }}
+    runs-on: ubuntu-latest
     # runs-on: ubuntu-24.04
     timeout-minutes: 10
 
