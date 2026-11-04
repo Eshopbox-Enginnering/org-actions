@@ -111,7 +111,8 @@ def rollout(repo, org, selected, contents, issue):
     prod_holder = {}
     second = sync.process(
         repo, org, selected, contents, "production", "APPLY",
-        issue, allow_synced_staging=True, stage_pr_holder=prod_holder)
+        issue, allow_synced_staging=True, stage_pr_holder=prod_holder,
+        require_production=True)
     if second == "already_synced":
         return "synced"
     if second not in ("created", "skipped_open_pr") or not prod_holder.get("number"):
