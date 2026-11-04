@@ -65,8 +65,17 @@ def recent_prs():
     # Search PR titles (GitHub may not index hidden HTML comments).\n    # Eligibility is then verified against the structured PR body and branch.
     since = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%d")
     query = f'org:{ORG} is:pr is:merged in:title "Sync engineering guidelines" merged:>={since}'
-    results = gh_api("search/issues?q=" + quote(query) + "&per_page=100&sort=updated&order=desc")
-    return results.get("items", [])
+    items = []
+    page = 1
+    while True:
+        results = gh_api("search/issues?q=" + quote(query) +
+                         f"&per_page=100&page={page}&sort=updated&order=desc")
+        batch = results.get("items", [])
+        items.extend(batch)
+        if len(batch) < 100 or len(items) >= min(results.get("total_count", len(items)), 1000):
+            break
+        page += 1
+    return items
 
 
 def promote_one(repository, number, meta):
