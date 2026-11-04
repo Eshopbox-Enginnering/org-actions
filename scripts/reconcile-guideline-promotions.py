@@ -62,9 +62,9 @@ def eligible(pr, repository):
 
 
 def recent_prs():
-    # Search narrows to tagged, merged PRs and prevents scans over all repos.
+    # Search PR titles (GitHub may not index hidden HTML comments).\n    # Eligibility is then verified against the structured PR body and branch.
     since = (datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%d")
-    query = f'org:{ORG} is:pr is:merged in:body "eshopbox-guideline-sync:v1" merged:>={since}'
+    query = f'org:{ORG} is:pr is:merged in:title "Sync engineering guidelines" merged:>={since}'
     results = gh_api("search/issues?q=" + quote(query) + "&per_page=100&sort=updated&order=desc")
     return results.get("items", [])
 
