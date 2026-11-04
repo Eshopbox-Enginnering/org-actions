@@ -217,12 +217,20 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
         else:
             # A production PR must be based on production, not on the
             # staging rollout branch (which can include unrelated commits).
-            merged = gh_json('pr', 'list', '--repo', full, '--base', staging,
-                             '--state', 'merged', '--json',
-                             'number,headRefName,mergedAt,url', '--limit', '100')
-            candidates = [item for item in merged
-                          if item['headRefName'].startswith(branch_prefix)
-                          and (promotion_pr is None or item['number'] == promotion_pr)]
+            if promotion_pr is not None:
+                # An exact promotion must not depend on a capped PR listing.
+                exact = gh_json('pr', 'view', str(promotion_pr), '--repo', full,
+                                '--json', 'number,headRefName,baseRefName,mergedAt,url')
+                candidates = ([exact] if exact.get('mergedAt')
+                              and exact.get('baseRefName') == staging
+                              and exact.get('headRefName', '').startswith(branch_prefix)
+                              else [])
+            else:
+                merged = gh_json('pr', 'list', '--repo', full, '--base', staging,
+                                 '--state', 'merged', '--json',
+                                 'number,headRefName,mergedAt,url', '--limit', '100')
+                candidates = [item for item in merged
+                              if item['headRefName'].startswith(branch_prefix)]
             if not candidates:
                 print(f'{name}: BLOCK matching staging PR has not been merged')
                 return 'blocked'
