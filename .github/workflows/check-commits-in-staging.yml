@@ -13,13 +13,6 @@ on:
         description: "List of commits missing in compare branch"
         value: ${{ jobs.check-commits.outputs.pr_commits }}
 
-  pull_request:
-    branches:
-      - main
-      - master
-      - Master
-      - Main
-
 jobs:
   check-commits:
     if: ${{ github.repository != 'Eshopbox-Enginnering/org-actions' }}
