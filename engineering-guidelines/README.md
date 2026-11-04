@@ -22,7 +22,7 @@ Run [Sync Engineering Guidelines](../.github/workflows/sync-engineering-guidelin
 
 - `operation`: `DRY_RUN` (shows hashes and diff; no commits/PRs), or `APPLY` with confirmation `APPLY`
 - `target`: `single` (with `repository` name), `backend`, `frontend`, or `all`
-- `phase`: `staging` first. Merge staging PR manually; the scheduled promotion workflow then creates a separate clean production PR. The manual production phase remains available for older rollouts.
+- `phase`: choose `staging` for a normal APPLY run; it opens staging and production PRs together. Merge staging first, then revalidate and merge the already-created production PR. The manual `production` phase remains available for older rollouts.
 - `file_id`: `all` or an `id` from the catalog, such as `cache` or `429`
 - `source_url` + `destination` + `source_scope`: optional **one-off** file replacing the catalog selection, e.g., `source_scope=frontend`, source `engineering-guidelines/frontend-guide.md`, destination `docs/engineering-guidelines/frontend-guide.md`
 - `central_backlog_issue`: referenced in every PR
@@ -39,24 +39,22 @@ The `docs/engineering-guidelines/` directory is the destination for reference do
 
 **Important:** The new Sync Engineering Guidelines workflow deliberately does not edit `AGENTS.md` or tool-specific instruction files. To activate AI discovery across all repos, perform a separate, reviewed rollout of the reference text using the existing AGENTS updater; do not silently modify these files during document sync. Agents may still fail to follow instructions, so test with a representative code review/change that requires the 401 or caching guideline.
 
-## Automatic production PR after staging merge
+## One-run staging and production PR creation
 
-**One manual APPLY run is sufficient.** Run the Sync Engineering Guidelines workflow with `operation=APPLY` and `phase=staging`. Review and merge the staging PR normally. The central [Promote Merged Engineering Guidelines](../.github/workflows/promote-engineering-guidelines.yml) workflow then scans recently merged guideline staging PRs every 15 minutes, validates their machine-readable source metadata, and creates the matching production PR automatically.
+**One manual APPLY run creates both PRs.** Use `operation=APPLY` with `phase=staging`. Review and merge the **staging PR first**. The main PR is already open, but its staging-content check may initially fail until staging merges; rerun that check after merging staging and before merging main. Neither PR is automatically merged.
 
-- No separate production workflow trigger is required for newly generated staging PRs.
-- Production PRs are built independently from the production branch and contain **only selected guideline files**, not unrelated staging commits.
+- Each production PR is based on the production branch, contains only selected guideline files, and requires normal review and approval.
+- The independent [Promote Merged Engineering Guidelines](../.github/workflows/promote-engineering-guidelines.yml) scheduler remains a recovery mechanism for previous/partial staging rollouts; do not expect it to create a second production PR for the current one-run flow.
+- If staging is already up to date, rerunning APPLY checks for an existing production PR and reconciles any missing production guideline changes.
+- A production PR must have the latest production base before the documentation-only exception can pass; if main moves, update/recreate the PR through a reviewed process, rather than bypassing validation.
 - The GitHub App must retain cross-repository pull request and contents permissions.
-- Both staging and production PRs still require manual review and merge; no auto-merge is performed.
-- Scheduled GitHub Actions can run later than the 15-minute interval. Use the promotion workflow's manual **Run workflow** button to reconcile sooner if needed.
-- Historical staging PRs created before this version have no metadata marker and **will not** be automatically promoted. Use the original manual production phase for those.
-- A failed validation blocks the production PR and reports the affected repository; it never bypasses safety checks.
-- Check existing org-level main branch rules (including commit-in-staging checks) before merging production PRs; a clean production-based docs commit may need an approved policy exception if your rules require the exact SHA to appear in staging.
+- Older staging PRs without rollout metadata are not eligible for automated promotion; use the manual production phase where necessary.
 
 ## Bulk rollout and PR checks
 
 The `Sync Engineering Guidelines` workflow now invokes the dual-PR orchestrator. With `APPLY` and `phase=staging`, a single run opens the staging and main PRs for review, but **does not merge either PR**. Merge staging first, followed by main.
 
-Application-level PR checks remain enabled. The centralized lightweight checks (title/ticket, test-file validation, staging commit validation, and source-branch verification) use GitHub-hosted runners; Java coverage reserves `checks-runners` for a PR with relevant Java or build changes. A guideline production PR gets a narrowly scoped alternative to SHA-in-staging verification **only when every changed file is under `docs/engineering-guidelines/` and its bytes exactly match staging**. It is otherwise checked normally.
+Application-level PR checks remain enabled. The centralized lightweight checks (title/ticket, test-file validation, staging commit validation, and source-branch verification) use GitHub-hosted runners; Java coverage reserves `checks-runners` for a PR with relevant Java or build changes. A guideline production PR gets a narrowly scoped alternative to SHA-in-staging verification **only when the source includes the latest production base, every changed file is under `docs/engineering-guidelines/`, and its bytes exactly match staging**. It is otherwise checked normally.
 
 When the main PR is created before the staging PR has merged, its staging-content verification may initially fail. After merging staging, rerun that check on the main PR before merging main. Do not temporarily disable organization rulesets for bulk rollout. Existing branch approvals and review requirements continue to apply.
 
@@ -64,7 +62,7 @@ When the main PR is created before the staging PR has merged, its staging-conten
 
 - Backend/frontend detection follows the existing AGENTS updater's build-file heuristics. Unknown repositories are skipped; use `single` for an explicitly named repo with a recognizable build file.
 - Workflow creates PRs but never merges them. It keeps all normal review, CI, branch protection, and CODEOWNER checks.
-- Pre-existing rollout branches without an identifiable PR are blocked rather than overwritten. Production requires a matching merged staging PR, verifies canonical content on staging, and creates a clean production-based branch with only selected document edits. **Preserve the rollout branch** through production.
+- Pre-existing rollout branches without an identifiable PR are blocked rather than overwritten. Production requires the selected canonical content to exist either on the existing staging branch or on a verifiable guideline staging PR; it creates a clean production-based branch with only selected document edits. Merge staging before production. **Preserve the rollout branch** through production.
 - Only production/default branches `main`, `master`, or `aws-velocis-main` and a corresponding staging branch are supported.
 - Checked-in source files are read from this workflow repository. Optional one-off GitHub attachments are fetched at run time with HTTPS and 1 MiB UTF-8 limits. Inaccessible sources fail before repository writes.
 - Try `target=single,operation=DRY_RUN` first, then `APPLY,phase=staging` before organization-wide deployment.
