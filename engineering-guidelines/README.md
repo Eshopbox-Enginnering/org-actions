@@ -52,6 +52,14 @@ The `docs/engineering-guidelines/` directory is the destination for reference do
 - A failed validation blocks the production PR and reports the affected repository; it never bypasses safety checks.
 - Check existing org-level main branch rules (including commit-in-staging checks) before merging production PRs; a clean production-based docs commit may need an approved policy exception if your rules require the exact SHA to appear in staging.
 
+## Bulk rollout and PR checks
+
+The `Sync Engineering Guidelines` workflow now invokes the dual-PR orchestrator. With `APPLY` and `phase=staging`, a single run opens the staging and main PRs for review, but **does not merge either PR**. Merge staging first, followed by main.
+
+Application-level PR checks remain enabled. The centralized lightweight checks (title/ticket, test-file validation, staging commit validation, and source-branch verification) use GitHub-hosted runners; Java coverage reserves `checks-runners` for a PR with relevant Java or build changes. A guideline production PR gets a narrowly scoped alternative to SHA-in-staging verification **only when every changed file is under `docs/engineering-guidelines/` and its bytes exactly match staging**. It is otherwise checked normally.
+
+When the main PR is created before the staging PR has merged, its staging-content verification may initially fail. After merging staging, rerun that check on the main PR before merging main. Do not temporarily disable organization rulesets for bulk rollout. Existing branch approvals and review requirements continue to apply.
+
 ## Safety and workflow limits
 
 - Backend/frontend detection follows the existing AGENTS updater's build-file heuristics. Unknown repositories are skipped; use `single` for an explicitly named repo with a recognizable build file.
