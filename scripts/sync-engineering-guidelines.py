@@ -241,14 +241,31 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                 return 'blocked'
             candidates.sort(key=lambda item: item['mergedAt'], reverse=True)
             staging_pr = candidates[0]
-            fetch_remote_branch(root, staging)
+            if allow_open_staging:
+                head_branch = staging_pr['headRefName']
+                if not cmd('git', 'ls-remote', '--heads', 'origin', head_branch,
+                           cwd=root, check=False):
+                    return 'blocked'
+                fetch_remote_branch(root, staging)
+                fetch_remote_branch(root, head_branch)
+                base = cmd('git', 'merge-base', f'origin/{staging}',
+                           f'origin/{head_branch}', cwd=root)
+                changes = set(cmd('git', 'diff', '--name-only', base,
+                                  f'origin/{head_branch}', cwd=root).splitlines())
+                if changes != {entry['destination'] for entry in entries}:
+                    print(f'{name}: BLOCK staging PR includes unexpected file changes')
+                    return 'blocked'
+                check_ref = f'origin/{head_branch}'
+            else:
+                fetch_remote_branch(root, staging)
+                check_ref = f'origin/{staging}'
             for entry in entries:
                 destination = entry['destination']
                 staged = subprocess.run(
-                    ('git', 'show', f'origin/{staging}:{destination}'),
+                    ('git', 'show', f'{check_ref}:{destination}'),
                     cwd=root, capture_output=True)
                 if staged.returncode or staged.stdout != contents[entry['source_url']]:
-                    print(f'{name}: BLOCK staging document differs from the selected canonical version: {destination}')
+                    print(f'{name}: BLOCK staged guideline content differs: {destination}')
                     return 'blocked'
             branch = f'org-action/guidelines-prod-{kind}-{digest}-pr{staging_pr["number"]}'
             # Idempotency across changes to the main branch: lookup by merged
