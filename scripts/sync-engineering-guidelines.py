@@ -273,6 +273,8 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
         existing_pr = find_pr(full, target_base, branch)
         if existing_pr:
             print(f"{name}: EXISTING OPEN PR {existing_pr['url']}")
+            if phase == 'staging' and stage_pr_holder is not None:
+                stage_pr_holder['number'] = existing_pr['number']
             return 'skipped_open_pr' if promotion_pr is not None else 'skipped'
         # Reusing an old historical branch would hide drift. A new staging
         # base SHA normally yields a fresh branch; fail closed if it does not.
@@ -340,6 +342,8 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                   '--head', branch, '--title', f'docs to {"Staging" if phase == "staging" else "Main"}: Sync engineering guidelines (#{issue})',
                   '--body', body)
         print(f'{name}: CREATED PR {url}')
+        if phase == 'staging' and stage_pr_holder is not None:
+            stage_pr_holder['number'] = int(url.rstrip('/').rsplit('/', 1)[-1])
         return 'created'
 
 
