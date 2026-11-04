@@ -68,6 +68,13 @@ def main():
                     allow_open_staging=True)
                 result = ('both_prs_ready' if second in
                           ('created', 'skipped_open_pr', 'already_synced') else 'blocked')
+            elif holder.get('staging_current'):
+                second = sync.process(
+                    repo, args.org, selected, contents, 'production',
+                    'APPLY', args.issue, allow_synced_staging=True)
+                result = ('both_branches_synced_or_pr_ready' if second in
+                          ('created', 'skipped_open_pr', 'already_synced')
+                          else 'blocked')
             else:
                 result = first
         except Exception as error:
