@@ -114,6 +114,51 @@ class EngineeringGuidelineSyncTests(unittest.TestCase):
                         'Eshopbox-Enginnering/inventory-engine', 'staging',
                         'org-action/guidelines-backend-abcd12345678-', 145), [])
 
+    def test_existing_production_pr_matches_staging_pr_branch(self):
+        from unittest.mock import patch
+        with patch.object(sync, 'gh_json', return_value=[
+            {'number': 77, 'headRefName':
+             'org-action/guidelines-prod-backend-abcdef012345-pr55',
+             'url': 'https://github.com/org/repo/pull/77'}
+        ]):
+            result = sync.find_existing_production_guideline_pr(
+                'org/repo', 'main', 'backend', 'abcdef012345')
+        self.assertEqual(result['number'], 77)
+
+    def test_existing_production_pr_matches_catchup_branch(self):
+        from unittest.mock import patch
+        with patch.object(sync, 'gh_json', return_value=[
+            {'number': 78, 'headRefName':
+             'org-action/guidelines-prod-backend-abcdef012345-synced',
+             'url': 'https://github.com/org/repo/pull/78'}
+        ]):
+            result = sync.find_existing_production_guideline_pr(
+                'org/repo', 'main', 'backend', 'abcdef012345')
+        self.assertEqual(result['number'], 78)
+
+    def test_different_guidelines_dont_reuse_production_pr(self):
+        from unittest.mock import patch
+        with patch.object(sync, 'gh_json', return_value=[
+            {'number': 79, 'headRefName':
+             'org-action/guidelines-prod-backend-deadbeef1234-pr44',
+             'url': 'https://github.com/org/repo/pull/79'}
+        ]):
+            result = sync.find_existing_production_guideline_pr(
+                'org/repo', 'main', 'backend', 'abcdef012345')
+        self.assertIsNone(result)
+
+    def test_duplicate_production_prs_fail_closed(self):
+        from unittest.mock import patch
+        with patch.object(sync, 'gh_json', return_value=[
+            {'number': 1, 'headRefName':
+             'org-action/guidelines-prod-backend-abcdef012345-pr55'},
+            {'number': 2, 'headRefName':
+             'org-action/guidelines-prod-backend-abcdef012345-synced'}
+        ]):
+            with self.assertRaises(ValueError):
+                sync.find_existing_production_guideline_pr(
+                    'org/repo', 'main', 'backend', 'abcdef012345')
+
     def test_reject_symlink_destination(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
