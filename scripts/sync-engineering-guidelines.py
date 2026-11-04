@@ -165,7 +165,7 @@ def preview(before, after, dest):
     return delta or [f'Byte-only difference for {dest}: {len(before)} -> {len(after)} bytes\n']
 
 
-def process(repo, org, selected, contents, phase, operation, issue):
+def process(repo, org, selected, contents, phase, operation, issue, promotion_pr=None):
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
     if production not in ALLOWED_BRANCHES:
@@ -211,25 +211,23 @@ def process(repo, org, selected, contents, phase, operation, issue):
         )).hexdigest()[:12]
         branch_prefix = f'org-action/guidelines-{kind}-{digest}-'
         target_base = staging if phase == 'staging' else production
+        base_sha = cmd('git', 'rev-parse', 'HEAD', cwd=root)[:10]
         if phase == 'staging':
-            # Include the staging base revision: a later drift on the same
-            # central file creates a new branch and a new reviewable PR.
-            staging_base = cmd('git', 'rev-parse', 'HEAD', cwd=root)[:10]
-            branch = branch_prefix + staging_base
+            branch = branch_prefix + base_sha
         else:
+            # A production PR must be based on production, not on the
+            # staging rollout branch (which can include unrelated commits).
             merged = gh_json('pr', 'list', '--repo', full, '--base', staging,
                              '--state', 'merged', '--json',
-                             'headRefName,mergedAt,url', '--limit', '100')
+                             'number,headRefName,mergedAt,url', '--limit', '100')
             candidates = [item for item in merged
-                          if item['headRefName'].startswith(branch_prefix)]
+                          if item['headRefName'].startswith(branch_prefix)
+                          and (promotion_pr is None or item['number'] == promotion_pr)]
             if not candidates:
-                print(f'{name}: BLOCK no merged staging PR for current guideline content')
+                print(f'{name}: BLOCK matching staging PR has not been merged')
                 return 'blocked'
             candidates.sort(key=lambda item: item['mergedAt'], reverse=True)
             staging_pr = candidates[0]
-            branch = staging_pr['headRefName']
-            # Verify every selected file is actually staged with current canonical
-            # bytes before producing a PR against production.
             fetch_remote_branch(root, staging)
             for entry in entries:
                 destination = entry['destination']
@@ -237,30 +235,9 @@ def process(repo, org, selected, contents, phase, operation, issue):
                     ('git', 'show', f'origin/{staging}:{destination}'),
                     cwd=root, capture_output=True)
                 if staged.returncode or staged.stdout != contents[entry['source_url']]:
-                    print(f'{name}: BLOCK staging file is missing or differs from canonical: {destination}')
+                    print(f'{name}: BLOCK staging document differs from the selected canonical version: {destination}')
                     return 'blocked'
-            # Production head already exists, but must represent all desired edits.
-            branch_exists = bool(cmd('git', 'ls-remote', '--heads', 'origin', branch, cwd=root, check=False))
-            if not branch_exists:
-                print(f'{name}: BLOCK staged source branch not available: {branch}')
-                return 'blocked'
-            fetch_remote_branch(root, branch)
-            for entry in entries:
-                destination = entry['destination']
-                head = subprocess.run(('git', 'show', f'origin/{branch}:{destination}'),
-                                      cwd=root, capture_output=True)
-                if head.returncode or head.stdout != contents[entry['source_url']]:
-                    print(f'{name}: BLOCK production PR head does not contain canonical file: {destination}')
-                    return 'blocked'
-            # A staging-origin branch may contain unrelated commits. Refuse
-            # production rollout if the PR would include anything else.
-            changed = cmd('git', 'diff', '--name-only', f'origin/{production}',
-                          f'origin/{branch}', cwd=root).splitlines()
-            allowed = {entry['destination'] for entry in entries}
-            if any(name not in allowed for name in changed):
-                print(f'{name}: BLOCK production PR would include unrelated files: '
-                      + ', '.join(name for name in changed if name not in allowed))
-                return 'blocked'
+            branch = f'org-action/guidelines-prod-{kind}-{digest}-{base_sha}'
         existing_pr = find_pr(full, target_base, branch)
         if existing_pr:
             print(f"{name}: EXISTING OPEN PR {existing_pr['url']}")
@@ -272,29 +249,37 @@ def process(repo, org, selected, contents, phase, operation, issue):
             print(f'{name}: BLOCK historical PR already used this exact branch: {branch}')
             return 'blocked'
 
-        branch_exists = bool(cmd('git', 'ls-remote', '--heads', 'origin', branch, cwd=root, check=False))
-        if phase == 'staging':
-            if branch_exists:
-                print(f'{name}: BLOCK existing branch without PR needs manual inspection: {branch}')
-                return 'blocked'
-            cmd('git', 'checkout', '-b', branch, cwd=root)
-            for dest, _, _, data in edits:
-                path = root / dest
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(data)
-                cmd('git', 'add', '--', dest, cwd=root)
-            cmd('git', '-c', 'user.name=eshopbox-guidelines[bot]',
-                '-c', 'user.email=eshopbox-guidelines[bot]@users.noreply.github.com',
-                'commit', '-m', f'docs: sync {kind} engineering guidelines', cwd=root)
-            cmd('git', 'push', '-u', 'origin', branch, cwd=root)
-        elif not branch_exists:
-            print(f'{name}: BLOCK staged branch was deleted; restore it from staging PR before production')
+        if cmd('git', 'ls-remote', '--heads', 'origin', branch, cwd=root, check=False):
+            print(f'{name}: BLOCK existing rollout branch without open PR needs manual inspection: {branch}')
             return 'blocked'
+        cmd('git', 'checkout', '-b', branch, cwd=root)
+        for dest, _, _, data in edits:
+            path = root / dest
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            cmd('git', 'add', '--', dest, cwd=root)
+        cmd('git', '-c', 'user.name=eshopbox-guidelines[bot]',
+            '-c', 'user.email=eshopbox-guidelines[bot]@users.noreply.github.com',
+            'commit', '-m', f'docs: sync {kind} engineering guidelines', cwd=root)
+        cmd('git', 'push', '-u', 'origin', branch, cwd=root)
 
         body = ('Central Backlog: https://github.com/' + org + '/Central-Backlog/issues/' + issue
                 + '\n\nCentral guideline sync, type: ' + kind + ', phase: ' + phase + '.\n\n'
                 + '\n'.join(f'- {action}: `{dest}` (SHA256 {sha})' for dest, action, sha, _ in edits)
                 + '\n\nOnly selected docs/engineering-guidelines files may change. Manual review and merge required.')
+        if phase == 'staging':
+            details = {
+                'file_id': next((entry['id'] for entry in entries), 'all') if len(entries) == 1 else 'all',
+                'source_url': entries[0]['source_url'] if len(entries) == 1 and entries[0]['id'] == 'custom' else '',
+                'destination': entries[0]['destination'] if len(entries) == 1 and entries[0]['id'] == 'custom' else '',
+                'source_scope': kind,
+                'issue': issue,
+                'kind': kind,
+                'digest': digest,
+            }
+            body += '\\n\\n<!-- eshopbox-guideline-sync:v1 ' + json.dumps(details, sort_keys=True) + ' -->'
+        else:
+            body += f'\\n\\nStaging PR: {staging_pr["url"]}'
         url = cmd('gh', 'pr', 'create', '--repo', full, '--base', target_base,
                   '--head', branch, '--title', f'docs to {"Staging" if phase == "staging" else "Main"}: Sync engineering guidelines (#{issue})',
                   '--body', body)
