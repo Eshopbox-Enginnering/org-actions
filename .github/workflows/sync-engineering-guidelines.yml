@@ -18,7 +18,7 @@ on:
         type: string
         required: false
       phase:
-        description: Staging first; production only after staging PR merged
+        description: Staging APPLY creates both staging and main PRs for review
         type: choice
         required: true
         options: [staging, production]
@@ -103,7 +103,7 @@ jobs:
           ISSUE: ${{ inputs.central_backlog_issue }}
         run: |
           set -euo pipefail
-          python3 scripts/sync-engineering-guidelines.py \
+          python3 scripts/sync-guidelines-dual-pr.py \
             --operation "$OPERATION" --target "$TARGET" \
             --repository "$REPOSITORY" --phase "$PHASE" \
             --file-id "$FILE_ID" --source-url "$SOURCE_URL" \
