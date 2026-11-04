@@ -85,9 +85,18 @@ jobs:
           # Allow it only after exactly those docs are already in staging.
           if [[ "${SOURCE:-}" == org-action/guidelines-prod-* ]]; then
             git fetch origin "$BASE" --quiet
+            # Verify the prospective merge, not just the source branch.
+            # If main moved since PR creation, merging can combine edits
+            # into content that differs from staging. Fail closed until the
+            # production branch is updated from the latest main.
+            if ! git merge-base --is-ancestor "origin/$BASE" "origin/$SOURCE"; then
+              echo "Guideline production PR is behind $BASE; normal commit check applies."
+              docs_only=false
+            else
+              docs_only=true
+            fi
             mapfile -t PR_FILES < <(git diff --name-only "origin/$BASE...origin/$SOURCE")
             if [[ "${#PR_FILES[@]}" -gt 0 ]]; then
-              docs_only=true
               for path in "${PR_FILES[@]}"; do
                 if [[ ! "$path" =~ ^docs/engineering-guidelines/[A-Za-z0-9_.-]+\.md$ ]] ||
                    ! git cat-file -e "origin/$COMPARE:$path" 2>/dev/null ||
