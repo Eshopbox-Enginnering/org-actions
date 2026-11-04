@@ -88,7 +88,7 @@ def rollout(repo, org, selected, contents, issue):
     if first == "blocked":
         return "blocked"
     if holder.get("number"):
-        kind = next(iter(selected)) if len(selected) == 1 else None
+        kind = next((key for key, value in selected.items() if value), None)
         # Read staging PR target (supports staging and aws-velocis-staging).
         staging_pr = sync.gh_json(
             "pr", "view", str(holder["number"]), "--repo", full,
@@ -97,14 +97,13 @@ def rollout(repo, org, selected, contents, issue):
         # Identify the repository type by matching its selected guideline paths.
         # The rollout PR has already been restricted to this catalog by process().
         entries = selected.get(kind, []) if kind else []
-        if not entries:
-            with tempfile.TemporaryDirectory() as temp:
-                sync.cmd("gh", "repo", "clone", full, temp, "--", "--depth=1")
-                entries = selected.get(sync.detect_type(Path(temp)), [])
         merge_guideline_pr(full, holder["number"], staging_target,
                            entries, contents)
     elif not holder.get("staging_current"):
         return first
+    else:
+        kind = next((key for key, value in selected.items() if value), None)
+        entries = selected.get(kind, []) if kind else []
 
     # Recheck main only after staging is confirmed merged.
     prod_holder = {}
