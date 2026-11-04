@@ -169,16 +169,16 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
     if production not in ALLOWED_BRANCHES:
-        print(f'{name}: SKIP unsupported production branch {production}')
-        return 'skipped'
+        print(f'{name}: BLOCK unsupported production branch {production}')
+        return 'blocked' if promotion_pr is not None else 'skipped'
     with tempfile.TemporaryDirectory(prefix='guidelines-') as temp:
         root = Path(temp) / name
         full = f'{org}/{name}'
         cmd('gh', 'repo', 'clone', full, str(root), '--', '--depth=1', '--branch', production)
         kind = detect_type(root)
         if kind not in selected or not selected[kind]:
-            print(f'{name}: SKIP type={kind}, no matching selected guidelines')
-            return 'skipped'
+            print(f'{name}: BLOCK type={kind}, no matching selected guidelines')
+            return 'blocked' if promotion_pr is not None else 'skipped'
         entries = selected[kind]
         staging = find_staging(root, production)
         if not staging:
@@ -202,7 +202,7 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                     print(f'... {len(diff) - 120} more diff lines omitted')
             return 'planned' if edits else 'skipped'
         if not edits:
-            return 'skipped'
+            return 'already_synced' if promotion_pr is not None else 'skipped'
 
          # Stable branch across staging + production runs, including retries.
         digest = hashlib.sha256(b''.join(
@@ -237,11 +237,13 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
                 if staged.returncode or staged.stdout != contents[entry['source_url']]:
                     print(f'{name}: BLOCK staging document differs from the selected canonical version: {destination}')
                     return 'blocked'
-            branch = f'org-action/guidelines-prod-{kind}-{digest}-{base_sha}'
+            branch = f'org-action/guidelines-prod-{kind}-{digest}-pr{staging_pr["number"]}'
+            # Idempotency across changes to the main branch: lookup by merged
+            # staging PR identity rather than the moving production SHA.
         existing_pr = find_pr(full, target_base, branch)
         if existing_pr:
             print(f"{name}: EXISTING OPEN PR {existing_pr['url']}")
-            return 'skipped'
+            return 'skipped_open_pr' if promotion_pr is not None else 'skipped'
         # Reusing an old historical branch would hide drift. A new staging
         # base SHA normally yields a fresh branch; fail closed if it does not.
         historical_pr = find_pr(full, target_base, branch, state='all')
@@ -249,19 +251,43 @@ def process(repo, org, selected, contents, phase, operation, issue, promotion_pr
             print(f'{name}: BLOCK historical PR already used this exact branch: {branch}')
             return 'blocked'
 
-        if cmd('git', 'ls-remote', '--heads', 'origin', branch, cwd=root, check=False):
-            print(f'{name}: BLOCK existing rollout branch without open PR needs manual inspection: {branch}')
-            return 'blocked'
-        cmd('git', 'checkout', '-b', branch, cwd=root)
-        for dest, _, _, data in edits:
-            path = root / dest
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(data)
-            cmd('git', 'add', '--', dest, cwd=root)
-        cmd('git', '-c', 'user.name=eshopbox-guidelines[bot]',
-            '-c', 'user.email=eshopbox-guidelines[bot]@users.noreply.github.com',
-            'commit', '-m', f'docs: sync {kind} engineering guidelines', cwd=root)
-        cmd('git', 'push', '-u', 'origin', branch, cwd=root)
+        branch_exists = bool(cmd('git', 'ls-remote', '--heads', 'origin', branch,
+                                 cwd=root, check=False))
+        if branch_exists:
+            if phase != 'production':
+                print(f'{name}: BLOCK existing staging branch without PR: {branch}')
+                return 'blocked'
+            fetch_remote_branch(root, branch)
+            # An interrupted production PR creation is safe to resume only
+            # when the branch is exactly the production-based intended diff.
+            base = cmd('git', 'merge-base', f'origin/{production}',
+                       f'origin/{branch}', cwd=root)
+            diff_names = cmd('git', 'diff', '--name-only', base,
+                             f'origin/{branch}', cwd=root).splitlines()
+            if set(diff_names) != {item[0] for item in edits}:
+                print(f'{name}: BLOCK existing production branch differs in file scope')
+                return 'blocked'
+            for dest, _, _, data in edits:
+                actual = subprocess.run(('git', 'show', f'origin/{branch}:{dest}'),
+                                        cwd=root, capture_output=True)
+                if actual.returncode or actual.stdout != data:
+                    print(f'{name}: BLOCK existing production branch content mismatch: {dest}')
+                    return 'blocked'
+            if cmd('git', 'rev-list', '--count', f'{base}..origin/{branch}', cwd=root) != '1':
+                print(f'{name}: BLOCK existing production branch has unexpected commits')
+                return 'blocked'
+            print(f'{name}: RESUME verified production branch {branch}')
+        else:
+            cmd('git', 'checkout', '-b', branch, cwd=root)
+            for dest, _, _, data in edits:
+                path = root / dest
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+                cmd('git', 'add', '--', dest, cwd=root)
+            cmd('git', '-c', 'user.name=eshopbox-guidelines[bot]',
+                '-c', 'user.email=eshopbox-guidelines[bot]@users.noreply.github.com',
+                'commit', '-m', f'docs: sync {kind} engineering guidelines', cwd=root)
+            cmd('git', 'push', '-u', 'origin', branch, cwd=root)
 
         body = ('Central Backlog: https://github.com/' + org + '/Central-Backlog/issues/' + issue
                 + '\n\nCentral guideline sync, type: ' + kind + ', phase: ' + phase + '.\n\n'
@@ -324,6 +350,9 @@ def main():
     counts = {}
     for repo in repos:
         if repo.get('isArchived') or repo.get('isFork'):
+            if args.promotion_pr is not None:
+                counts['blocked'] = counts.get('blocked', 0) + 1
+                print(f"{repo['name']}: BLOCK archived or forked during exact promotion")
             continue
         try:
             outcome = process(repo, args.org, selected, contents, args.phase,
@@ -333,7 +362,10 @@ def main():
             print(f"{repo['name']}: ERROR {error}", file=sys.stderr)
         counts[outcome] = counts.get(outcome, 0) + 1
     print('SUMMARY ' + json.dumps(counts, sort_keys=True))
-    if counts.get('error') or counts.get('blocked'):
+    if counts.get('error') or counts.get('blocked') or (
+            args.promotion_pr is not None and not
+            (counts.get('created') or counts.get('already_synced') or
+             counts.get('skipped_open_pr'))):
         sys.exit(1)
 
 
