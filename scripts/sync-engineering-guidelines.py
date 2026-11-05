@@ -356,7 +356,10 @@ def process(repo, org, selected, contents, phase, operation, issue,
                     if stage_pr_holder is not None:
                         stage_pr_holder['number'] = prior['number']
                     return 'skipped_open_pr'
-            branch = (f'org-action/guidelines-prod-{kind}-{digest}-synced'
+            # The production base can drift after a completed rollout.
+            # A base-specific catch-up branch is safe to retry, while a
+            # new base SHA yields a fresh PR for later reconciliation.
+            branch = (f'org-action/guidelines-prod-{kind}-{digest}-synced-{base_sha}'
                       if allow_synced_staging else
                       f'org-action/guidelines-prod-{kind}-{digest}-pr{staging_pr["number"]}')
             # Idempotency across changes to the main branch: lookup by merged
