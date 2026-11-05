@@ -24,7 +24,6 @@ CONTENT_PATH="$GITHUB_WORKSPACE/$CONTENT_FILE"
 # ============================================================
 
 total=0
-single_pr_created=0
 staging_merged=0
 production_merged=0
 conflict_resolved=0
@@ -608,9 +607,8 @@ This branch was created from $staging_branch and only updates AGENTS.md."); then
 #
 # 0  dry run success
 # 2  skipped
-# 10 bulk completed
-# 11 single PR created
-# 12 bulk completed with conflict-resolution path
+# 10 staging and production merged
+# 12 staging and production merged after conflict resolution
 # 1  failure
 # ============================================================
 
@@ -686,19 +684,16 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Bulk production safety
+  # Production branch safety for every target
   # ----------------------------------------------------------
 
-  if [ "$TARGET" != "single" ]; then
+  if ! is_supported_production_branch "$production_branch"; then
 
-    if ! is_supported_production_branch "$production_branch"; then
-
-      echo "SKIP: Unsupported production branch for bulk rollout."
+      echo "SKIP: Unsupported production branch for automated rollout."
       echo "Default branch: $production_branch"
       echo "Allowed: main, master, aws-velocis-main"
 
       return 2
-    fi
   fi
 
 
@@ -776,22 +771,20 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Bulk requires staging
+  # Every target requires staging
   # ----------------------------------------------------------
 
-  if [ "$TARGET" != "single" ]; then
+  if ! staging_branch=$(find_staging_branch "$production_branch"); then
 
-    if ! staging_branch=$(find_staging_branch "$production_branch"); then
+    echo "SKIP: No supported staging branch found."
 
-      echo "SKIP: No supported staging branch found."
+    cleanup_repo "$workdir"
 
-      cleanup_repo "$workdir"
-
-      return 2
-    fi
+    return 2
+  fi
 
 
-    echo "Production branch: $production_branch"
+  echo "Production branch: $production_branch"
     echo "Staging branch   : $staging_branch"
 
 
@@ -804,7 +797,6 @@ process_repo() {
 
       return 2
     fi
-  fi
 
 
   # ==========================================================
@@ -857,37 +849,6 @@ process_repo() {
 
     echo "Existing rollout branch found:"
     echo "$branch"
-
-
-    # --------------------------------------------------------
-    # Single
-    # --------------------------------------------------------
-
-    if [ "$TARGET" = "single" ]; then
-
-      production_pr=$(find_open_pr_by_base \
-        "$repo" \
-        "$production_branch" \
-        "$branch")
-
-
-      if [ -n "$production_pr" ]; then
-
-        echo "SUCCESS: Existing single-repo PR found."
-        echo "$production_pr"
-
-        cleanup_repo "$workdir"
-
-        return 11
-      fi
-
-
-      echo "FAILED: Rollout branch exists but no production PR found."
-
-      cleanup_repo "$workdir"
-
-      return 1
-    fi
 
 
     # --------------------------------------------------------
@@ -1118,9 +1079,7 @@ Only AGENTS.md is modified."
     echo "Detected type     : $detected_type"
     echo "Production branch : $production_branch"
 
-    if [ "$TARGET" != "single" ]; then
-      echo "Staging branch    : $staging_branch"
-    fi
+    echo "Staging branch    : $staging_branch"
 
     echo
     git diff -- AGENTS.md
@@ -1228,40 +1187,7 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # Single
-  # ==========================================================
-
-  if [ "$TARGET" = "single" ]; then
-
-    if ! production_pr=$(gh pr create \
-      --repo "$ORG/$repo" \
-      --base "$production_branch" \
-      --head "$branch" \
-      --title "Codex to Main: Update AGENTS.md organization guidance" \
-      --body "$pr_body"); then
-
-      echo "FAILED: PR creation failed."
-
-      cleanup_repo "$workdir"
-
-      return 1
-    fi
-
-
-    echo
-    echo "SUCCESS: Single repository PR created."
-    echo "$production_pr"
-    echo "Manual review/merge required."
-
-
-    cleanup_repo "$workdir"
-
-    return 11
-  fi
-
-
-  # ==========================================================
-  # Bulk staging
+  # Staging
   # ==========================================================
 
   echo "Creating staging PR..."
@@ -1312,7 +1238,7 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # Bulk production
+  # Production
   # ==========================================================
 
   echo "Creating production PR..."
@@ -1416,8 +1342,15 @@ if [ "$TARGET" = "single" ]; then
       skipped=$((skipped + 1))
       ;;
 
-    11)
-      single_pr_created=$((single_pr_created + 1))
+    10)
+      staging_merged=$((staging_merged + 1))
+      production_merged=$((production_merged + 1))
+      ;;
+
+    12)
+      staging_merged=$((staging_merged + 1))
+      production_merged=$((production_merged + 1))
+      conflict_resolved=$((conflict_resolved + 1))
       ;;
 
     *)
@@ -1509,7 +1442,6 @@ if [ "$OPERATION" = "DRY_RUN" ]; then
 
 else
 
-  echo "Single PRs created    : $single_pr_created"
   echo "Staging merged        : $staging_merged"
   echo "Production merged     : $production_merged"
   echo "Conflicts resolved    : $conflict_resolved"
