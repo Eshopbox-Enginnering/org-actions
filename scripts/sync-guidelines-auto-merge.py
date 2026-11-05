@@ -21,6 +21,30 @@ sync = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sync)
 
 
+def verify_merged_document_commit(root, merge_sha, verified_base,
+                                  verified_head, expected, entries, contents):
+    """Validate the exact resulting merge tree before reporting success."""
+    sync.cmd("git", "fetch", "origin", merge_sha, cwd=root)
+    parents = sync.cmd("git", "rev-list", "--parents", "-n", "1",
+                       merge_sha, cwd=root).split()
+    if len(parents) != 3 or parents[1] != verified_base or parents[2] != verified_head:
+        raise ValueError("Merge commit parents differ from inspected base/head; "
+                         "a concurrent branch update may have changed the merge")
+    changed = set(sync.cmd("git", "diff", "--name-only", parents[1],
+                           merge_sha, cwd=root).splitlines())
+    if changed != expected:
+        raise ValueError(
+            "Merged PR changed unexpected files: "
+            f"actual={sorted(changed)} expected={sorted(expected)}")
+    for entry in entries:
+        destination = entry["destination"]
+        result = subprocess.run(
+            ("git", "show", f"{merge_sha}:{destination}"),
+            cwd=root, capture_output=True)
+        if result.returncode or result.stdout != contents[entry["source_url"]]:
+            raise ValueError(f"Merged PR has noncanonical document: {destination}")
+
+
 def merge_guideline_pr(full, number, target, entries, contents):
     """Verify the PR's effective patch, its base, and canonical bytes before merge."""
     pr = sync.gh_json("pr", "view", str(number), "--repo", full,
@@ -28,7 +52,7 @@ def merge_guideline_pr(full, number, target, entries, contents):
     if pr["baseRefName"] != target:
         raise ValueError(f"{full} PR #{number}: unexpected base")
     if pr.get("mergedAt"):
-        return "already_merged"
+        raise ValueError(f"{full} PR #{number}: merged before validation")
     if pr["state"] != "OPEN":
         raise ValueError(f"{full} PR #{number}: not open")
     head = pr["headRefName"]
@@ -48,6 +72,7 @@ def merge_guideline_pr(full, number, target, entries, contents):
         if ancestor.returncode:
             raise ValueError(f"{full} PR #{number}: head is behind {target}")
         verified_head = sync.cmd("git", "rev-parse", f"origin/{head}", cwd=root)
+        verified_base = sync.cmd("git", "rev-parse", f"origin/{target}", cwd=root)
         changes = set(sync.cmd(
             "git", "diff", "--name-only", f"origin/{target}..origin/{head}",
             cwd=root).splitlines())
@@ -69,15 +94,25 @@ def merge_guideline_pr(full, number, target, entries, contents):
             raise ValueError(
                 f"{full} PR #{number}: changed files {sorted(changes)} "
                 f"do not match required {sorted(expected)}")
-    # Matches the existing organization AGENTS updater's controlled admin
-    # merge. This bypasses review/check requirements; restrict to exact
-    # canonical guideline files and refuse stale/unexpected diffs above.
-    sync.cmd("gh", "pr", "merge", str(number), "--repo", full,
-             "--merge", "--admin", "--match-head-commit", verified_head)
-    merged = sync.gh_json("pr", "view", str(number), "--repo", full,
-                          "--json", "mergedAt")
-    if not merged.get("mergedAt"):
-        raise ValueError(f"{full} PR #{number}: merge not confirmed")
+        # Re-read the live target just before the administrative merge.
+        # GitHub's --match-head-commit does not constrain the base branch.
+        latest_base = sync.cmd(
+            "git", "ls-remote", "origin", f"refs/heads/{target}",
+            cwd=root).split()
+        if len(latest_base) != 2 or latest_base[0] != verified_base:
+            raise ValueError(
+                f"{full} PR #{number}: {target} advanced during validation")
+
+        # Matches update-agents.sh; the head is pinned against late pushes.
+        sync.cmd("gh", "pr", "merge", str(number), "--repo", full,
+                 "--merge", "--admin", "--match-head-commit", verified_head)
+        merged = sync.gh_json("pr", "view", str(number), "--repo", full,
+                              "--json", "mergedAt,mergeCommit")
+        if not merged.get("mergedAt") or not (merged.get("mergeCommit") or {}).get("oid"):
+            raise ValueError(f"{full} PR #{number}: merge not confirmed")
+        verify_merged_document_commit(
+            root, merged["mergeCommit"]["oid"], verified_base, verified_head,
+            expected, entries, contents)
     print(f"{full}: MERGED {target} PR #{number}")
     return "merged"
 
