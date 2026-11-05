@@ -13,7 +13,7 @@ on:
       - 'tests/test_*guideline*.py'
 
 concurrency:
-  group: engineering-guidelines-promotion
+  group: engineering-guidelines-rollout
   cancel-in-progress: false
 
 jobs:
