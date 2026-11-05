@@ -1,9 +1,6 @@
 name: Promote Merged Engineering Guidelines
 
 on:
-  schedule:
-    # Runs automatically after staging merges, generally within 15 minutes.
-    - cron: '*/15 * * * *'
   workflow_dispatch:
   pull_request:
     paths:
@@ -13,9 +10,8 @@ on:
       - 'tests/test_*guideline*.py'
 
 concurrency:
-  group: engineering-guidelines-rollout
+  group: ${{ github.event_name == 'pull_request' && format('engineering-guidelines-pr-test-{0}', github.run_id) || 'engineering-guidelines-rollout' }}
   cancel-in-progress: false
-  queue: max
 
 jobs:
   test:
