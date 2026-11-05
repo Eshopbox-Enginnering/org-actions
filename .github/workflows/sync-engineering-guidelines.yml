@@ -53,7 +53,6 @@ on:
 concurrency:
   group: engineering-guidelines-rollout
   cancel-in-progress: false
-  queue: max
 
 jobs:
   sync:
