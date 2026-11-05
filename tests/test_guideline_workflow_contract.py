@@ -87,7 +87,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
     def test_repeat_production_rollouts_use_current_main_base(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
         self.assertIn("-synced-{base_sha}", source)
-        self.assertIn("synced(?:-[a-f0-9]{10})?", source)
+        self.assertIn("synced(?:-[a-f0-9]{{10}})?", source)
 
     def test_promotion_and_sync_share_exclusive_lock(self):
         for path in (".github/workflows/sync-engineering-guidelines.yml",
