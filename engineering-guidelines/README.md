@@ -39,6 +39,30 @@ The `docs/engineering-guidelines/` directory is the destination for reference do
 
 **Why local copies instead of only central GitHub URLs?** AI tools can read a local repository file without cross-repository authentication or network/tool permissions. A remote URL in `AGENTS.md` is just a reference, not guaranteed to be fetched or obeyed. Keep the authoritative documents in `org-actions`, sync identical copies to each repository, and put a short mandatory local path reference (for example `docs/engineering-guidelines/...`) in its existing `AGENTS.md`. For occasional references, central links are fine; for rules that must be available during reviews and code generation, local copies are more reliable. Test the behavior with the AI tool used by the team.\n\n**Important:** The new Sync Engineering Guidelines workflow deliberately does not edit `AGENTS.md` or tool-specific instruction files. To activate AI discovery across all repos, perform a separate, reviewed rollout of the reference text using the existing AGENTS updater; do not silently modify these files during document sync. Agents may still fail to follow instructions, so test with a representative code review/change that requires the 401 or caching guideline.
 
+## Combined guideline + AGENTS.md rollout (recommended)
+
+The **Sync Engineering Guidelines** workflow now has an `update_agents` option (default: **true**). With `phase=staging`, the workflow first synchronizes selected guideline files through staging and production, then runs the existing **Update AGENTS.md** logic for the same repository scope. Leave it enabled when distributing new AI-facing guidelines; set it to **false** when updating guideline documents alone or using the legacy `phase=production` recovery mode.
+
+**Controlled multi-repository trial:** choose `target=selected`, leave the single `repository` field blank, and enter comma-separated repository names into `repositories` (maximum 25). Each repository is processed sequentially; if either the guideline sync or AGENTS update fails, the run stops rather than continuing to the next repo. Run `DRY_RUN` first, then `APPLY` with confirmation `APPLY` and environment approval.
+
+For example, a six-repository pilot uses:
+
+```text
+target: selected
+repositories: esb-client-portal-jobs, esb-shipping-engine-jobs, esb-product-engine-jobs, esb-product-inventory-jobs, claims-jobs-service, esb-consignment-export-service
+operation: DRY_RUN
+phase: staging
+file_id: all
+source_url: [blank]
+destination: [blank]
+source_scope: backend
+update_agents: true
+central_backlog_issue: 7218
+confirmation: [blank for DRY_RUN; APPLY for APPLY]
+```
+
+**Note:** The workflow intentionally retains separate content handlers and the existing staging → main PR/merge mechanisms. It does not create a single combined PR for both file families. `target=backend`, `frontend`, and `all` continue to work as before, but now also run the AGENTS updater afterward when enabled.
+
 ## Automated staging and production rollout
 
 **One manual APPLY run creates and merges both PRs**, in order: staging first, then production. The rollout uses the existing GitHub App and the `agents-org-production` environment authorization, followed by `gh pr merge --admin --match-head-commit` for its verified documentation-only PRs. This deliberately bypasses normal PR approval/check gates for these approved rollout PRs, matching the existing AGENTS updater. Validation checks the expected base, head SHA, exact files, Git modes and canonical document bytes before merging; the merged tree is checked afterward. If a validation or merge fails, promotion stops. The script independently checks branch freshness, exact changed-file scope, and canonical document bytes before each merge. Any mismatch or GitHub merge error stops processing that repository and fails the workflow.

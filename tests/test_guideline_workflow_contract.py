@@ -11,7 +11,10 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
 
     def test_sync_workflow_runs_dual_pr_creator(self):
         workflow = self.contents(".github/workflows/sync-engineering-guidelines.yml")
-        self.assertIn("python3 scripts/sync-guidelines-auto-merge.py", workflow)
+        self.assertIn("python3 scripts/sync-guidelines-with-agents.py", workflow)
+        entrypoint = self.contents("scripts/sync-guidelines-with-agents.py")
+        self.assertIn("scripts/sync-guidelines-auto-merge.py", entrypoint)
+        self.assertIn("scripts/update-agents.sh", entrypoint)
         self.assertNotIn("python3 scripts/sync-guidelines-dual-pr.py", workflow)
 
     def test_lightweight_checks_do_not_use_checks_runner(self):
