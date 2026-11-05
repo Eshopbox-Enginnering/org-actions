@@ -119,6 +119,12 @@ jobs:
       - name: Checkout org-actions
         uses: actions/checkout@v4
 
+      - name: Validate AGENTS legacy migration and repository detection
+        run: |
+          set -euo pipefail
+          bash -n scripts/update-agents.sh
+          python3 -m unittest discover -s tests -p 'test_agents_legacy_migration.py' -v
+
       - name: Create GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v2

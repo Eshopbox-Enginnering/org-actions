@@ -142,6 +142,11 @@ detect_repo_type() {
 
   local dir="$1"
 
+  # PHP backends may also ship a Vite frontend; composer takes priority.
+  if [ -f "$dir/composer.json" ]; then
+    echo "backend"
+    return
+  fi
 
   # Frontend
   if [ -f "$dir/angular.json" ] || \
@@ -318,7 +323,7 @@ find_open_pr_by_base() {
 # ============================================================
 
 apply_agents_content() {
-  python3 - "$CONTENT_PATH" "$CONTENT_HASH" "${1:-apply}" <<'PY'
+  python3 - "$CONTENT_PATH" "$CONTENT_HASH" "${1:-apply}" "$GITHUB_WORKSPACE/payload/agents-legacy-v1.md" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -327,6 +332,7 @@ import sys
 source = pathlib.Path(sys.argv[1]).read_bytes()
 content_hash = sys.argv[2]
 mode = sys.argv[3]
+trusted_legacy_path = pathlib.Path(sys.argv[4])
 path = pathlib.Path("AGENTS.md")
 original = path.read_bytes() if path.exists() else b""
 newline = b"\r\n" if b"\r\n" in original else b"\n"
@@ -345,13 +351,24 @@ if begins != len(matches) or ends != len(matches):
     print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
 
+# A single historic unversioned block may be replaced only when its bytes
+# match the pinned, reviewed pre-migration payload. Never trust a marker alone.
+legacy = [m for m in matches if m.group("suffix") is None]
+if legacy:
+    if len(matches) != 1 or len(legacy) != 1:
+        print("ERROR: Ambiguous legacy AGENTS.md sections; manual review required.")
+        sys.exit(1)
+    trusted_legacy = trusted_legacy_path.read_bytes()
+    if not trusted_legacy or legacy[0].group("body") != trusted_legacy:
+        print("ERROR: Legacy AGENTS.md differs from trusted historical payload.")
+        sys.exit(1)
+
 # Verify all previously managed hash sections, not just the current payload.
 seen_hashes = set()
 for match in matches:
     suffix = match.group("suffix")
     if suffix is None:
-        print("ERROR: Legacy unversioned managed section exists; manual migration required.")
-        sys.exit(1)
+        continue  # Validated against the pinned historical payload above.
     if suffix in seen_hashes:
         print("ERROR: Duplicate organization-managed content hash.")
         sys.exit(1)
@@ -391,20 +408,22 @@ if existing:
     print("Organization-managed AGENTS.md content already current.")
     sys.exit(2)
 
-# Legacy unversioned blocks can contain conflicting instructions. Do not
-# silently replace them or append potentially contradictory guidance.
-if any(m.group("suffix") is None for m in matches):
-    print("ERROR: Legacy unversioned managed section exists; manual migration required.")
-    sys.exit(1)
-
 if mode == "check":
-    print("Managed sections validated.")
+    print("Managed sections validated; legacy migration is safe." if legacy
+          else "Managed sections validated.")
     sys.exit(0)
 
-prefix = original.rstrip(b"\r\n") if original.strip() else b""
-updated = prefix + (newline + newline if prefix else b"") + managed
-path.write_bytes(updated)
-print("Appended organization-managed AGENTS.md content:", content_hash)
+if legacy:
+    # Preserve every byte outside the trusted legacy markers.
+    section = legacy[0]
+    updated = original[:section.start()] + managed + original[section.end():]
+    path.write_bytes(updated)
+    print("Migrated trusted legacy AGENTS.md content:", content_hash)
+else:
+    prefix = original.rstrip(b"\r\n") if original.strip() else b""
+    updated = prefix + (newline + newline if prefix else b"") + managed
+    path.write_bytes(updated)
+    print("Appended organization-managed AGENTS.md content:", content_hash)
 PY
   return $?
 }
