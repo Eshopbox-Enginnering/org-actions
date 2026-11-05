@@ -101,6 +101,64 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertIn("Mismatched organization-managed marker hashes", result.stdout)
             self.assertEqual(existing, (root / "AGENTS.md").read_bytes())
 
+    def test_single_target_uses_staging_before_production(self):
+        # Single and bulk must use one staging -> main implementation.
+        self.assertNotIn('Manual review/merge required.', SCRIPT)
+        self.assertNotIn('SUCCESS: Single repository PR created.', SCRIPT)
+        self.assertIn('staging_branch=$(find_staging_branch "$production_branch")', SCRIPT)
+        self.assertNotIn('if [ "$TARGET" != "single" ]; then', SCRIPT)
+
+        existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
+            '# NEW ROLLOUT', 1)[0]
+        self.assertLess(existing.index('Existing staging PR'),
+                        existing.index('Production PR'))
+        self.assertIn('production_pr=$(find_open_pr_by_base', existing)
+        self.assertIn('gh pr merge "$production_pr"', existing)
+
+        new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
+            '\\n# Header', 1)[0]
+        self.assertLess(new.index('Creating staging PR'),
+                        new.index('Creating production PR'))
+        self.assertIn('gh pr merge "$staging_pr"', new)
+        self.assertIn('gh pr merge "$production_pr"', new)
+
+    def test_single_target_reports_two_merges_and_keeps_dry_run_safe(self):
+        single = SCRIPT.rsplit('# Single', 1)[1].split('# Bulk', 1)[0]
+        self.assertIn('process_repo "$TARGET_REPO"', single)
+        self.assertIn('10)', single)
+        self.assertIn('12)', single)
+        self.assertIn('staging_merged=$((staging_merged + 1))', single)
+        self.assertIn('production_merged=$((production_merged + 1))', single)
+        self.assertNotIn('single_pr_created', SCRIPT)
+        self.assertIn('NO merge performed.', SCRIPT)
+        self.assertIn('is_supported_production_branch "$production_branch"', SCRIPT)
+
+    def test_existing_open_main_pr_is_reused_after_staging_merge(self):
+        existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
+            '# NEW ROLLOUT', 1)[0]
+        self.assertLess(existing.index('gh pr merge "$staging_pr"'),
+                        existing.index('production_pr=$(find_open_pr_by_base'))
+        self.assertLess(existing.index('production_pr=$(find_open_pr_by_base'),
+                        existing.index('gh pr merge "$production_pr"'))
+        self.assertIn('if [ -z "$production_pr" ]; then', existing)
+        self.assertIn('gh pr create', existing)
+
+    def test_retries_skip_completed_staging_and_pin_original_commit(self):
+        existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
+            '# NEW ROLLOUT', 1)[0]
+        self.assertIn('git merge-base --is-ancestor "$verified_sha"', existing)
+        self.assertIn('already merged into staging; continuing to main', existing)
+        self.assertIn('--match-head-commit "$verified_sha"', existing)
+        new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
+            '# Header', 1)[0]
+        self.assertIn('--match-head-commit "$working_commit"', new)
+        self.assertIn('git checkout -b "$branch"', new)
+
+    def test_single_apply_reports_skipped_target_as_failure(self):
+        single = SCRIPT.rsplit('# Single', 1)[1].split('# Bulk', 1)[0]
+        self.assertIn('if [ "$OPERATION" = "APPLY" ]; then', single)
+        self.assertIn('failed=$((failed + 1))', single)
+
     def test_mixed_frontend_php_backend_uses_backend_precedence(self):
         php_check = SCRIPT.index('if [ -f "$dir/composer.json" ]; then')
         frontend_check = SCRIPT.index('if [ -f "$dir/angular.json" ]')

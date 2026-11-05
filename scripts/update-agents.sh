@@ -24,7 +24,6 @@ CONTENT_PATH="$GITHUB_WORKSPACE/$CONTENT_FILE"
 # ============================================================
 
 total=0
-single_pr_created=0
 staging_merged=0
 production_merged=0
 conflict_resolved=0
@@ -686,19 +685,16 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Bulk production safety
+  # Production branch safety
   # ----------------------------------------------------------
 
-  if [ "$TARGET" != "single" ]; then
-
-    if ! is_supported_production_branch "$production_branch"; then
+  if ! is_supported_production_branch "$production_branch"; then
 
       echo "SKIP: Unsupported production branch for bulk rollout."
       echo "Default branch: $production_branch"
       echo "Allowed: main, master, aws-velocis-main"
 
       return 2
-    fi
   fi
 
 
@@ -764,8 +760,11 @@ process_repo() {
   apply_agents_content check
   validation_result=$?
   if [ "$validation_result" -eq 2 ]; then
-    echo "SKIP: Validated content already exists in production AGENTS.md."
+    echo "AGENTS.md is already current in production."
     cleanup_repo "$workdir"
+    if [ "$TARGET" = "single" ]; then
+      return 0
+    fi
     return 2
   elif [ "$validation_result" -ne 0 ]; then
     echo "FAILED: Production AGENTS.md validation failed."
@@ -776,12 +775,10 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Bulk requires staging
+  # All targets require staging
   # ----------------------------------------------------------
 
-  if [ "$TARGET" != "single" ]; then
-
-    if ! staging_branch=$(find_staging_branch "$production_branch"); then
+  if ! staging_branch=$(find_staging_branch "$production_branch"); then
 
       echo "SKIP: No supported staging branch found."
 
@@ -804,7 +801,6 @@ process_repo() {
 
       return 2
     fi
-  fi
 
 
   # ==========================================================
@@ -848,6 +844,8 @@ process_repo() {
       return 1
     fi
     rm -f "$expected_agents"
+    local verified_sha
+    verified_sha=$(git rev-parse "origin/$branch") || return 1
 
     if [ "$OPERATION" = "DRY_RUN" ]; then
       echo "DRY RUN: Existing safe rollout branch verified; no merges performed."
@@ -860,37 +858,6 @@ process_repo() {
 
 
     # --------------------------------------------------------
-    # Single
-    # --------------------------------------------------------
-
-    if [ "$TARGET" = "single" ]; then
-
-      production_pr=$(find_open_pr_by_base \
-        "$repo" \
-        "$production_branch" \
-        "$branch")
-
-
-      if [ -n "$production_pr" ]; then
-
-        echo "SUCCESS: Existing single-repo PR found."
-        echo "$production_pr"
-
-        cleanup_repo "$workdir"
-
-        return 11
-      fi
-
-
-      echo "FAILED: Rollout branch exists but no production PR found."
-
-      cleanup_repo "$workdir"
-
-      return 1
-    fi
-
-
-    # --------------------------------------------------------
     # Existing staging PR
     # --------------------------------------------------------
 
@@ -900,7 +867,11 @@ process_repo() {
       "$branch")
 
 
-    if [ -n "$staging_pr" ]; then
+    if git fetch origin "$staging_branch" --depth=100 >/dev/null 2>&1 && \
+       git merge-base --is-ancestor "$verified_sha" "origin/$staging_branch"; then
+      echo "Existing rollout commit is already merged into staging; continuing to main."
+
+    elif [ -n "$staging_pr" ]; then
 
       echo "Existing staging PR:"
       echo "$staging_pr"
@@ -909,7 +880,8 @@ process_repo() {
       if ! gh pr merge "$staging_pr" \
         --repo "$ORG/$repo" \
         --merge \
-        --admin; then
+        --admin \
+        --match-head-commit "$verified_sha"; then
 
         echo "Direct staging merge failed."
         echo "Attempting conflict-resolution flow..."
@@ -969,7 +941,8 @@ Only AGENTS.md is modified."
       if ! gh pr merge "$staging_pr" \
         --repo "$ORG/$repo" \
         --merge \
-        --admin; then
+        --admin \
+        --match-head-commit "$verified_sha"; then
 
         echo "Direct staging merge failed."
         echo "Attempting conflict-resolution flow..."
@@ -1041,7 +1014,8 @@ Only AGENTS.md is modified."
       --repo "$ORG/$repo" \
       --merge \
       --delete-branch \
-      --admin; then
+      --admin \
+      --match-head-commit "$verified_sha"; then
 
       echo "FAILED: Production PR could not be merged."
       echo "$production_pr"
@@ -1118,9 +1092,7 @@ Only AGENTS.md is modified."
     echo "Detected type     : $detected_type"
     echo "Production branch : $production_branch"
 
-    if [ "$TARGET" != "single" ]; then
-      echo "Staging branch    : $staging_branch"
-    fi
+    echo "Staging branch    : $staging_branch"
 
     echo
     git diff -- AGENTS.md
@@ -1228,39 +1200,6 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # Single
-  # ==========================================================
-
-  if [ "$TARGET" = "single" ]; then
-
-    if ! production_pr=$(gh pr create \
-      --repo "$ORG/$repo" \
-      --base "$production_branch" \
-      --head "$branch" \
-      --title "Codex to Main: Update AGENTS.md organization guidance" \
-      --body "$pr_body"); then
-
-      echo "FAILED: PR creation failed."
-
-      cleanup_repo "$workdir"
-
-      return 1
-    fi
-
-
-    echo
-    echo "SUCCESS: Single repository PR created."
-    echo "$production_pr"
-    echo "Manual review/merge required."
-
-
-    cleanup_repo "$workdir"
-
-    return 11
-  fi
-
-
-  # ==========================================================
   # Bulk staging
   # ==========================================================
 
@@ -1289,7 +1228,8 @@ Only AGENTS.md is modified."
   if ! gh pr merge "$staging_pr" \
     --repo "$ORG/$repo" \
     --merge \
-    --admin; then
+    --admin \
+    --match-head-commit "$working_commit"; then
 
     echo "Direct staging merge failed."
     echo "Attempting conflict-resolution flow..."
@@ -1341,7 +1281,8 @@ Only AGENTS.md is modified."
     --repo "$ORG/$repo" \
     --merge \
     --delete-branch \
-    --admin; then
+    --admin \
+    --match-head-commit "$working_commit"; then
 
     echo "FAILED: Production PR could not be merged."
     echo "$production_pr"
@@ -1413,11 +1354,22 @@ if [ "$TARGET" = "single" ]; then
       ;;
 
     2)
-      skipped=$((skipped + 1))
+      if [ "$OPERATION" = "APPLY" ]; then
+        failed=$((failed + 1))
+      else
+        skipped=$((skipped + 1))
+      fi
       ;;
 
-    11)
-      single_pr_created=$((single_pr_created + 1))
+    10)
+      staging_merged=$((staging_merged + 1))
+      production_merged=$((production_merged + 1))
+      ;;
+
+    12)
+      staging_merged=$((staging_merged + 1))
+      production_merged=$((production_merged + 1))
+      conflict_resolved=$((conflict_resolved + 1))
       ;;
 
     *)
@@ -1509,7 +1461,6 @@ if [ "$OPERATION" = "DRY_RUN" ]; then
 
 else
 
-  echo "Single PRs created    : $single_pr_created"
   echo "Staging merged        : $staging_merged"
   echo "Production merged     : $production_merged"
   echo "Conflicts resolved    : $conflict_resolved"
