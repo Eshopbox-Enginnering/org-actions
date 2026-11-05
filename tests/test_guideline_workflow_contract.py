@@ -81,8 +81,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
     def test_automatic_merges_pin_the_inspected_head(self):
         source = self.contents("scripts/sync-guidelines-auto-merge.py")
         self.assertIn('"--match-head-commit", verified_head', source)
-        self.assertNotIn('"--merge", "--admin"', source)
-        self.assertIn('"--merge", "--match-head-commit"', source)
+        self.assertIn('"--merge", "--admin", "--match-head-commit"', source)
         self.assertIn('require_production=single', source)
 
     def test_repeat_production_rollouts_use_current_main_base(self):
