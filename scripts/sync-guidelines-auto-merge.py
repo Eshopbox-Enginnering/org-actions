@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Sequential guideline rollout: merge staging before creating/merging main.
 
-Automatic merge must honor branch protections; no administrator bypass is used.
+Rollouts run through the organization-approved GitHub App and production environment.
+Use narrowly validated administrative merges, as the existing AGENTS updater does.
 Fail closed on unexpected files, stale branches, or merge errors.
 """
 import argparse
@@ -115,9 +116,11 @@ def merge_guideline_pr(full, number, target, entries, contents):
             raise ValueError(
                 f"{full} PR #{number}: {target} advanced during validation")
 
-        # A GitHub PR base can be retargeted after validation. Do not
-        # bypass required approvals/checks via --admin; normal protections
-        # must authorize whichever base GitHub will actually merge.
+        # The operator explicitly approved this rollout in the GitHub Actions
+        # environment, and this GitHub App can perform administrative merges.
+        # Recheck target and head immediately before invoking the same --admin
+        # merge used by update-agents.sh. GitHub does not atomically pin the
+        # PR base here: the resulting merge parents/tree are checked below.
         current_pr = sync.gh_json("pr", "view", str(number), "--repo", full,
                                   "--json", "baseRefName,headRefOid,state")
         if current_pr["baseRefName"] != target or current_pr["state"] != "OPEN":
@@ -125,7 +128,7 @@ def merge_guideline_pr(full, number, target, entries, contents):
         if current_pr["headRefOid"] != verified_head:
             raise ValueError(f"{full} PR #{number}: head changed before merge")
         sync.cmd("gh", "pr", "merge", str(number), "--repo", full,
-                 "--merge", "--match-head-commit", verified_head)
+                 "--merge", "--admin", "--match-head-commit", verified_head)
         merged = sync.gh_json("pr", "view", str(number), "--repo", full,
                               "--json", "mergedAt,mergeCommit")
         if not merged.get("mergedAt") or not (merged.get("mergeCommit") or {}).get("oid"):
