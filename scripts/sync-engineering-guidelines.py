@@ -199,7 +199,7 @@ def find_existing_production_guideline_pr(full, production, kind, digest):
                   '--limit', '100')
     pattern = re.compile(
         rf'^org-action/guidelines-prod-{re.escape(kind)}-'
-        rf'{re.escape(digest)}-(?:pr[0-9]+|synced(?:-[a-f0-9]{10})?)
+        rf'{re.escape(digest)}-(?:pr[0-9]+|synced(?:-[a-f0-9]{{10}})?)$')
     matches = [pr for pr in prs if pattern.fullmatch(pr['headRefName'])]
     if len(matches) > 1:
         raise ValueError('Multiple open production guideline PRs for the same content')
