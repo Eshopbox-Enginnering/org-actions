@@ -24,7 +24,7 @@ class GuidelineAutoMergeTests(unittest.TestCase):
         for mode in ("120000 blob ", "160000 commit ", "100755 blob "):
             with self.subTest(mode=mode), patch.object(
                     auto.sync, "cmd",
-                    return_value=mode + "a" * 40 + "\\t" + destination):
+                    return_value=mode + "a" * 40 + "\t" + destination):
                 with self.assertRaisesRegex(ValueError, "regular non-executable"):
                     auto.require_regular_guideline_file(
                         Path("/tmp"), "HEAD", destination)
@@ -32,7 +32,7 @@ class GuidelineAutoMergeTests(unittest.TestCase):
     def test_guideline_tree_accepts_plain_markdown(self):
         destination = self.entry["destination"]
         with patch.object(auto.sync, "cmd",
-                          return_value="100644 blob " + "a" * 40 + "\\t" + destination):
+                          return_value="100644 blob " + "a" * 40 + "\t" + destination):
             auto.require_regular_guideline_file(Path("/tmp"), "HEAD", destination)
 
     def test_premerged_pr_is_rejected_before_git_validation(self):
@@ -55,11 +55,11 @@ class GuidelineAutoMergeTests(unittest.TestCase):
             if args[:2] == ("git", "rev-parse"):
                 return "a" * 40 if "org-action/" in args[2] else "b" * 40
             if args[:3] == ("git", "ls-remote", "origin"):
-                return "c" * 40 + "\\trefs/heads/staging"
+                return "c" * 40 + "\trefs/heads/staging"
             if args[:3] == ("git", "diff", "--name-only"):
                 return self.entry["destination"]
             if args[:2] == ("git", "ls-tree"):
-                return "100644 blob " + "f" * 40 + "\\t" + self.entry["destination"]
+                return "100644 blob " + "f" * 40 + "\t" + self.entry["destination"]
             return ""
         def git_run(args, **kwargs):
             if args[1] == "show":
@@ -89,11 +89,11 @@ class GuidelineAutoMergeTests(unittest.TestCase):
             if args[:2] == ("git", "rev-parse"):
                 return "a" * 40 if "org-action/" in args[2] else "b" * 40
             if args[:3] == ("git", "ls-remote", "origin"):
-                return "b" * 40 + "\\trefs/heads/staging"
+                return "b" * 40 + "\trefs/heads/staging"
             if args[:3] == ("git", "diff", "--name-only"):
                 return self.entry["destination"]
             if args[:2] == ("git", "ls-tree"):
-                return "100644 blob " + "f" * 40 + "\\t" + self.entry["destination"]
+                return "100644 blob " + "f" * 40 + "\t" + self.entry["destination"]
             return ""
         def git_run(args, **kwargs):
             if args[1] == "show":
