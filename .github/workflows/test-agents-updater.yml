@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'scripts/update-agents.sh'
+      - 'scripts/sync-guidelines-with-agents.py'
+      - 'tests/test_sync_guidelines_with_agents.py'
+      - '.github/workflows/sync-engineering-guidelines.yml'
       - 'tests/test_agents_legacy_migration.py'
       - 'payload/agents-update.md'
       - 'payload/agents-legacy-v1.md'
@@ -12,6 +15,9 @@ on:
     branches: [main]
     paths:
       - 'scripts/update-agents.sh'
+      - 'scripts/sync-guidelines-with-agents.py'
+      - 'tests/test_sync_guidelines_with_agents.py'
+      - '.github/workflows/sync-engineering-guidelines.yml'
       - 'tests/test_agents_legacy_migration.py'
       - 'payload/agents-update.md'
       - 'payload/agents-legacy-v1.md'
@@ -26,4 +32,6 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/update-agents.sh
+          python3 -m py_compile scripts/sync-guidelines-with-agents.py
           python3 -m unittest discover -s tests -p 'test_agents_legacy_migration.py' -v
+          python3 -m unittest discover -s tests -p 'test_sync_guidelines_with_agents.py' -v
