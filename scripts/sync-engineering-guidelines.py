@@ -330,6 +330,17 @@ def process(repo, org, selected, contents, phase, operation, issue,
                 if prior:
                     prior_branch = prior['headRefName']
                     fetch_remote_branch(root, prior_branch)
+                    # A prior production PR is reusable only while its head
+                    # contains the latest production tip. Otherwise create a
+                    # fresh base-scoped catch-up branch below.
+                    if subprocess.run(
+                            ('git', 'merge-base', '--is-ancestor',
+                             f'origin/{production}', f'origin/{prior_branch}'),
+                            cwd=root).returncode:
+                        print(f"{name}: STALE OPEN PR {prior['url']}; "
+                              "creating a new base-scoped production PR")
+                        prior = None
+                if prior:
                     base = cmd('git', 'merge-base', f'origin/{production}',
                                f'origin/{prior_branch}', cwd=root)
                     changed = set(cmd('git', 'diff', '--name-only', base,
