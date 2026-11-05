@@ -81,7 +81,8 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
     def test_automatic_merges_pin_the_inspected_head(self):
         source = self.contents("scripts/sync-guidelines-auto-merge.py")
         self.assertIn('"--match-head-commit", verified_head', source)
-        self.assertIn('"--merge", "--admin"', source)
+        self.assertNotIn('"--merge", "--admin"', source)
+        self.assertIn('"--merge", "--match-head-commit"', source)
         self.assertIn('require_production=single', source)
 
     def test_repeat_production_rollouts_use_current_main_base(self):
@@ -94,7 +95,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
                      ".github/workflows/promote-engineering-guidelines.yml"):
             self.assertIn("group: engineering-guidelines-rollout",
                           self.contents(path))
-            self.assertIn("queue: max", self.contents(path))
+            self.assertNotIn("queue: max", self.contents(path))
 
     def test_auto_merge_rejects_nonregular_markdown_and_stale_pr_heads(self):
         auto_source = self.contents("scripts/sync-guidelines-auto-merge.py")
