@@ -25,7 +25,7 @@ def require_regular_guideline_file(root, ref, destination):
     """Reject symlinks, submodules and executable files in guideline trees."""
     entry = sync.cmd("git", "ls-tree", ref, "--", destination, cwd=root)
     if not entry.startswith("100644 blob ") or not entry.endswith(
-            "\\t" + destination):
+            "\t" + destination):
         raise ValueError(
             f"Guideline must be a regular non-executable file: "
             f"{destination} at {ref}")
