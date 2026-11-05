@@ -51,7 +51,7 @@ on:
         required: false
 
 concurrency:
-  group: engineering-guidelines-${{ inputs.target }}-${{ inputs.phase }}
+  group: engineering-guidelines-rollout
   cancel-in-progress: false
 
 jobs:
