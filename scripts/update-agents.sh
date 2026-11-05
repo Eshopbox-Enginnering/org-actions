@@ -1357,7 +1357,11 @@ if [ "$TARGET" = "single" ]; then
       ;;
 
     2)
-      skipped=$((skipped + 1))
+      if [ "$OPERATION" = "APPLY" ]; then
+        failed=$((failed + 1))
+      else
+        skipped=$((skipped + 1))
+      fi
       ;;
 
     10)
