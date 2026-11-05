@@ -52,5 +52,15 @@
   - If any reply is "⚠️ Needs human decision", don't trigger a review. Tell the user which threads need them; they'll decide and comment "@codex review" themselves.
   - Otherwise, comment "@codex review" on the PR. After 3 review rounds with new blocking findings, stop and ask the user.
 
+## Engineering standards (organization-managed)
+- Before implementing or reviewing a code change, read the relevant standards **from this repository's local** `docs/engineering-guidelines/` directory, when present. These documents are mandatory for applicable changes; do not assume a GitHub URL or another repository's file has been fetched into your context.
+- Authentication, unauthorized responses, or HTTP 401: `docs/engineering-guidelines/eshopbox-401-error-handling-preserve-enhance.md`.
+- Caching, cache keys, invalidation, or expiry: `docs/engineering-guidelines/eshopbox-cache-usage-guidelines.md`.
+- Application logs, error logs, or instrumentation: `docs/engineering-guidelines/Eshopbox_Structured_Logging_Guidelines_v2.md`.
+- Outbound API rate limits and HTTP 429: `docs/engineering-guidelines/Eshopbox_429_Outbound_API_Guidelines_v2.md`.
+- HTTP status codes and API error responses: `docs/engineering-guidelines/HTTP_Status_Codes_Reference.md`.
+- Only apply standards relevant to the affected functionality. If a referenced file is absent, do not pretend it was read; report that the guideline is unavailable locally when relevant. Do not fetch remote documents as a substitute without authorization.
+- Check applicable standards during implementation and PR review. Flag deviations and conflicts with repository-specific instructions or explicit issue requirements; do not silently override either. Preserve all existing repository-specific `AGENTS.md` instructions.
+
 ## Learned rules
 <!-- "Don't X; do Y instead." One line per real agent mistake. -->
