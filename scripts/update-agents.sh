@@ -841,6 +841,8 @@ process_repo() {
       return 1
     fi
     rm -f "$expected_agents"
+    local verified_sha
+    verified_sha=$(git rev-parse "origin/$branch") || return 1
 
     if [ "$OPERATION" = "DRY_RUN" ]; then
       echo "DRY RUN: Existing safe rollout branch verified; no merges performed."
@@ -862,7 +864,11 @@ process_repo() {
       "$branch")
 
 
-    if [ -n "$staging_pr" ]; then
+    if git fetch origin "$staging_branch" --depth=100 >/dev/null 2>&1 && \
+       git merge-base --is-ancestor "$verified_sha" "origin/$staging_branch"; then
+      echo "Existing rollout commit is already merged into staging; continuing to main."
+
+    elif [ -n "$staging_pr" ]; then
 
       echo "Existing staging PR:"
       echo "$staging_pr"
@@ -871,7 +877,8 @@ process_repo() {
       if ! gh pr merge "$staging_pr" \
         --repo "$ORG/$repo" \
         --merge \
-        --admin; then
+        --admin \
+        --match-head-commit "$verified_sha"; then
 
         echo "Direct staging merge failed."
         echo "Attempting conflict-resolution flow..."
@@ -931,7 +938,8 @@ Only AGENTS.md is modified."
       if ! gh pr merge "$staging_pr" \
         --repo "$ORG/$repo" \
         --merge \
-        --admin; then
+        --admin \
+        --match-head-commit "$verified_sha"; then
 
         echo "Direct staging merge failed."
         echo "Attempting conflict-resolution flow..."
@@ -1003,7 +1011,8 @@ Only AGENTS.md is modified."
       --repo "$ORG/$repo" \
       --merge \
       --delete-branch \
-      --admin; then
+      --admin \
+      --match-head-commit "$verified_sha"; then
 
       echo "FAILED: Production PR could not be merged."
       echo "$production_pr"
@@ -1216,7 +1225,8 @@ Only AGENTS.md is modified."
   if ! gh pr merge "$staging_pr" \
     --repo "$ORG/$repo" \
     --merge \
-    --admin; then
+    --admin \
+    --match-head-commit "$working_commit"; then
 
     echo "Direct staging merge failed."
     echo "Attempting conflict-resolution flow..."
@@ -1268,7 +1278,8 @@ Only AGENTS.md is modified."
     --repo "$ORG/$repo" \
     --merge \
     --delete-branch \
-    --admin; then
+    --admin \
+    --match-head-commit "$working_commit"; then
 
     echo "FAILED: Production PR could not be merged."
     echo "$production_pr"
