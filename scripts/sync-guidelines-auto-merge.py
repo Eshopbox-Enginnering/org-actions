@@ -222,6 +222,9 @@ def main():
     counts = {}
     for repo in repos:
         if repo.get("isArchived") or repo.get("isFork"):
+            outcome = "blocked" if args.target == "single" else "skipped"
+            counts[outcome] = counts.get(outcome, 0) + 1
+            print(f"{repo['name']}: {outcome} (archived or forked)")
             continue
         name = repo["name"]
         try:
