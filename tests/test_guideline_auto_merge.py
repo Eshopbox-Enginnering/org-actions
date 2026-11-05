@@ -19,6 +19,22 @@ class GuidelineAutoMergeTests(unittest.TestCase):
         self.selected = {"backend": [self.entry]}
         self.contents = {"cache": b"canonical"}
 
+    def test_guideline_tree_rejects_symlink_and_gitlink(self):
+        destination = self.entry["destination"]
+        for mode in ("120000 blob ", "160000 commit ", "100755 blob "):
+            with self.subTest(mode=mode), patch.object(
+                    auto.sync, "cmd",
+                    return_value=mode + "a" * 40 + "\\t" + destination):
+                with self.assertRaisesRegex(ValueError, "regular non-executable"):
+                    auto.require_regular_guideline_file(
+                        Path("/tmp"), "HEAD", destination)
+
+    def test_guideline_tree_accepts_plain_markdown(self):
+        destination = self.entry["destination"]
+        with patch.object(auto.sync, "cmd",
+                          return_value="100644 blob " + "a" * 40 + "\\t" + destination):
+            auto.require_regular_guideline_file(Path("/tmp"), "HEAD", destination)
+
     def test_premerged_pr_is_rejected_before_git_validation(self):
         pr = {"baseRefName": "staging", "headRefName":
               "org-action/guidelines-backend-sample",
