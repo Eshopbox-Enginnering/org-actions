@@ -47,6 +47,7 @@ def merge_guideline_pr(full, number, target, entries, contents):
              f"origin/{target}", f"origin/{head}"), cwd=root)
         if ancestor.returncode:
             raise ValueError(f"{full} PR #{number}: head is behind {target}")
+        verified_head = sync.cmd("git", "rev-parse", f"origin/{head}", cwd=root)
         changes = set(sync.cmd(
             "git", "diff", "--name-only", f"origin/{target}..origin/{head}",
             cwd=root).splitlines())
@@ -72,7 +73,7 @@ def merge_guideline_pr(full, number, target, entries, contents):
     # merge. This bypasses review/check requirements; restrict to exact
     # canonical guideline files and refuse stale/unexpected diffs above.
     sync.cmd("gh", "pr", "merge", str(number), "--repo", full,
-             "--merge", "--admin")
+             "--merge", "--admin", "--match-head-commit", verified_head)
     merged = sync.gh_json("pr", "view", str(number), "--repo", full,
                           "--json", "mergedAt")
     if not merged.get("mergedAt"):
@@ -81,12 +82,13 @@ def merge_guideline_pr(full, number, target, entries, contents):
     return "merged"
 
 
-def rollout(repo, org, selected, contents, issue):
+def rollout(repo, org, selected, contents, issue, single=False):
     name = repo["name"]
     full = f"{org}/{name}"
     holder = {}
     first = sync.process(repo, org, selected, contents, "staging", "APPLY",
-                         issue, stage_pr_holder=holder, require_production=True)
+                         issue, stage_pr_holder=holder,
+                         require_production=single)
     if first == "blocked":
         return "blocked"
     if holder.get("number"):
@@ -168,7 +170,8 @@ def main():
             continue
         name = repo["name"]
         try:
-            outcome = rollout(repo, args.org, selected, contents, args.issue)
+            outcome = rollout(repo, args.org, selected, contents, args.issue,
+                              single=(args.target == "single"))
         except Exception as error:
             outcome = "error"
             print(f"{name}: ERROR {error}", file=sys.stderr)
