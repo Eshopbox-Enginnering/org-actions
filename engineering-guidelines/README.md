@@ -41,7 +41,7 @@ The `docs/engineering-guidelines/` directory is the destination for reference do
 
 ## Automated staging and production rollout
 
-**One manual APPLY run creates and merges both PRs**, in order: staging first, then production. The rollout uses the same administrative merge capability as the existing `update-agents.sh` bulk updater. This **can bypass normal PR approvals and required checks**; only run it with the authorized GitHub App and for trusted canonical guideline files. The script independently checks branch freshness, exact changed-file scope, and canonical document bytes before each merge. Any mismatch or GitHub merge error stops processing that repository and fails the workflow.
+**One manual APPLY run creates and merges both PRs**, in order: staging first, then production. The rollout uses standard GitHub PR merges without the `--admin` bypass. Required checks, approvals and branch protections remain enforced; merges that cannot satisfy them are left open and reported as failures. The script independently checks branch freshness, exact changed-file scope, and canonical document bytes before each merge. Any mismatch or GitHub merge error stops processing that repository and fails the workflow.
 
 - `DRY_RUN` previews changes without creating PRs or merging.
 - `APPLY` with `phase=staging` performs the two merges sequentially. A single-repository target follows this sequence too.
@@ -49,13 +49,13 @@ The `docs/engineering-guidelines/` directory is the destination for reference do
 - If both branches already contain the selected guidelines, the run reports a successful no-op.
 - A failed merge, stale branch, unexpected file change, or unsupported repository type is reported rather than silently merged.
 - Backend build metadata (including PHP `composer.json`) takes precedence over frontend tooling such as Vite for mixed repositories.
-- The separate [Promote Merged Engineering Guidelines](../.github/workflows/promote-engineering-guidelines.yml) workflow exists for legacy/recovery flows; a successful automated rollout needs no scheduled promotion.
+- The separate [Promote Merged Engineering Guidelines](../.github/workflows/promote-engineering-guidelines.yml) workflow remains available for manual legacy/recovery flows. Its 15-minute scheduler is disabled to prevent scheduled runs from displacing pending manual rollouts.
 - Avoid disabling organization-wide checks: normal developer PRs continue to be validated.
 
 ## Safety and workflow limits
 
 - Backend/frontend detection follows the existing AGENTS updater's build-file heuristics. Unknown repositories are skipped; use `single` for an explicitly named repo with a recognizable build file.
-- Under APPLY staging, the workflow creates and administratively merges its validated guideline PRs. These administrative merges can bypass normal review, CI, branch protection, and CODEOWNER checks. Never use them for unrelated code changes.
+- Under APPLY staging, the workflow creates guideline PRs and attempts normal merges. It does not bypass review, CI, branch protection, or CODEOWNER requirements. Blocked merges require normal review or checks and do not proceed to production.
 - Pre-existing rollout branches without an identifiable PR are blocked rather than overwritten. Production requires the canonical content to be present in staging; the automation merges staging before creating the independently verified production PR. **Preserve the rollout branch** through production.
 - Only production/default branches `main`, `master`, or `aws-velocis-main` and a corresponding staging branch are supported.
 - Checked-in source files are read from this workflow repository. Optional one-off GitHub attachments are fetched at run time with HTTPS and 1 MiB UTF-8 limits. Inaccessible sources fail before repository writes.
