@@ -58,6 +58,8 @@ class GuidelineAutoMergeTests(unittest.TestCase):
                 return "c" * 40 + "\\trefs/heads/staging"
             if args[:3] == ("git", "diff", "--name-only"):
                 return self.entry["destination"]
+            if args[:2] == ("git", "ls-tree"):
+                return "100644 blob " + "f" * 40 + "\\t" + self.entry["destination"]
             return ""
         def git_run(args, **kwargs):
             if args[1] == "show":
