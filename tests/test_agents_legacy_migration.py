@@ -143,6 +143,22 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('if [ -z "$production_pr" ]; then', existing)
         self.assertIn('gh pr create', existing)
 
+    def test_retries_skip_completed_staging_and_pin_original_commit(self):
+        existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
+            '# NEW ROLLOUT', 1)[0]
+        self.assertIn('git merge-base --is-ancestor "$verified_sha"', existing)
+        self.assertIn('already merged into staging; continuing to main', existing)
+        self.assertIn('--match-head-commit "$verified_sha"', existing)
+        new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
+            '# Header', 1)[0]
+        self.assertIn('--match-head-commit "$working_commit"', new)
+        self.assertIn('git checkout -b "$branch"', new)
+
+    def test_single_apply_reports_skipped_target_as_failure(self):
+        single = SCRIPT.rsplit('# Single', 1)[1].split('# Bulk', 1)[0]
+        self.assertIn('if [ "$OPERATION" = "APPLY" ]; then', single)
+        self.assertIn('failed=$((failed + 1))', single)
+
     def test_mixed_frontend_php_backend_uses_backend_precedence(self):
         php_check = SCRIPT.index('if [ -f "$dir/composer.json" ]; then')
         frontend_check = SCRIPT.index('if [ -f "$dir/angular.json" ]')
