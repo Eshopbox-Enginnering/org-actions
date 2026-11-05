@@ -43,6 +43,25 @@ class GuidelineAutoMergeTests(unittest.TestCase):
             "process_staging", "merge_staging",
             "process_production", "merge_main"])
 
+    def test_bulk_target_skips_other_repository_types(self):
+        from unittest.mock import patch
+        with patch.object(auto.sync, "process", return_value="skipped") as process, \
+             patch.object(auto, "merge_guideline_pr") as merge:
+            outcome = auto.rollout(self.repo, "Eshopbox-Enginnering",
+                                   self.selected, self.contents, "7218",
+                                   single=False)
+        self.assertEqual(outcome, "skipped")
+        self.assertFalse(process.call_args.kwargs["require_production"])
+        merge.assert_not_called()
+
+    def test_single_target_requires_matching_guidelines(self):
+        with patch.object(auto.sync, "process", return_value="blocked") as process:
+            outcome = auto.rollout(self.repo, "Eshopbox-Enginnering",
+                                   self.selected, self.contents, "7218",
+                                   single=True)
+        self.assertEqual(outcome, "blocked")
+        self.assertTrue(process.call_args.kwargs["require_production"])
+
     def test_staging_failure_does_not_touch_production(self):
         with patch.object(auto.sync, "process", return_value="blocked") as process:
             result = auto.rollout(self.repo, "Eshopbox-Enginnering",
