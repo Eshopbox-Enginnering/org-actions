@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """Review-only, create-or-replace Markdown guidelines in selected repositories."""
 import argparse
+from contextlib import contextmanager
+import errno
 import difflib
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -19,10 +23,38 @@ MAX_BYTES = 1024 * 1024
 
 
 def cmd(*args, cwd=None, check=True):
-    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True)
+    # Git may start background maintenance during clone/fetch; prevent it from
+    # racing with teardown of these short-lived rollout workspaces.
+    env = os.environ.copy()
+    env.update({'GIT_CONFIG_COUNT': '2', 'GIT_CONFIG_KEY_0': 'gc.auto',
+                'GIT_CONFIG_VALUE_0': '0',
+                'GIT_CONFIG_KEY_1': 'maintenance.auto',
+                'GIT_CONFIG_VALUE_1': 'false'})
+    result = subprocess.run(args, cwd=cwd, text=True, capture_output=True, env=env)
     if check and result.returncode:
         raise RuntimeError(f"{' '.join(args[:4])}: {result.stderr.strip()[:700]}")
     return result.stdout.strip()
+
+
+@contextmanager
+def rollout_workspace(prefix='guidelines-'):
+    """Clean clone workspace, retrying only transient directory-not-empty races.
+
+    A Git process may briefly repopulate a directory while shutil removes it.
+    Do not ignore cleanup failures: after bounded retries the workflow fails.
+    """
+    directory = tempfile.mkdtemp(prefix=prefix)
+    try:
+        yield directory
+    finally:
+        for attempt in range(4):
+            try:
+                shutil.rmtree(directory)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST) or attempt == 3:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
 
 
 def validate_destination(dest):
@@ -215,7 +247,7 @@ def process(repo, org, selected, contents, phase, operation, issue,
     if production not in ALLOWED_BRANCHES:
         print(f'{name}: BLOCK unsupported production branch {production}')
         return 'blocked' if promotion_pr is not None else 'skipped'
-    with tempfile.TemporaryDirectory(prefix='guidelines-') as temp:
+    with rollout_workspace(prefix='guidelines-') as temp:
         root = Path(temp) / name
         full = f'{org}/{name}'
         cmd('gh', 'repo', 'clone', full, str(root), '--', '--depth=1', '--branch', production)
