@@ -77,6 +77,40 @@ class GuidelineAutoMergeTests(unittest.TestCase):
         self.assertFalse(any(call.args[:3] == ("gh", "pr", "merge")
                              for call in cmd.call_args_list))
 
+    def test_retargeted_pr_is_rejected_without_merging(self):
+        from types import SimpleNamespace
+        initial = {"baseRefName": "staging",
+                   "headRefName": "org-action/guidelines-backend-sample",
+                   "state": "OPEN", "mergedAt": None}
+        retargeted = {"baseRefName": "main",
+                      "headRefOid": "a" * 40,
+                      "state": "OPEN"}
+        def command(*args, **kwargs):
+            if args[:2] == ("git", "rev-parse"):
+                return "a" * 40 if "org-action/" in args[2] else "b" * 40
+            if args[:3] == ("git", "ls-remote", "origin"):
+                return "b" * 40 + "\\trefs/heads/staging"
+            if args[:3] == ("git", "diff", "--name-only"):
+                return self.entry["destination"]
+            if args[:2] == ("git", "ls-tree"):
+                return "100644 blob " + "f" * 40 + "\\t" + self.entry["destination"]
+            return ""
+        def git_run(args, **kwargs):
+            if args[1] == "show":
+                missing = args[2].startswith("origin/staging:")
+                return SimpleNamespace(returncode=1 if missing else 0,
+                                       stdout=b"" if missing else b"canonical")
+            return SimpleNamespace(returncode=0)
+        with patch.object(auto.sync, "gh_json", side_effect=[initial, retargeted]), \
+             patch.object(auto.sync, "fetch_remote_branch"), \
+             patch.object(auto.sync, "cmd", side_effect=command) as cmd, \
+             patch.object(auto.subprocess, "run", side_effect=git_run):
+            with self.assertRaisesRegex(ValueError, "base/state changed"):
+                auto.merge_guideline_pr("org/repo", 3, "staging",
+                                        [self.entry], self.contents)
+        self.assertFalse(any(call.args[:3] == ("gh", "pr", "merge")
+                             for call in cmd.call_args_list))
+
     def test_post_merge_verification_rejects_changed_parent(self):
         with patch.object(auto.sync, "cmd", side_effect=[
                 "", "merge base-moved expected-head"
