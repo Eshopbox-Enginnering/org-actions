@@ -1,0 +1,29 @@
+name: Validate AGENTS.md Updater
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/update-agents.sh'
+      - 'tests/test_agents_legacy_migration.py'
+      - 'payload/agents-update.md'
+      - 'payload/agents-legacy-v1.md'
+      - '.github/workflows/test-agents-updater.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/update-agents.sh'
+      - 'tests/test_agents_legacy_migration.py'
+      - 'payload/agents-update.md'
+      - 'payload/agents-legacy-v1.md'
+      - '.github/workflows/test-agents-updater.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate script and regression tests
+        run: |
+          set -euo pipefail
+          bash -n scripts/update-agents.sh
+          python3 -m unittest discover -s tests -p 'test_agents_legacy_migration.py' -v
