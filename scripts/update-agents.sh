@@ -341,12 +341,18 @@ newline = b"\r\n" if b"\r\n" in original else b"\n"
 pattern = re.compile(
     rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE(?P<suffix>:[a-f0-9]{12})? -->[ \t]*\r?\n"
     rb"(?P<body>.*?)"
-    rb"^<!-- END ESHOPBOX-AGENTS-UPDATE(?P=suffix) -->[ \t]*(?:\r?\n|$)",
+    rb"^<!-- END ESHOPBOX-AGENTS-UPDATE(?P<end_suffix>:[a-f0-9]{12})? -->[ \t]*(?:\r?\n|$)",
     re.DOTALL,
 )
 matches = list(pattern.finditer(original))
 begins = len(re.findall(rb"(?m)^<!-- BEGIN ESHOPBOX-AGENTS-UPDATE", original))
 ends = len(re.findall(rb"(?m)^<!-- END ESHOPBOX-AGENTS-UPDATE", original))
+# Optional capture-group backreferences do not match when the group is absent.
+# Capture both suffixes independently and explicitly require equality, allowing
+# trusted historical unversioned markers without accepting mixed hash forms.
+if any(m.group("suffix") != m.group("end_suffix") for m in matches):
+    print("ERROR: Mismatched organization-managed marker hashes.")
+    sys.exit(1)
 if begins != len(matches) or ends != len(matches):
     print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
