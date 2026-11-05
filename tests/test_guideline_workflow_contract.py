@@ -78,6 +78,23 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("scheduled promotion workflow then creates", readme)
         self.assertIn("staging first, then production", readme)
 
+    def test_automatic_merges_pin_the_inspected_head(self):
+        source = self.contents("scripts/sync-guidelines-auto-merge.py")
+        self.assertIn('"--match-head-commit", verified_head', source)
+        self.assertIn('"--merge", "--admin"', source)
+        self.assertIn('require_production=single', source)
+
+    def test_repeat_production_rollouts_use_current_main_base(self):
+        source = self.contents("scripts/sync-engineering-guidelines.py")
+        self.assertIn("-synced-{base_sha}", source)
+        self.assertIn("synced(?:-[a-f0-9]{10})?", source)
+
+    def test_promotion_and_sync_share_exclusive_lock(self):
+        for path in (".github/workflows/sync-engineering-guidelines.yml",
+                     ".github/workflows/promote-engineering-guidelines.yml"):
+            self.assertIn("group: engineering-guidelines-rollout",
+                          self.contents(path))
+
     def test_guidelines_have_org_compliant_pr_titles(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
         self.assertIn("f'feature to", source)
