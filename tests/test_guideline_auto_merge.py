@@ -19,6 +19,56 @@ class GuidelineAutoMergeTests(unittest.TestCase):
         self.selected = {"backend": [self.entry]}
         self.contents = {"cache": b"canonical"}
 
+    def test_premerged_pr_is_rejected_before_git_validation(self):
+        pr = {"baseRefName": "staging", "headRefName":
+              "org-action/guidelines-backend-sample",
+              "state": "MERGED", "mergedAt": "2026-11-05T00:00:00Z"}
+        with patch.object(auto.sync, "gh_json", return_value=pr), \
+             patch.object(auto.sync, "cmd") as cmd:
+            with self.assertRaisesRegex(ValueError, "merged before validation"):
+                auto.merge_guideline_pr("org/repo", 3, "staging",
+                                        [self.entry], self.contents)
+        cmd.assert_not_called()
+
+    def test_target_tip_change_rejected_before_admin_merge(self):
+        from types import SimpleNamespace
+        pr = {"baseRefName": "staging", "headRefName":
+              "org-action/guidelines-backend-sample",
+              "state": "OPEN", "mergedAt": None}
+        def command(*args, **kwargs):
+            if args[:2] == ("git", "rev-parse"):
+                return "a" * 40 if "org-action/" in args[2] else "b" * 40
+            if args[:3] == ("git", "ls-remote", "origin"):
+                return "c" * 40 + "\\trefs/heads/staging"
+            if args[:3] == ("git", "diff", "--name-only"):
+                return self.entry["destination"]
+            return ""
+        def git_run(args, **kwargs):
+            if args[1] == "show":
+                missing = args[2].startswith("origin/staging:")
+                return SimpleNamespace(returncode=1 if missing else 0,
+                                       stdout=b"" if missing else b"canonical")
+            return SimpleNamespace(returncode=0)
+        with patch.object(auto.sync, "gh_json", return_value=pr), \
+             patch.object(auto.sync, "fetch_remote_branch"), \
+             patch.object(auto.sync, "cmd", side_effect=command) as cmd, \
+             patch.object(auto.subprocess, "run", side_effect=git_run):
+            with self.assertRaisesRegex(ValueError, "advanced during validation"):
+                auto.merge_guideline_pr("org/repo", 3, "staging",
+                                        [self.entry], self.contents)
+        self.assertFalse(any(call.args[:3] == ("gh", "pr", "merge")
+                             for call in cmd.call_args_list))
+
+    def test_post_merge_verification_rejects_changed_parent(self):
+        with patch.object(auto.sync, "cmd", side_effect=[
+                "", "merge base-moved expected-head"
+        ]):
+            with self.assertRaisesRegex(ValueError, "parents differ"):
+                auto.verify_merged_document_commit(
+                    Path("/tmp"), "merge", "expected-base",
+                    "expected-head", {self.entry["destination"]},
+                    [self.entry], self.contents)
+
     def test_merges_staging_before_opening_production(self):
         events = []
         def process(*args, **kwargs):
