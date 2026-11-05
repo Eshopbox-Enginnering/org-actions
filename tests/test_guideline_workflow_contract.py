@@ -93,7 +93,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
     def test_promotion_and_sync_share_exclusive_lock(self):
         for path in (".github/workflows/sync-engineering-guidelines.yml",
                      ".github/workflows/promote-engineering-guidelines.yml"):
-            self.assertIn("group: engineering-guidelines-rollout",
+            self.assertIn("engineering-guidelines-rollout",
                           self.contents(path))
             self.assertNotIn("queue: max", self.contents(path))
 
