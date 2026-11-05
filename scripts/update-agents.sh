@@ -760,8 +760,11 @@ process_repo() {
   apply_agents_content check
   validation_result=$?
   if [ "$validation_result" -eq 2 ]; then
-    echo "SKIP: Validated content already exists in production AGENTS.md."
+    echo "AGENTS.md is already current in production."
     cleanup_repo "$workdir"
+    if [ "$TARGET" = "single" ]; then
+      return 0
+    fi
     return 2
   elif [ "$validation_result" -ne 0 ]; then
     echo "FAILED: Production AGENTS.md validation failed."
