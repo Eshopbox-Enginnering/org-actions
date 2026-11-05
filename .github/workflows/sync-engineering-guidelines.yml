@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Preview changes or create reviewable PRs
+        description: Preview changes or create and merge guideline PRs
         type: choice
         required: true
         options: [DRY_RUN, APPLY]
@@ -18,7 +18,7 @@ on:
         type: string
         required: false
       phase:
-        description: Staging APPLY creates both staging and main PRs for review
+        description: Staging APPLY creates and merges staging first, then main
         type: choice
         required: true
         options: [staging, production]
@@ -51,7 +51,7 @@ on:
         required: false
 
 concurrency:
-  group: engineering-guidelines-${{ inputs.target }}-${{ inputs.phase }}
+  group: engineering-guidelines-rollout
   cancel-in-progress: false
 
 jobs:
@@ -87,7 +87,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh auth setup-git
-      - name: Sync (no automatic merges)
+      - name: Validate rollout scripts and regression tests
+        run: |
+          python3 -m py_compile scripts/sync-engineering-guidelines.py scripts/sync-guidelines-auto-merge.py
+          python3 -m unittest discover -s tests -p 'test_*guideline*.py' -v
+      - name: Sync and merge selected guidelines
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           CONFIRMATION: ${{ inputs.confirmation }}
@@ -103,7 +107,7 @@ jobs:
           ISSUE: ${{ inputs.central_backlog_issue }}
         run: |
           set -euo pipefail
-          python3 scripts/sync-guidelines-dual-pr.py \
+          python3 scripts/sync-guidelines-auto-merge.py \
             --operation "$OPERATION" --target "$TARGET" \
             --repository "$REPOSITORY" --phase "$PHASE" \
             --file-id "$FILE_ID" --source-url "$SOURCE_URL" \

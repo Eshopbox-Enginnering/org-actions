@@ -11,8 +11,8 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
 
     def test_sync_workflow_runs_dual_pr_creator(self):
         workflow = self.contents(".github/workflows/sync-engineering-guidelines.yml")
-        self.assertIn("python3 scripts/sync-guidelines-dual-pr.py", workflow)
-        self.assertNotIn("python3 scripts/sync-engineering-guidelines.py", workflow)
+        self.assertIn("python3 scripts/sync-guidelines-auto-merge.py", workflow)
+        self.assertNotIn("python3 scripts/sync-guidelines-dual-pr.py", workflow)
 
     def test_lightweight_checks_do_not_use_checks_runner(self):
         for name in (
@@ -74,9 +74,36 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
 
     def test_runbook_describes_immediate_dual_pr_creation(self):
         readme = self.contents("engineering-guidelines/README.md")
-        self.assertIn("One manual APPLY run creates both PRs", readme)
+        self.assertIn("One manual APPLY run creates and merges both PRs", readme)
         self.assertNotIn("scheduled promotion workflow then creates", readme)
-        self.assertIn("rerun that check after merging staging", readme)
+        self.assertIn("staging first, then production", readme)
+
+    def test_automatic_merges_pin_the_inspected_head(self):
+        source = self.contents("scripts/sync-guidelines-auto-merge.py")
+        self.assertIn('"--match-head-commit", verified_head', source)
+        self.assertNotIn('"--merge", "--admin"', source)
+        self.assertIn('"--merge", "--match-head-commit"', source)
+        self.assertIn('require_production=single', source)
+
+    def test_repeat_production_rollouts_use_current_main_base(self):
+        source = self.contents("scripts/sync-engineering-guidelines.py")
+        self.assertIn("-synced-{base_sha}", source)
+        self.assertIn("synced(?:-[a-f0-9]{{10}})?", source)
+
+    def test_promotion_and_sync_share_exclusive_lock(self):
+        for path in (".github/workflows/sync-engineering-guidelines.yml",
+                     ".github/workflows/promote-engineering-guidelines.yml"):
+            self.assertIn("engineering-guidelines-rollout",
+                          self.contents(path))
+            self.assertNotIn("queue: max", self.contents(path))
+
+    def test_auto_merge_rejects_nonregular_markdown_and_stale_pr_heads(self):
+        auto_source = self.contents("scripts/sync-guidelines-auto-merge.py")
+        sync_source = self.contents("scripts/sync-engineering-guidelines.py")
+        self.assertIn('require_regular_guideline_file(root, f"origin/{head}", dest)', auto_source)
+        self.assertIn("require_regular_guideline_file(root, merge_sha, destination)", auto_source)
+        self.assertIn("git', 'merge-base', '--is-ancestor'", sync_source)
+        self.assertIn("creating a new base-scoped production PR", sync_source)
 
     def test_guidelines_have_org_compliant_pr_titles(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
