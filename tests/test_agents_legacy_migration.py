@@ -77,6 +77,30 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
                 self.assertEqual(outcome.returncode, 1, outcome.stdout + outcome.stderr)
                 self.assertEqual((root / "AGENTS.md").read_bytes(), original)
 
+    def test_matching_versioned_markers_are_accepted_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            digest = hashlib.sha256(CURRENT).hexdigest()[:12].encode("ascii")
+            begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\\n"
+            end = b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\\n"
+            existing = begin + CURRENT + end
+            (root / "AGENTS.md").write_bytes(existing)
+            result = self.run_migrator(root)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertEqual(existing, (root / "AGENTS.md").read_bytes())
+
+    def test_unmatched_versioned_marker_hashes_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:aaaaaaaaaaaa -->\\n"
+            end = b"<!-- END ESHOPBOX-AGENTS-UPDATE:bbbbbbbbbbbb -->\\n"
+            existing = begin + TRUSTED + end
+            (root / "AGENTS.md").write_bytes(existing)
+            result = self.run_migrator(root)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("Mismatched organization-managed marker hashes", result.stdout)
+            self.assertEqual(existing, (root / "AGENTS.md").read_bytes())
+
     def test_mixed_frontend_php_backend_uses_backend_precedence(self):
         php_check = SCRIPT.index('if [ -f "$dir/composer.json" ]; then')
         frontend_check = SCRIPT.index('if [ -f "$dir/angular.json" ]')
