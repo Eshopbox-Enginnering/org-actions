@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sequential guideline rollout: merge staging before creating/merging main.
 
-The GitHub App must have administrator merge permission, matching update-agents.sh.
+Automatic merge must honor branch protections; no administrator bypass is used.
 Fail closed on unexpected files, stale branches, or merge errors.
 """
 import argparse
@@ -115,9 +115,17 @@ def merge_guideline_pr(full, number, target, entries, contents):
             raise ValueError(
                 f"{full} PR #{number}: {target} advanced during validation")
 
-        # Matches update-agents.sh; the head is pinned against late pushes.
+        # A GitHub PR base can be retargeted after validation. Do not
+        # bypass required approvals/checks via --admin; normal protections
+        # must authorize whichever base GitHub will actually merge.
+        current_pr = sync.gh_json("pr", "view", str(number), "--repo", full,
+                                  "--json", "baseRefName,headRefOid,state")
+        if current_pr["baseRefName"] != target or current_pr["state"] != "OPEN":
+            raise ValueError(f"{full} PR #{number}: base/state changed before merge")
+        if current_pr["headRefOid"] != verified_head:
+            raise ValueError(f"{full} PR #{number}: head changed before merge")
         sync.cmd("gh", "pr", "merge", str(number), "--repo", full,
-                 "--merge", "--admin", "--match-head-commit", verified_head)
+                 "--merge", "--match-head-commit", verified_head)
         merged = sync.gh_json("pr", "view", str(number), "--repo", full,
                               "--json", "mergedAt,mergeCommit")
         if not merged.get("mergedAt") or not (merged.get("mergeCommit") or {}).get("oid"):
