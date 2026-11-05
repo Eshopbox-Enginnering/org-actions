@@ -94,6 +94,15 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
                      ".github/workflows/promote-engineering-guidelines.yml"):
             self.assertIn("group: engineering-guidelines-rollout",
                           self.contents(path))
+            self.assertIn("queue: max", self.contents(path))
+
+    def test_auto_merge_rejects_nonregular_markdown_and_stale_pr_heads(self):
+        auto_source = self.contents("scripts/sync-guidelines-auto-merge.py")
+        sync_source = self.contents("scripts/sync-engineering-guidelines.py")
+        self.assertIn('require_regular_guideline_file(root, f"origin/{head}", dest)', auto_source)
+        self.assertIn("require_regular_guideline_file(root, merge_sha, destination)", auto_source)
+        self.assertIn("git', 'merge-base', '--is-ancestor'", sync_source)
+        self.assertIn("creating a new base-scoped production PR", sync_source)
 
     def test_guidelines_have_org_compliant_pr_titles(self):
         source = self.contents("scripts/sync-engineering-guidelines.py")
