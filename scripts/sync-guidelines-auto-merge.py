@@ -21,6 +21,16 @@ sync = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sync)
 
 
+def require_regular_guideline_file(root, ref, destination):
+    """Reject symlinks, submodules and executable files in guideline trees."""
+    entry = sync.cmd("git", "ls-tree", ref, "--", destination, cwd=root)
+    if not entry.startswith("100644 blob ") or not entry.endswith(
+            "\\t" + destination):
+        raise ValueError(
+            f"Guideline must be a regular non-executable file: "
+            f"{destination} at {ref}")
+
+
 def verify_merged_document_commit(root, merge_sha, verified_base,
                                   verified_head, expected, entries, contents):
     """Validate the exact resulting merge tree before reporting success."""
@@ -38,6 +48,7 @@ def verify_merged_document_commit(root, merge_sha, verified_base,
             f"actual={sorted(changed)} expected={sorted(expected)}")
     for entry in entries:
         destination = entry["destination"]
+        require_regular_guideline_file(root, merge_sha, destination)
         result = subprocess.run(
             ("git", "show", f"{merge_sha}:{destination}"),
             cwd=root, capture_output=True)
@@ -85,6 +96,7 @@ def merge_guideline_pr(full, number, target, entries, contents):
             canonical = contents[entry["source_url"]]
             if before.returncode or before.stdout != canonical:
                 expected.add(dest)
+            require_regular_guideline_file(root, f"origin/{head}", dest)
             actual = subprocess.run(
                 ("git", "show", f"origin/{head}:{dest}"),
                 cwd=root, capture_output=True)
