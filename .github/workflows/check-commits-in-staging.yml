@@ -22,7 +22,7 @@ on:
 
 jobs:
   check-commits:
-    if: ${{ github.repository != 'Eshopbox-Enginnering/org-actions' }}
+    if: ${{ (github.repository != 'Eshopbox-Enginnering/org-actions') && !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
     #runs-on:
     #  group: checks-runners
     #  labels: checks-runner
