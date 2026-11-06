@@ -1025,125 +1025,27 @@ PY
 
 
     # --------------------------------------------------------
-    # Existing staging PR
+    # Stage-only update, derived exclusively from staging. Never
+    # merge the main-based rollout branch into staging: it can
+    # contain unrelated production code changes.
     # --------------------------------------------------------
 
-    if [ "$staging_diverged" -eq 1 ] || [ "$staging_needs_update" -eq 0 ]; then
-      if [ "$staging_needs_update" -eq 1 ]; then
-        echo "Reconciling divergent staging directly from staging."
-        if ! resolve_staging_conflict "$repo" "$staging_branch"; then
-          cleanup_repo "$workdir"; return 1
-        fi
-        conflict_used=1
-      else
-        echo "Staging AGENTS.md already current; skipping staging PR."
-      fi
-    else
-    staging_pr=$(find_open_pr_by_base \
-      "$repo" \
-      "$staging_branch" \
-      "$branch")
-
-
-    if git fetch origin "$staging_branch" --depth=100 >/dev/null 2>&1 && \
-       git merge-base --is-ancestor "$verified_sha" "origin/$staging_branch"; then
-      echo "Existing rollout commit is already merged into staging; continuing to main."
-
-    elif [ -n "$staging_pr" ]; then
-
-      echo "Existing staging PR:"
-      echo "$staging_pr"
-
-
-      if ! gh pr merge "$staging_pr" \
-        --repo "$ORG/$repo" \
-        --merge \
-        --admin \
-        --match-head-commit "$verified_sha"; then
-
-        echo "Direct staging merge failed."
-        echo "Attempting conflict-resolution flow..."
-
-
-        if ! resolve_staging_conflict \
-          "$repo" \
-          "$staging_branch"; then
-
-          echo "FAILED: Unable to resolve staging conflict."
-
-          cleanup_repo "$workdir"
-
-          return 1
-        fi
-
-
-        conflict_used=1
-      fi
-
-
-    else
-
-      echo "Existing rollout branch has no staging PR."
-      echo "Creating staging PR..."
-
-
-      pr_body="Organization-level automated AGENTS.md update.
-
-Central Backlog:
-Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
-
-Repository:
-$ORG/$repo
-
-Content ID:
-$CONTENT_HASH
-
-Only AGENTS.md is modified."
-
-
-      if ! staging_pr=$(gh pr create \
-        --repo "$ORG/$repo" \
-        --base "$staging_branch" \
-        --head "$branch" \
-        --title "Codex to Staging: Update AGENTS.md organization guidance" \
-        --body "$pr_body"); then
-
-        echo "FAILED: Staging PR creation failed."
-
+    if [ "$staging_needs_update" -eq 1 ]; then
+      if ! resolve_staging_conflict "$repo" "$staging_branch"; then
+        echo "FAILED: Staging-only AGENTS.md reconciliation failed."
         cleanup_repo "$workdir"
-
         return 1
       fi
-
-
-      if ! gh pr merge "$staging_pr" \
-        --repo "$ORG/$repo" \
-        --merge \
-        --admin \
-        --match-head-commit "$verified_sha"; then
-
-        echo "Direct staging merge failed."
-        echo "Attempting conflict-resolution flow..."
-
-
-        if ! resolve_staging_conflict \
-          "$repo" \
-          "$staging_branch"; then
-
-          echo "FAILED: Unable to resolve staging conflict."
-
-          cleanup_repo "$workdir"
-
-          return 1
-        fi
-
-
-        conflict_used=1
-      fi
+      conflict_used=1
+    else
+      echo "Staging AGENTS.md already current; no staging PR needed."
     fi
 
-
-    fi # Staging independently reconciled or normal PR path.
+    if ! git checkout "$branch" >/dev/null 2>&1; then
+      echo "FAILED: Cannot restore main-derived rollout branch."
+      cleanup_repo "$workdir"
+      return 1
+    fi
 
     # --------------------------------------------------------
     # Production PR
@@ -1380,74 +1282,25 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # Bulk staging
+  # Stage-only rollout (branch created from staging)
   # ==========================================================
 
-  if [ "$staging_diverged" -eq 1 ] || [ "$staging_needs_update" -eq 0 ]; then
-    if [ "$staging_needs_update" -eq 1 ]; then
-      echo "Reconciling divergent staging from a staging-only branch."
-      if ! resolve_staging_conflict "$repo" "$staging_branch"; then
-        cleanup_repo "$workdir"; return 1
-      fi
-      conflict_used=1
-    else
-      echo "Staging already contains all named sections; skipping staging PR."
-    fi
-    if ! git checkout "$branch" >/dev/null 2>&1; then
-      echo "FAILED: Cannot restore main-originated rollout branch."
-      cleanup_repo "$workdir"; return 1
-    fi
-  else
-
-  echo "Creating staging PR..."
-
-
-  if ! staging_pr=$(gh pr create \
-    --repo "$ORG/$repo" \
-    --base "$staging_branch" \
-    --head "$branch" \
-    --title "Codex to Staging: Update AGENTS.md organization guidance" \
-    --body "$pr_body"); then
-
-    echo "FAILED: Staging PR creation failed."
-
-    cleanup_repo "$workdir"
-
-    return 1
-  fi
-
-
-  echo "Staging PR:"
-  echo "$staging_pr"
-
-
-  if ! gh pr merge "$staging_pr" \
-    --repo "$ORG/$repo" \
-    --merge \
-    --admin \
-    --match-head-commit "$working_commit"; then
-
-    echo "Direct staging merge failed."
-    echo "Attempting conflict-resolution flow..."
-
-
-    if ! resolve_staging_conflict \
-      "$repo" \
-      "$staging_branch"; then
-
-      echo "FAILED: Unable to resolve staging conflict."
-
+  if [ "$staging_needs_update" -eq 1 ]; then
+    if ! resolve_staging_conflict "$repo" "$staging_branch"; then
+      echo "FAILED: Staging-only AGENTS.md reconciliation failed."
       cleanup_repo "$workdir"
-
       return 1
     fi
-
-
     conflict_used=1
+  else
+    echo "Staging AGENTS.md already current; no staging PR needed."
   fi
 
-
-  fi # Staging-only reconcile or normal staging PR.
+  if ! git checkout "$branch" >/dev/null 2>&1; then
+    echo "FAILED: Cannot restore main-derived rollout branch."
+    cleanup_repo "$workdir"
+    return 1
+  fi
 
   # ==========================================================
   # Bulk production
