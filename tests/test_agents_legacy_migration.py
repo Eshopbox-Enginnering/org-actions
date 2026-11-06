@@ -64,6 +64,50 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertIn("differs from trusted historical payload", outcome.stdout)
             self.assertEqual((root / "AGENTS.md").read_bytes(), original)
 
+    def test_legacy_extra_blank_lines_can_migrate_safely(self):
+        # Historical frontend AGENTS.md contains extra empty lines within
+        # the otherwise byte-identical trusted instructions.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            padded = TRUSTED.replace(b"## Git\n", b"## Git\n\n", 1)
+            padded = padded.replace(b"## Starting a task\n", b"## Starting a task\n\n", 1)
+            padded = padded.replace(b"## Review comments\n", b"## Review comments\n\n", 1)
+            original = self.make_repo(
+                root, body=padded,
+                before=b"# Frontend-only rules\nKeep existing Angular guidance.\n",
+                after=b"\n## Custom rules\nNever use direct API URLs.\n")
+            preview = self.run_migrator(root, "check")
+            self.assertEqual(preview.returncode, 0, preview.stdout + preview.stderr)
+            self.assertEqual((root / "AGENTS.md").read_bytes(), original)
+            applied = self.run_migrator(root)
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            result = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(result.startswith(b"# Frontend-only rules\nKeep existing Angular guidance.\n"))
+            self.assertTrue(result.endswith(b"\n## Custom rules\nNever use direct API URLs.\n"))
+            self.assertIn(CURRENT, result)
+            self.assertNotIn(LEGACY_BEGIN, result)
+
+    def test_legacy_nonblank_changes_remain_blocked_even_with_blank_lines(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            original = self.make_repo(
+                root, body=TRUSTED.replace(b"## Git\n", b"## Git\n\n", 1)
+                .replace(b"Never merge or rebase", b"Always merge or rebase", 1))
+            for mode in ("check", "apply"):
+                result = self.run_migrator(root, mode)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("differs from trusted historical payload", result.stdout)
+                self.assertEqual((root / "AGENTS.md").read_bytes(), original)
+
+    def test_legacy_line_spacing_changes_are_not_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            original = self.make_repo(root, body=TRUSTED.replace(
+                b"## Git\n", b"## Git\n  \n", 1))
+            result = self.run_migrator(root)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertEqual((root / "AGENTS.md").read_bytes(), original)
+
     def test_mismatched_and_duplicated_markers_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -116,7 +160,7 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('gh pr merge "$production_pr"', existing)
 
         new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
-            '\\n# Header', 1)[0]
+            '\n# Header', 1)[0]
         self.assertLess(new.index('Creating staging PR'),
                         new.index('Creating production PR'))
         self.assertIn('gh pr merge "$staging_pr"', new)
