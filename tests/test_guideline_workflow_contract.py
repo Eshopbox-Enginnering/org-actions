@@ -101,6 +101,14 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("scheduled promotion workflow then creates", readme)
         self.assertIn("staging first, then production", readme)
 
+    def test_main_pr_never_uses_staging_derived_head(self):
+        creator = self.contents("scripts/sync-guidelines-and-agents.py")
+        merger = self.contents("scripts/sync-guidelines-auto-merge.py")
+        self.assertIn('phase(repo, args, selected, contents, production)', creator)
+        self.assertIn('len(parents) != 2 or parents[1] != verified_base', merger)
+        self.assertIn('never merge staging into main', merger)
+        self.assertIn('rollout branch must be one commit', merger)
+
     def test_automatic_merges_pin_the_inspected_head(self):
         source = self.contents("scripts/sync-guidelines-auto-merge.py")
         self.assertIn('"--match-head-commit", verified_head', source)

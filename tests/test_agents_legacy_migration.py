@@ -33,27 +33,102 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         (directory / "AGENTS.md").write_bytes(data)
         return data
 
-    def test_trusted_legacy_migrates_without_touching_repo_owned_text(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
-            original = self.make_repo(root, before=b"# Repo instructions\n\n",
-                                      after=b"\n## Keep my custom section\n")
-            check = self.run_migrator(root, "check")
-            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
-            self.assertEqual((root / "AGENTS.md").read_bytes(), original)
-            migrated = self.run_migrator(root)
-            self.assertEqual(migrated.returncode, 0, migrated.stdout + migrated.stderr)
-            result = (root / "AGENTS.md").read_bytes()
-            digest = hashlib.sha256(CURRENT).hexdigest()[:12].encode("ascii")
-            self.assertTrue(result.startswith(b"# Repo instructions\n\n"))
-            self.assertTrue(result.endswith(b"\n## Keep my custom section\n"))
-            self.assertIn(b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->", result)
-            self.assertIn(b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->", result)
-            self.assertIn(CURRENT, result)
-            self.assertNotIn(LEGACY_BEGIN, result)
-            repeat = self.run_migrator(root)
-            self.assertEqual(repeat.returncode, 2, repeat.stdout + repeat.stderr)
-            self.assertEqual(result, (root / "AGENTS.md").read_bytes())
+    def test_trusted_legacy_stays_intact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            original = self.make_repo(root, before=b"# Repo rules\n\n")
+            result = self.run_migrator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            self.assertEqual(updated.count(b"## Git\n"), 1)
+            self.assertIn(b"## AI context and token efficiency", updated)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
+
+    def test_ai_only_managed_block_gets_missing_sections(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            start = CURRENT.index(b"## AI context and token efficiency")
+            end = CURRENT.index(b"## Engineering standards", start)
+            ai = CURRENT[start:end].strip(b"\n") + b"\n"
+            digest = hashlib.sha256(ai).hexdigest()[:12].encode("ascii")
+            original = (b"# Existing custom rules\n\n"
+                        + b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\n"
+                        + ai
+                        + b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\n")
+            (root / "AGENTS.md").write_bytes(original)
+            result = self.run_migrator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            for section in (b"## Git", b"## Starting a task",
+                            b"## Reading the issue", b"## Review comments",
+                            b"## Engineering standards", b"## Learned rules"):
+                self.assertIn(section, updated)
+            self.assertEqual(updated.count(b"## AI context and token efficiency"), 1)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
+
+    def test_custom_h1_payload_preserved_for_backwards_compatibility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            custom = root / "custom.md"
+            custom.write_bytes(b"# Custom guidance\n\nCustom instructions.\n")
+            original = b"# Existing instructions\n\n## Local rules\nStay local.\n"
+            (root / "AGENTS.md").write_bytes(original)
+            digest = hashlib.sha256(custom.read_bytes()).hexdigest()[:12]
+            result = subprocess.run(
+                [sys.executable, "-", str(custom), digest, "apply",
+                 str(ROOT / "payload/agents-legacy-v1.md")],
+                input=MIGRATOR, text=True, capture_output=True, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            self.assertIn(custom.read_bytes(), updated)
+            second = subprocess.run(
+                [sys.executable, "-", str(custom), digest, "apply",
+                 str(ROOT / "payload/agents-legacy-v1.md")],
+                input=MIGRATOR, text=True, capture_output=True, cwd=root)
+            self.assertEqual(second.returncode, 2, second.stdout + second.stderr)
+
+    def test_staging_header_divergence_is_a_hard_failure(self):
+        # Production-based additions must not be replayed blindly on staging.
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        self.assertIn("Only on staging:", script)
+        self.assertIn("Only on main:", script)
+        self.assertIn("if prod != stage:", script)
+        self.assertIn('["git", "show", f"origin/{branch}:AGENTS.md"]', script)
+
+    def test_crlf_source_and_target_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            crlf = root / "crlf.md"
+            crlf.write_bytes(CURRENT.replace(b"\n", b"\r\n"))
+            original = b"# Local rules\r\n"
+            (root / "AGENTS.md").write_bytes(original)
+            digest = hashlib.sha256(crlf.read_bytes()).hexdigest()[:12]
+            def invoke():
+                return subprocess.run(
+                    [sys.executable, "-", str(crlf), digest, "apply",
+                     str(ROOT / "payload/agents-legacy-v1.md")],
+                    input=MIGRATOR, text=True, capture_output=True, cwd=root)
+            first = invoke()
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertNotIn(b"\r\r\n", updated)
+            self.assertEqual(invoke().returncode, 2)
+            self.assertEqual(updated, (root / "AGENTS.md").read_bytes())
+
+    def test_heading_with_trailing_spaces_is_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            original = b"## Git   \nKeep local rules.\n"
+            (root / "AGENTS.md").write_bytes(original)
+            outcome = self.run_migrator(root)
+            self.assertEqual(outcome.returncode, 0, outcome.stdout + outcome.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            self.assertEqual(updated.count(b"## Git"), 1)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
 
     def test_modified_legacy_content_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -64,28 +139,17 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertIn("differs from trusted historical payload", outcome.stdout)
             self.assertEqual((root / "AGENTS.md").read_bytes(), original)
 
-    def test_legacy_extra_blank_lines_can_migrate_safely(self):
-        # Historical frontend AGENTS.md contains extra empty lines within
-        # the otherwise byte-identical trusted instructions.
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
+    def test_legacy_spacing_variant_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
             padded = TRUSTED.replace(b"## Git\n", b"## Git\n\n", 1)
-            padded = padded.replace(b"## Starting a task\n", b"## Starting a task\n\n", 1)
-            padded = padded.replace(b"## Review comments\n", b"## Review comments\n\n", 1)
-            original = self.make_repo(
-                root, body=padded,
-                before=b"# Frontend-only rules\nKeep existing Angular guidance.\n",
-                after=b"\n## Custom rules\nNever use direct API URLs.\n")
-            preview = self.run_migrator(root, "check")
-            self.assertEqual(preview.returncode, 0, preview.stdout + preview.stderr)
-            self.assertEqual((root / "AGENTS.md").read_bytes(), original)
-            applied = self.run_migrator(root)
-            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
-            result = (root / "AGENTS.md").read_bytes()
-            self.assertTrue(result.startswith(b"# Frontend-only rules\nKeep existing Angular guidance.\n"))
-            self.assertTrue(result.endswith(b"\n## Custom rules\nNever use direct API URLs.\n"))
-            self.assertIn(CURRENT, result)
-            self.assertNotIn(LEGACY_BEGIN, result)
+            original = self.make_repo(root, body=padded)
+            self.assertEqual(self.run_migrator(root, "check").returncode, 0)
+            self.assertEqual(self.run_migrator(root).returncode, 0)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            self.assertIn(b"## AI context and token efficiency", updated)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
 
     def test_legacy_nonblank_changes_remain_blocked_even_with_blank_lines(self):
         with tempfile.TemporaryDirectory() as temporary:

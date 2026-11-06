@@ -93,6 +93,18 @@ def merge_guideline_pr(full, number, target, entries, contents,
             raise ValueError(f"{full} PR #{number}: head is behind {target}")
         verified_head = sync.cmd("git", "rev-parse", f"origin/{head}", cwd=root)
         verified_base = sync.cmd("git", "rev-parse", f"origin/{target}", cwd=root)
+        # HARD RULE: the source branch is one documentation-only commit
+        # created directly from the target branch. In particular, a main
+        # PR must NEVER contain staging or conflict-resolution merges.
+        parents = sync.cmd("git", "rev-list", "--parents", "-n", "1",
+                           verified_head, cwd=root).split()
+        if len(parents) != 2 or parents[1] != verified_base:
+            raise ValueError(
+                f"{full} PR #{number}: rollout branch must be one commit "
+                f"directly on {target}; never merge staging into main")
+        if target in ("main", "master", "aws-velocis-main") and (
+                head.startswith("conflict/") or "staging" in head):
+            raise ValueError(f"{full} PR #{number}: staging-derived main PR is forbidden")
         changes = set(sync.cmd(
             "git", "diff", "--name-only", f"origin/{target}..origin/{head}",
             cwd=root).splitlines())

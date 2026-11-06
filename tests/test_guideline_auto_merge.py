@@ -52,6 +52,8 @@ class GuidelineAutoMergeTests(unittest.TestCase):
               "org-action/guidelines-backend-sample",
               "state": "OPEN", "mergedAt": None}
         def command(*args, **kwargs):
+            if args[:3] == ("git", "rev-list", "--parents"):
+                return "a" * 40 + " " + "b" * 40
             if args[:2] == ("git", "rev-parse"):
                 return "a" * 40 if "org-action/" in args[2] else "b" * 40
             if args[:3] == ("git", "ls-remote", "origin"):
@@ -86,6 +88,8 @@ class GuidelineAutoMergeTests(unittest.TestCase):
                       "headRefOid": "a" * 40,
                       "state": "OPEN"}
         def command(*args, **kwargs):
+            if args[:3] == ("git", "rev-list", "--parents"):
+                return "a" * 40 + " " + "b" * 40
             if args[:2] == ("git", "rev-parse"):
                 return "a" * 40 if "org-action/" in args[2] else "b" * 40
             if args[:3] == ("git", "ls-remote", "origin"):
