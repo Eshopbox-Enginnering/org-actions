@@ -364,7 +364,20 @@ if legacy:
         print("ERROR: Ambiguous legacy AGENTS.md sections; manual review required.")
         sys.exit(1)
     trusted_legacy = trusted_legacy_path.read_bytes()
-    if not trusted_legacy or legacy[0].group("body") != trusted_legacy:
+    body = legacy[0].group("body")
+    # Some repositories contain the exact pinned historical instructions with
+    # additional empty lines inserted between existing lines. Accept only that
+    # whitespace-only variant; any changed or added nonblank line is rejected.
+    # This does not apply to versioned managed blocks (which retain hash checks).
+    def without_empty_lines(value):
+        return b"\n".join(
+            line for line in value.replace(b"\r\n", b"\n").split(b"\n")
+            if line != b""
+        )
+    if not trusted_legacy or (
+        body != trusted_legacy and
+        without_empty_lines(body) != without_empty_lines(trusted_legacy)
+    ):
         print("ERROR: Legacy AGENTS.md differs from trusted historical payload.")
         sys.exit(1)
 
