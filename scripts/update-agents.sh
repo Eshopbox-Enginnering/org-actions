@@ -905,6 +905,14 @@ if prod != stage:
     sys.exit(3)
 PY
   then
+    :
+  else
+    divergence_result=$?
+    if [ "$divergence_result" -ne 3 ]; then
+      echo "FAILED: Cannot safely compare staging and production headings."
+      cleanup_repo "$workdir"
+      return 1
+    fi
     staging_diverged=1
   fi
 
@@ -934,6 +942,9 @@ PY
     if [ "$staging_needs_update" -eq 0 ]; then
       echo "AGENTS.md already current on staging and production."
       cleanup_repo "$workdir"
+      if [ "$TARGET" = "single" ]; then
+        return 0
+      fi
       return 2
     fi
     if [ "$OPERATION" = "DRY_RUN" ]; then
