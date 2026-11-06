@@ -338,6 +338,23 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('if [ "$OPERATION" = "APPLY" ]; then', single)
         self.assertIn('failed=$((failed + 1))', single)
 
+    def test_bulk_preflight_is_conservative_and_only_runs_for_type_targets(self):
+        self.assertIn('if [ "$TARGET" = "backend" ] || [ "$TARGET" = "frontend" ]; then', SCRIPT)
+        self.assertIn('preflight_type=$(preflight_repo_type "$repo" "$production_branch")', SCRIPT)
+        self.assertIn('[ "$preflight_type" != "unknown" ]', SCRIPT)
+        self.assertLess(SCRIPT.index('preflight_type=$(preflight_repo_type'), SCRIPT.index('gh repo clone "$ORG/$repo"'))
+        self.assertIn('echo "unknown"', SCRIPT)
+        self.assertIn("gh api \"repos/$ORG/$repo/git/trees/$production_branch\"", SCRIPT)
+        self.assertIn("detected_type=$(detect_repo_type \"$workdir\")", SCRIPT)
+
+    def test_preflight_manifest_priority_matches_authoritative_detector(self):
+        section = SCRIPT.split('preflight_repo_type() {', 1)[1].split('# Target matching', 1)[0]
+        self.assertLess(section.index('manifest_present "composer.json"'),
+                        section.index('for file in angular.json'))
+        self.assertLess(section.index('for file in angular.json'),
+                        section.index('for file in pom.xml'))
+        self.assertIn('echo "unknown"', section)
+
     def test_mixed_frontend_php_backend_uses_backend_precedence(self):
         php_check = SCRIPT.index('if [ -f "$dir/composer.json" ]; then')
         frontend_check = SCRIPT.index('if [ -f "$dir/angular.json" ]')
