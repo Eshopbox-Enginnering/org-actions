@@ -45,6 +45,29 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertIn(b"## AI context and token efficiency", updated)
             self.assertEqual(self.run_migrator(root).returncode, 2)
 
+    def test_ai_only_managed_block_gets_missing_sections(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            start = CURRENT.index(b"## AI context and token efficiency")
+            end = CURRENT.index(b"## Engineering standards", start)
+            ai = CURRENT[start:end].strip(b"\\n") + b"\\n"
+            digest = hashlib.sha256(ai).hexdigest()[:12].encode("ascii")
+            original = (b"# Existing custom rules\\n\\n"
+                        + b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\\n"
+                        + ai
+                        + b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\\n")
+            (root / "AGENTS.md").write_bytes(original)
+            result = self.run_migrator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            for section in (b"## Git", b"## Starting a task",
+                            b"## Reading the issue", b"## Review comments",
+                            b"## Engineering standards", b"## Learned rules"):
+                self.assertIn(section, updated)
+            self.assertEqual(updated.count(b"## AI context and token efficiency"), 1)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
+
     def test_modified_legacy_content_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
