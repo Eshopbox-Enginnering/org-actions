@@ -90,13 +90,34 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
                 input=MIGRATOR, text=True, capture_output=True, cwd=root)
             self.assertEqual(second.returncode, 2, second.stdout + second.stderr)
 
-    def test_staging_header_divergence_is_a_hard_failure(self):
-        # Production-based additions must not be replayed blindly on staging.
+    def test_staging_headings_are_inspected_without_abort(self):
         script = (ROOT / "scripts/update-agents.sh").read_text()
-        self.assertIn("Only on staging:", script)
-        self.assertIn("Only on main:", script)
-        self.assertIn("if prod != stage:", script)
-        self.assertIn('["git", "show", f"origin/{branch}:AGENTS.md"]', script)
+        self.assertIn('staging_diverged=1', script)
+        self.assertIn('inspect_staging_agents "$production_branch" "$staging_branch"', script)
+        self.assertIn('preview_staging_agents "$production_branch" "$staging_branch"', script)
+        self.assertIn('if [ "$production_current" -eq 1 ]; then', script)
+        self.assertIn('if [ "$staging_needs_update" -eq 1 ]; then', script)
+        self.assertIn('resolve_staging_conflict "$repo" "$staging_branch"', script)
+        self.assertIn('git checkout --detach "origin/$staging_branch"', script)
+        self.assertNotIn('FAILED: AGENTS.md instructions differ between staging and main', script)
+
+    def test_staging_only_rollout_has_distinct_success_code(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        self.assertIn('return 14', script)
+        self.assertEqual(script.count('    14)'), 1)
+        self.assertEqual(script.count('      14)'), 1)
+        self.assertIn('Production current; updating staging only.', script)
+        self.assertIn('Staging already contains all named sections', script)
+
+    def test_staging_repair_uses_staging_branch_not_production(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        helper = script.split('resolve_staging_conflict() {', 1)[1].split('process_repo() {', 1)[0]
+        self.assertIn('origin/$staging_branch', helper)
+        self.assertIn('apply_agents_content', helper)
+        self.assertIn('--base "$staging_branch"', helper)
+        self.assertNotIn('--base "$production_branch"', helper)
+        self.assertIn('git checkout -b "$branch"', script)
+        self.assertIn('--base "$production_branch"', script)
 
     def test_crlf_source_and_target_are_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
