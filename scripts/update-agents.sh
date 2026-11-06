@@ -880,7 +880,7 @@ process_repo() {
   # Identify divergence only; never reject valid branch-specific content.
   # Reconcile staging using a staging-derived branch, and main using the
   # main-derived rollout branch. No staging commits go into production.
-  if ! python3 - "$production_branch" "$staging_branch" "$CONTENT_PATH" <<'PY'
+  if python3 - "$production_branch" "$staging_branch" "$CONTENT_PATH" <<'PY'
 import pathlib
 import re
 import subprocess
