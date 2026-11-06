@@ -1120,8 +1120,7 @@ Only AGENTS.md is modified."
       return 12
     fi
 
-
-    return 10
+    return 16  # Production-only: staging already current.
   fi
 
 
@@ -1357,8 +1356,7 @@ Only AGENTS.md is modified."
     return 12
   fi
 
-
-  return 10
+  return 16  # Production-only: staging already current.
 }
 
 
@@ -1414,6 +1412,11 @@ if [ "$TARGET" = "single" ]; then
 
     14)
       staging_merged=$((staging_merged + 1))
+      conflict_resolved=$((conflict_resolved + 1))
+      ;;
+
+    16)
+      production_merged=$((production_merged + 1))
       ;;
 
     10)
@@ -1477,6 +1480,11 @@ else
 
       14)
         staging_merged=$((staging_merged + 1))
+        conflict_resolved=$((conflict_resolved + 1))
+        ;;
+
+      16)
+        production_merged=$((production_merged + 1))
         ;;
 
       10)
@@ -1522,7 +1530,7 @@ else
 
   echo "Staging merged        : $staging_merged"
   echo "Production merged     : $production_merged"
-  echo "Conflicts resolved    : $conflict_resolved"
+  echo "Staging-only PRs      : $conflict_resolved"
   echo "Skipped               : $skipped"
   echo "Failed                : $failed"
 
