@@ -97,7 +97,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
 
     def test_runbook_describes_immediate_dual_pr_creation(self):
         readme = self.contents("engineering-guidelines/README.md")
-        self.assertIn("One manual APPLY run creates and merges both PRs", readme)
+        self.assertIn("One manual APPLY run creates and merges the staging and production PRs", readme)
         self.assertNotIn("scheduled promotion workflow then creates", readme)
         self.assertIn("staging first, then production", readme)
 
