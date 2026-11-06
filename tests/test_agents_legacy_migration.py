@@ -36,12 +36,12 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
     def test_trusted_legacy_stays_intact(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
-            original = self.make_repo(root, before=b"# Repo rules\\n\\n")
+            original = self.make_repo(root, before=b"# Repo rules\n\n")
             result = self.run_migrator(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             updated = (root / "AGENTS.md").read_bytes()
             self.assertTrue(updated.startswith(original))
-            self.assertEqual(updated.count(b"## Git\\n"), 1)
+            self.assertEqual(updated.count(b"## Git\n"), 1)
             self.assertIn(b"## AI context and token efficiency", updated)
             self.assertEqual(self.run_migrator(root).returncode, 2)
 
@@ -50,12 +50,12 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             root = pathlib.Path(directory)
             start = CURRENT.index(b"## AI context and token efficiency")
             end = CURRENT.index(b"## Engineering standards", start)
-            ai = CURRENT[start:end].strip(b"\\n") + b"\\n"
+            ai = CURRENT[start:end].strip(b"\n") + b"\n"
             digest = hashlib.sha256(ai).hexdigest()[:12].encode("ascii")
-            original = (b"# Existing custom rules\\n\\n"
-                        + b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\\n"
+            original = (b"# Existing custom rules\n\n"
+                        + b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\n"
                         + ai
-                        + b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\\n")
+                        + b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->\n")
             (root / "AGENTS.md").write_bytes(original)
             result = self.run_migrator(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -80,7 +80,7 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
     def test_legacy_spacing_variant_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
-            padded = TRUSTED.replace(b"## Git\\n", b"## Git\\n\\n", 1)
+            padded = TRUSTED.replace(b"## Git\n", b"## Git\n\n", 1)
             original = self.make_repo(root, body=padded)
             self.assertEqual(self.run_migrator(root, "check").returncode, 0)
             self.assertEqual(self.run_migrator(root).returncode, 0)
