@@ -117,6 +117,7 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('--base "$staging_branch"', helper)
         self.assertNotIn('--base "$production_branch"', helper)
         self.assertIn('git checkout -b "$branch"', script)
+        self.assertEqual(script.count('gh pr merge "$staging_pr"'), 0)
         self.assertIn('--base "$production_branch"', script)
 
     def test_divergence_detector_with_real_git_branches(self):
@@ -268,26 +269,24 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertIn("Mismatched organization-managed marker hashes", result.stdout)
             self.assertEqual(existing, (root / "AGENTS.md").read_bytes())
 
-    def test_single_target_uses_staging_before_production(self):
-        # Single and bulk must use one staging -> main implementation.
+    def test_single_target_uses_staging_only_pr_before_main(self):
+        # Stage updates are always generated from staging; main uses main.
         self.assertNotIn('Manual review/merge required.', SCRIPT)
-        self.assertNotIn('SUCCESS: Single repository PR created.', SCRIPT)
         self.assertIn('staging_branch=$(find_staging_branch "$production_branch")', SCRIPT)
         self.assertNotIn('if [ "$TARGET" != "single" ]; then', SCRIPT)
-
         existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
             '# NEW ROLLOUT', 1)[0]
-        self.assertLess(existing.index('Existing staging PR'),
-                        existing.index('Production PR'))
-        self.assertIn('production_pr=$(find_open_pr_by_base', existing)
+        self.assertLess(existing.index('resolve_staging_conflict "$repo"'),
+                        existing.index('production_pr=$(find_open_pr_by_base'))
         self.assertIn('gh pr merge "$production_pr"', existing)
-
         new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
             '\n# Header', 1)[0]
-        self.assertLess(new.index('Creating staging PR'),
+        self.assertLess(new.index('resolve_staging_conflict "$repo"'),
                         new.index('Creating production PR'))
-        self.assertIn('gh pr merge "$staging_pr"', new)
         self.assertIn('gh pr merge "$production_pr"', new)
+        self.assertNotIn('gh pr merge "$staging_pr"', new)
+        self.assertNotIn('--base "$staging_branch"', new)
+        self.assertIn('--base "$production_branch"', new)
 
     def test_single_target_reports_two_merges_and_keeps_dry_run_safe(self):
         single = SCRIPT.rsplit('# Single', 1)[1].split('# Bulk', 1)[0]
@@ -300,21 +299,21 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('NO merge performed.', SCRIPT)
         self.assertIn('is_supported_production_branch "$production_branch"', SCRIPT)
 
-    def test_existing_open_main_pr_is_reused_after_staging_merge(self):
+    def test_existing_open_main_pr_is_reused_after_staging_reconciliation(self):
         existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
             '# NEW ROLLOUT', 1)[0]
-        self.assertLess(existing.index('gh pr merge "$staging_pr"'),
+        self.assertLess(existing.index('resolve_staging_conflict "$repo"'),
                         existing.index('production_pr=$(find_open_pr_by_base'))
         self.assertLess(existing.index('production_pr=$(find_open_pr_by_base'),
                         existing.index('gh pr merge "$production_pr"'))
         self.assertIn('if [ -z "$production_pr" ]; then', existing)
         self.assertIn('gh pr create', existing)
 
-    def test_retries_skip_completed_staging_and_pin_original_commit(self):
+    def test_retries_validate_original_production_commit(self):
         existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
             '# NEW ROLLOUT', 1)[0]
-        self.assertIn('git merge-base --is-ancestor "$verified_sha"', existing)
-        self.assertIn('already merged into staging; continuing to main', existing)
+        self.assertIn('Existing rollout branch is not an exact safe production-based update', existing)
+        self.assertIn('if [ "$staging_needs_update" -eq 1 ]; then', existing)
         self.assertIn('--match-head-commit "$verified_sha"', existing)
         new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
             '# Header', 1)[0]
