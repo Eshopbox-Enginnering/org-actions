@@ -25,7 +25,18 @@
       "id": "status",
       "source_url": "engineering-guidelines/backend/HTTP_Status_Codes_Reference.md",
       "destination": "docs/engineering-guidelines/HTTP_Status_Codes_Reference.md"
+    },
+    {
+      "id": "ai-context",
+      "source_url": "engineering-guidelines/ai-agent-context-token-efficiency.md",
+      "destination": "docs/engineering-guidelines/ai-agent-context-token-efficiency.md"
     }
   ],
-  "frontend": []
+  "frontend": [
+    {
+      "id": "ai-context",
+      "source_url": "engineering-guidelines/ai-agent-context-token-efficiency.md",
+      "destination": "docs/engineering-guidelines/ai-agent-context-token-efficiency.md"
+    }
+  ]
 }
