@@ -90,13 +90,84 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
                 input=MIGRATOR, text=True, capture_output=True, cwd=root)
             self.assertEqual(second.returncode, 2, second.stdout + second.stderr)
 
-    def test_staging_header_divergence_is_a_hard_failure(self):
-        # Production-based additions must not be replayed blindly on staging.
+    def test_staging_headings_are_inspected_without_abort(self):
         script = (ROOT / "scripts/update-agents.sh").read_text()
-        self.assertIn("Only on staging:", script)
-        self.assertIn("Only on main:", script)
-        self.assertIn("if prod != stage:", script)
-        self.assertIn('["git", "show", f"origin/{branch}:AGENTS.md"]', script)
+        self.assertIn('staging_diverged=1', script)
+        self.assertIn('inspect_staging_agents "$production_branch" "$staging_branch"', script)
+        self.assertIn('preview_staging_agents "$production_branch" "$staging_branch"', script)
+        self.assertIn('if [ "$production_current" -eq 1 ]; then', script)
+        self.assertIn('if [ "$staging_needs_update" -eq 1 ]; then', script)
+        self.assertIn('resolve_staging_conflict "$repo" "$staging_branch"', script)
+        self.assertIn('git checkout --detach "origin/$staging_branch"', script)
+        self.assertNotIn('FAILED: AGENTS.md instructions differ between staging and main', script)
+
+    def test_git_identity_set_before_staging_only_commit(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        repo_processing = script.split("process_repo() {", 1)[1]
+        identity = repo_processing.index('git config user.name "eshopbox-org-agents[bot]"')
+        staging_only = repo_processing.index('if [ "$production_current" -eq 1 ]; then')
+        self.assertLess(identity, staging_only)
+        self.assertIn('git config user.email "eshopbox-org-agents[bot]@users.noreply.github.com"',
+                      repo_processing[:staging_only])
+
+    def test_staging_only_rollout_has_distinct_success_code(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        self.assertIn('return 14', script)
+        self.assertIn('return 16', script)
+        self.assertIn('Staging-only PRs', script)
+        self.assertEqual(len(re.findall(r'(?m)^    14\)', script)), 1)
+        self.assertEqual(len(re.findall(r'(?m)^      14\)', script)), 1)
+        self.assertIn('Production current; updating staging only.', script)
+        self.assertIn('Staging AGENTS.md already current; no staging PR needed.', script)
+
+    def test_staging_repair_uses_staging_branch_not_production(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        helper = script.split('resolve_staging_conflict() {', 1)[1].split('process_repo() {', 1)[0]
+        self.assertIn('origin/$staging_branch', helper)
+        self.assertIn('apply_agents_content', helper)
+        self.assertIn('--base "$staging_branch"', helper)
+        self.assertNotIn('--base "$production_branch"', helper)
+        self.assertIn('git checkout -b "$branch"', script)
+        self.assertEqual(script.count('gh pr merge "$staging_pr"'), 0)
+        self.assertIn('--base "$production_branch"', script)
+
+    def test_divergence_detector_with_real_git_branches(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        start = script.index("  # Identify divergence only;")
+        guard = script[start:].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = pathlib.Path(temporary)
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=repo, check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("init", "-b", "main")
+            git("config", "user.email", "test@example.com")
+            git("config", "user.name", "Test")
+            agents = repo / "AGENTS.md"
+            agents.write_text("## Git\nKeep existing instructions.\n", encoding="utf-8")
+            git("add", "AGENTS.md")
+            git("commit", "-m", "main rules")
+            main_sha = git("rev-parse", "HEAD")
+            git("update-ref", "refs/remotes/origin/main", main_sha)
+            git("checkout", "-b", "staging")
+            agents.write_text("## AI context and token efficiency (organization-managed)\nKeep local guidance.\n",
+                              encoding="utf-8")
+            git("add", "AGENTS.md")
+            git("commit", "-m", "staging rules")
+            stage_sha = git("rev-parse", "HEAD")
+            git("update-ref", "refs/remotes/origin/staging", stage_sha)
+            def probe():
+                return subprocess.run(
+                    [sys.executable, "-", "main", "staging",
+                     str(ROOT / "payload/agents-update.md")],
+                    input=guard, cwd=repo, capture_output=True, text=True)
+            different = probe()
+            self.assertEqual(different.returncode, 3, different.stdout + different.stderr)
+            self.assertIn("Only on staging:", different.stdout)
+            self.assertIn("Only on main:", different.stdout)
+            git("update-ref", "refs/remotes/origin/staging", main_sha)
+            identical = probe()
+            self.assertEqual(identical.returncode, 0, identical.stdout + identical.stderr)
 
     def test_crlf_source_and_target_are_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -209,53 +280,53 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertIn("Mismatched organization-managed marker hashes", result.stdout)
             self.assertEqual(existing, (root / "AGENTS.md").read_bytes())
 
-    def test_single_target_uses_staging_before_production(self):
-        # Single and bulk must use one staging -> main implementation.
+    def test_single_target_uses_staging_only_pr_before_main(self):
+        # Stage updates are always generated from staging; main uses main.
         self.assertNotIn('Manual review/merge required.', SCRIPT)
-        self.assertNotIn('SUCCESS: Single repository PR created.', SCRIPT)
         self.assertIn('staging_branch=$(find_staging_branch "$production_branch")', SCRIPT)
         self.assertNotIn('if [ "$TARGET" != "single" ]; then', SCRIPT)
-
         existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
             '# NEW ROLLOUT', 1)[0]
-        self.assertLess(existing.index('Existing staging PR'),
-                        existing.index('Production PR'))
-        self.assertIn('production_pr=$(find_open_pr_by_base', existing)
+        self.assertLess(existing.index('resolve_staging_conflict "$repo"'),
+                        existing.index('production_pr=$(find_open_pr_by_base'))
         self.assertIn('gh pr merge "$production_pr"', existing)
-
         new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
             '\n# Header', 1)[0]
-        self.assertLess(new.index('Creating staging PR'),
+        self.assertLess(new.index('resolve_staging_conflict "$repo"'),
                         new.index('Creating production PR'))
-        self.assertIn('gh pr merge "$staging_pr"', new)
         self.assertIn('gh pr merge "$production_pr"', new)
+        self.assertNotIn('gh pr merge "$staging_pr"', new)
+        self.assertNotIn('--base "$staging_branch"', new)
+        self.assertIn('--base "$production_branch"', new)
 
     def test_single_target_reports_two_merges_and_keeps_dry_run_safe(self):
         single = SCRIPT.rsplit('# Single', 1)[1].split('# Bulk', 1)[0]
         self.assertIn('process_repo "$TARGET_REPO"', single)
         self.assertIn('10)', single)
         self.assertIn('12)', single)
+        self.assertIn('14)', single)
+        self.assertIn('16)', single)
         self.assertIn('staging_merged=$((staging_merged + 1))', single)
         self.assertIn('production_merged=$((production_merged + 1))', single)
         self.assertNotIn('single_pr_created', SCRIPT)
         self.assertIn('NO merge performed.', SCRIPT)
         self.assertIn('is_supported_production_branch "$production_branch"', SCRIPT)
 
-    def test_existing_open_main_pr_is_reused_after_staging_merge(self):
+    def test_existing_open_main_pr_is_reused_after_staging_reconciliation(self):
         existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
             '# NEW ROLLOUT', 1)[0]
-        self.assertLess(existing.index('gh pr merge "$staging_pr"'),
+        self.assertLess(existing.index('resolve_staging_conflict "$repo"'),
                         existing.index('production_pr=$(find_open_pr_by_base'))
         self.assertLess(existing.index('production_pr=$(find_open_pr_by_base'),
                         existing.index('gh pr merge "$production_pr"'))
         self.assertIn('if [ -z "$production_pr" ]; then', existing)
         self.assertIn('gh pr create', existing)
 
-    def test_retries_skip_completed_staging_and_pin_original_commit(self):
+    def test_retries_validate_original_production_commit(self):
         existing = SCRIPT.split('# EXISTING ROLLOUT BRANCH', 1)[1].split(
             '# NEW ROLLOUT', 1)[0]
-        self.assertIn('git merge-base --is-ancestor "$verified_sha"', existing)
-        self.assertIn('already merged into staging; continuing to main', existing)
+        self.assertIn('Existing rollout branch is not an exact safe production-based update', existing)
+        self.assertIn('if [ "$staging_needs_update" -eq 1 ]; then', existing)
         self.assertIn('--match-head-commit "$verified_sha"', existing)
         new = SCRIPT.split('# NEW ROLLOUT', 1)[1].split(
             '# Header', 1)[0]

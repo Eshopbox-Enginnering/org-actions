@@ -492,6 +492,54 @@ PY
 }
 
 # ============================================================
+# Inspect staging independently without changing production history.
+# The update is validated with the same append-only migrator on each branch.
+# ============================================================
+
+inspect_staging_agents() {
+  local production_branch="$1"
+  local staging_branch="$2"
+  local status=0
+
+  if ! git checkout --detach "origin/$staging_branch" >/dev/null 2>&1; then
+    echo "FAILED: Cannot inspect staging AGENTS.md."
+    return 1
+  fi
+
+  apply_agents_content check
+  status=$?
+
+  if ! git checkout "$production_branch" >/dev/null 2>&1; then
+    echo "FAILED: Cannot return to production checkout."
+    return 1
+  fi
+
+  return "$status"
+}
+
+preview_staging_agents() {
+  local production_branch="$1"
+  local staging_branch="$2"
+  local status=0
+  if ! git checkout --detach "origin/$staging_branch" >/dev/null 2>&1; then
+    echo "FAILED: Cannot preview staging AGENTS.md."
+    return 1
+  fi
+  apply_agents_content
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    echo "DRY RUN: staging-only append preview (no PR or merge):"
+    git diff -- AGENTS.md
+    git restore --worktree -- AGENTS.md 2>/dev/null || rm -f AGENTS.md
+  fi
+  if ! git checkout "$production_branch" >/dev/null 2>&1; then
+    echo "FAILED: Cannot return to production checkout after preview."
+    return 1
+  fi
+  [ "$status" -eq 0 ] || [ "$status" -eq 2 ]
+}
+
+# ============================================================
 # Resolve staging conflict using temporary branch
 #
 # IMPORTANT:
@@ -693,6 +741,9 @@ process_repo() {
   local working_commit=""
 
   local conflict_used=0
+  local staging_diverged=0
+  local staging_needs_update=0
+  local production_current=0
 
 
   echo
@@ -789,6 +840,11 @@ process_repo() {
     '+refs/heads/*:refs/remotes/origin/*' \
     --depth=100 >/dev/null 2>&1 || true
 
+  # Required for staging-only repair, which can commit before the
+  # production rollout reaches its later identity setup.
+  git config user.name "eshopbox-org-agents[bot]"
+  git config user.email "eshopbox-org-agents[bot]@users.noreply.github.com"
+
 
   # ----------------------------------------------------------
   # Detect type
@@ -810,72 +866,34 @@ process_repo() {
 
 
   # ----------------------------------------------------------
-  # Already in production?
+  # Discover staging before treating production as already current.
+  # A partial rollout may have left staging without required headings.
   # ----------------------------------------------------------
-
-  # Always validate complete managed blocks, even when this hash is present.
-  # apply_agents_content returns 2 only for a verified exact match.
-  apply_agents_content check
-  validation_result=$?
-  if [ "$validation_result" -eq 2 ]; then
-    echo "AGENTS.md is already current in production."
+  if ! staging_branch=$(find_staging_branch "$production_branch"); then
+    echo "SKIP: No supported staging branch found."
     cleanup_repo "$workdir"
-    if [ "$TARGET" = "single" ]; then
-      return 0
-    fi
     return 2
-  elif [ "$validation_result" -ne 0 ]; then
-    echo "FAILED: Production AGENTS.md validation failed."
+  fi
+  echo "Production branch: $production_branch"
+  echo "Staging branch   : $staging_branch"
+  if [ "$production_branch" = "$staging_branch" ]; then
+    echo "SKIP: Production and staging branch are the same."
     cleanup_repo "$workdir"
-    return 1
+    return 2
   fi
 
-
-
-  # ----------------------------------------------------------
-  # All targets require staging
-  # ----------------------------------------------------------
-
-  if ! staging_branch=$(find_staging_branch "$production_branch"); then
-
-      echo "SKIP: No supported staging branch found."
-
-      cleanup_repo "$workdir"
-
-      return 2
-    fi
-
-
-    echo "Production branch: $production_branch"
-    echo "Staging branch   : $staging_branch"
-
-
-    if [ "$production_branch" = "$staging_branch" ]; then
-
-      echo "SKIP: Production and staging branch are the same."
-      echo "Branch: $production_branch"
-
-      cleanup_repo "$workdir"
-
-      return 2
-    fi
-
-
-  # Fail closed if the proposed main-derived AGENTS patch is unsafe on
-  # staging. Staging and main may have distinct managed section sets; a
-  # production-derived commit must never add duplicate headings to staging.
-  if ! python3 - "$production_branch" "$staging_branch" "$CONTENT_PATH" <<'PY'
+  # Identify divergence only; never reject valid branch-specific content.
+  # Reconcile staging using a staging-derived branch, and main using the
+  # main-derived rollout branch. No staging commits go into production.
+  if python3 - "$production_branch" "$staging_branch" "$CONTENT_PATH" <<'PY'
 import pathlib
 import re
 import subprocess
 import sys
-
 production, staging, payload_path = sys.argv[1:]
 heading = re.compile(rb"(?m)^## ([^\r\n]+)[ \t]*\r?\n")
 source = pathlib.Path(payload_path).read_bytes()
 desired = {name.strip() for name in heading.findall(source)}
-if not desired:
-    sys.exit(0)
 def headings(branch):
     result = subprocess.run(
         ["git", "show", f"origin/{branch}:AGENTS.md"],
@@ -886,15 +904,75 @@ def headings(branch):
 prod = headings(production) & desired
 stage = headings(staging) & desired
 if prod != stage:
-    print("FAILED: AGENTS.md instructions differ between staging and main; "
-          "cannot safely replay main-derived additions to staging.")
-    print("Only on staging:", sorted((stage - prod)))
-    print("Only on main:", sorted((prod - stage)))
-    sys.exit(1)
+    print("INFO: staging and production have different AGENTS.md sections.")
+    print("Only on staging:", sorted(stage - prod))
+    print("Only on main:", sorted(prod - stage))
+    sys.exit(3)
 PY
   then
+    :
+  else
+    divergence_result=$?
+    if [ "$divergence_result" -ne 3 ]; then
+      echo "FAILED: Cannot safely compare staging and production headings."
+      cleanup_repo "$workdir"
+      return 1
+    fi
+    staging_diverged=1
+  fi
+
+  # Validate both branch files with the same marker/hash rules.
+  apply_agents_content check
+  validation_result=$?
+  if [ "$validation_result" -eq 2 ]; then
+    production_current=1
+    echo "Production AGENTS.md is already current."
+  elif [ "$validation_result" -ne 0 ]; then
+    echo "FAILED: Production AGENTS.md validation failed."
     cleanup_repo "$workdir"
     return 1
+  fi
+
+  inspect_staging_agents "$production_branch" "$staging_branch"
+  staging_status=$?
+  if [ "$staging_status" -eq 0 ]; then
+    staging_needs_update=1
+  elif [ "$staging_status" -ne 2 ]; then
+    echo "FAILED: Staging AGENTS.md marker/content validation failed."
+    cleanup_repo "$workdir"
+    return 1
+  fi
+
+  if [ "$production_current" -eq 1 ]; then
+    if [ "$staging_needs_update" -eq 0 ]; then
+      echo "AGENTS.md already current on staging and production."
+      cleanup_repo "$workdir"
+      if [ "$TARGET" = "single" ]; then
+        return 0
+      fi
+      return 2
+    fi
+    if [ "$OPERATION" = "DRY_RUN" ]; then
+      preview_staging_agents "$production_branch" "$staging_branch" || {
+        cleanup_repo "$workdir"; return 1;
+      }
+      cleanup_repo "$workdir"
+      return 0
+    fi
+    echo "Production current; updating staging only."
+    if ! resolve_staging_conflict "$repo" "$staging_branch"; then
+      cleanup_repo "$workdir"; return 1
+    fi
+    cleanup_repo "$workdir"
+    return 14
+  fi
+
+  # For divergent or already-complete staging, avoid merging the production
+  # content into staging. Staging is patched from staging itself instead.
+  if [ "$OPERATION" = "DRY_RUN" ] && [ "$staging_needs_update" -eq 1 ]; then
+    preview_staging_agents "$production_branch" "$staging_branch" || {
+      cleanup_repo "$workdir"; return 1;
+    }
   fi
 
   # ==========================================================
@@ -952,112 +1030,27 @@ PY
 
 
     # --------------------------------------------------------
-    # Existing staging PR
+    # Stage-only update, derived exclusively from staging. Never
+    # merge the main-based rollout branch into staging: it can
+    # contain unrelated production code changes.
     # --------------------------------------------------------
 
-    staging_pr=$(find_open_pr_by_base \
-      "$repo" \
-      "$staging_branch" \
-      "$branch")
-
-
-    if git fetch origin "$staging_branch" --depth=100 >/dev/null 2>&1 && \
-       git merge-base --is-ancestor "$verified_sha" "origin/$staging_branch"; then
-      echo "Existing rollout commit is already merged into staging; continuing to main."
-
-    elif [ -n "$staging_pr" ]; then
-
-      echo "Existing staging PR:"
-      echo "$staging_pr"
-
-
-      if ! gh pr merge "$staging_pr" \
-        --repo "$ORG/$repo" \
-        --merge \
-        --admin \
-        --match-head-commit "$verified_sha"; then
-
-        echo "Direct staging merge failed."
-        echo "Attempting conflict-resolution flow..."
-
-
-        if ! resolve_staging_conflict \
-          "$repo" \
-          "$staging_branch"; then
-
-          echo "FAILED: Unable to resolve staging conflict."
-
-          cleanup_repo "$workdir"
-
-          return 1
-        fi
-
-
-        conflict_used=1
-      fi
-
-
-    else
-
-      echo "Existing rollout branch has no staging PR."
-      echo "Creating staging PR..."
-
-
-      pr_body="Organization-level automated AGENTS.md update.
-
-Central Backlog:
-Eshopbox-Enginnering/Central-Backlog#$CENTRAL_BACKLOG_ISSUE
-
-Repository:
-$ORG/$repo
-
-Content ID:
-$CONTENT_HASH
-
-Only AGENTS.md is modified."
-
-
-      if ! staging_pr=$(gh pr create \
-        --repo "$ORG/$repo" \
-        --base "$staging_branch" \
-        --head "$branch" \
-        --title "Codex to Staging: Update AGENTS.md organization guidance" \
-        --body "$pr_body"); then
-
-        echo "FAILED: Staging PR creation failed."
-
+    if [ "$staging_needs_update" -eq 1 ]; then
+      if ! resolve_staging_conflict "$repo" "$staging_branch"; then
+        echo "FAILED: Staging-only AGENTS.md reconciliation failed."
         cleanup_repo "$workdir"
-
         return 1
       fi
-
-
-      if ! gh pr merge "$staging_pr" \
-        --repo "$ORG/$repo" \
-        --merge \
-        --admin \
-        --match-head-commit "$verified_sha"; then
-
-        echo "Direct staging merge failed."
-        echo "Attempting conflict-resolution flow..."
-
-
-        if ! resolve_staging_conflict \
-          "$repo" \
-          "$staging_branch"; then
-
-          echo "FAILED: Unable to resolve staging conflict."
-
-          cleanup_repo "$workdir"
-
-          return 1
-        fi
-
-
-        conflict_used=1
-      fi
+      conflict_used=1
+    else
+      echo "Staging AGENTS.md already current; no staging PR needed."
     fi
 
+    if ! git checkout "$branch" >/dev/null 2>&1; then
+      echo "FAILED: Cannot restore main-derived rollout branch."
+      cleanup_repo "$workdir"
+      return 1
+    fi
 
     # --------------------------------------------------------
     # Production PR
@@ -1132,8 +1125,7 @@ Only AGENTS.md is modified."
       return 12
     fi
 
-
-    return 10
+    return 16  # Production-only: staging already current.
   fi
 
 
@@ -1294,56 +1286,25 @@ Only AGENTS.md is modified."
 
 
   # ==========================================================
-  # Bulk staging
+  # Stage-only rollout (branch created from staging)
   # ==========================================================
 
-  echo "Creating staging PR..."
-
-
-  if ! staging_pr=$(gh pr create \
-    --repo "$ORG/$repo" \
-    --base "$staging_branch" \
-    --head "$branch" \
-    --title "Codex to Staging: Update AGENTS.md organization guidance" \
-    --body "$pr_body"); then
-
-    echo "FAILED: Staging PR creation failed."
-
-    cleanup_repo "$workdir"
-
-    return 1
-  fi
-
-
-  echo "Staging PR:"
-  echo "$staging_pr"
-
-
-  if ! gh pr merge "$staging_pr" \
-    --repo "$ORG/$repo" \
-    --merge \
-    --admin \
-    --match-head-commit "$working_commit"; then
-
-    echo "Direct staging merge failed."
-    echo "Attempting conflict-resolution flow..."
-
-
-    if ! resolve_staging_conflict \
-      "$repo" \
-      "$staging_branch"; then
-
-      echo "FAILED: Unable to resolve staging conflict."
-
+  if [ "$staging_needs_update" -eq 1 ]; then
+    if ! resolve_staging_conflict "$repo" "$staging_branch"; then
+      echo "FAILED: Staging-only AGENTS.md reconciliation failed."
       cleanup_repo "$workdir"
-
       return 1
     fi
-
-
     conflict_used=1
+  else
+    echo "Staging AGENTS.md already current; no staging PR needed."
   fi
 
+  if ! git checkout "$branch" >/dev/null 2>&1; then
+    echo "FAILED: Cannot restore main-derived rollout branch."
+    cleanup_repo "$workdir"
+    return 1
+  fi
 
   # ==========================================================
   # Bulk production
@@ -1400,8 +1361,7 @@ Only AGENTS.md is modified."
     return 12
   fi
 
-
-  return 10
+  return 16  # Production-only: staging already current.
 }
 
 
@@ -1453,6 +1413,15 @@ if [ "$TARGET" = "single" ]; then
       else
         skipped=$((skipped + 1))
       fi
+      ;;
+
+    14)
+      staging_merged=$((staging_merged + 1))
+      conflict_resolved=$((conflict_resolved + 1))
+      ;;
+
+    16)
+      production_merged=$((production_merged + 1))
       ;;
 
     10)
@@ -1514,6 +1483,15 @@ else
         skipped=$((skipped + 1))
         ;;
 
+      14)
+        staging_merged=$((staging_merged + 1))
+        conflict_resolved=$((conflict_resolved + 1))
+        ;;
+
+      16)
+        production_merged=$((production_merged + 1))
+        ;;
+
       10)
         staging_merged=$((staging_merged + 1))
         production_merged=$((production_merged + 1))
@@ -1557,7 +1535,7 @@ else
 
   echo "Staging merged        : $staging_merged"
   echo "Production merged     : $production_merged"
-  echo "Conflicts resolved    : $conflict_resolved"
+  echo "Staging-only PRs      : $conflict_resolved"
   echo "Skipped               : $skipped"
   echo "Failed                : $failed"
 
