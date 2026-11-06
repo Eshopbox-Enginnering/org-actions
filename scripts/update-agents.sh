@@ -415,8 +415,29 @@ for match in matches:
 heading = re.compile(rb"(?m)^## ([^\r\n]+)[ \t]*\r?\n")
 sections = list(heading.finditer(source))
 if not sections or sections[0].start() != 0:
-    print("ERROR: AGENTS payload must start with a ## heading.")
-    sys.exit(1)
+    # Backward-compatible custom content files: append the complete file as
+    # one immutable hash-verified block, without changing existing AGENTS.md.
+    # Never delete or modify an existing managed block.
+    payload = source if source.endswith((b"\\n", b"\\r")) else source + newline
+    # Use the historical full-content hash for custom payload idempotency.
+    suffix = b":" + content_hash.encode("ascii")
+    begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+    end = b"<!-- END ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+    managed = begin + newline + payload + end + newline
+    if suffix in seen_hashes:
+        print("Organization-managed custom content already present.")
+        sys.exit(2)
+    if mode == "check":
+        print("Validated custom content file; will append a new managed block.")
+        sys.exit(0)
+    separator = newline if original.endswith((b"\\n", b"\\r")) else (newline + newline if original else b"")
+    updated = original + separator + managed
+    if not updated.startswith(original):
+        print("ERROR: Custom content rollout was not append-only.")
+        sys.exit(1)
+    path.write_bytes(updated)
+    print("Appended custom organization-managed AGENTS.md content.")
+    sys.exit(0)
 names = [item.group(1) for item in sections]
 if len(names) != len(set(names)):
     print("ERROR: Duplicate AGENTS payload section heading.")
