@@ -370,8 +370,8 @@ if legacy:
     # whitespace-only variant; any changed or added nonblank line is rejected.
     # This does not apply to versioned managed blocks (which retain hash checks).
     def without_empty_lines(value):
-        return b"\\n".join(
-            line for line in value.replace(b"\\r\\n", b"\\n").split(b"\\n")
+        return b"\n".join(
+            line for line in value.replace(b"\r\n", b"\n").split(b"\n")
             if line != b""
         )
     if not trusted_legacy or (
