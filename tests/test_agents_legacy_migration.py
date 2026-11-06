@@ -68,6 +68,36 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertEqual(updated.count(b"## AI context and token efficiency"), 1)
             self.assertEqual(self.run_migrator(root).returncode, 2)
 
+    def test_custom_h1_payload_preserved_for_backwards_compatibility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            custom = root / "custom.md"
+            custom.write_bytes(b"# Custom guidance\n\nCustom instructions.\n")
+            original = b"# Existing instructions\n\n## Local rules\nStay local.\n"
+            (root / "AGENTS.md").write_bytes(original)
+            digest = hashlib.sha256(custom.read_bytes()).hexdigest()[:12]
+            result = subprocess.run(
+                [sys.executable, "-", str(custom), digest, "apply",
+                 str(ROOT / "payload/agents-legacy-v1.md")],
+                input=MIGRATOR, text=True, capture_output=True, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            self.assertIn(custom.read_bytes(), updated)
+            second = subprocess.run(
+                [sys.executable, "-", str(custom), digest, "apply",
+                 str(ROOT / "payload/agents-legacy-v1.md")],
+                input=MIGRATOR, text=True, capture_output=True, cwd=root)
+            self.assertEqual(second.returncode, 2, second.stdout + second.stderr)
+
+    def test_staging_header_divergence_is_a_hard_failure(self):
+        # Production-based additions must not be replayed blindly on staging.
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        self.assertIn("Only on staging:", script)
+        self.assertIn("Only on main:", script)
+        self.assertIn("if prod != stage:", script)
+        self.assertIn('["git", "show", f"origin/{branch}:AGENTS.md"]', script)
+
     def test_modified_legacy_content_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
