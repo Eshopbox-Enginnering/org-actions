@@ -107,7 +107,7 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r'(?m)^    14\)', script)), 1)
         self.assertEqual(len(re.findall(r'(?m)^      14\)', script)), 1)
         self.assertIn('Production current; updating staging only.', script)
-        self.assertIn('Staging already contains all named sections', script)
+        self.assertIn('Staging AGENTS.md already current; no staging PR needed.', script)
 
     def test_staging_repair_uses_staging_branch_not_production(self):
         script = (ROOT / "scripts/update-agents.sh").read_text()
