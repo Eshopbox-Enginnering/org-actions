@@ -17,6 +17,26 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         self.assertIn("scripts/update-agents.sh", entrypoint)
         self.assertNotIn("python3 scripts/sync-guidelines-dual-pr.py", workflow)
 
+    def test_combined_apply_verifies_both_file_families(self):
+        source = self.contents("scripts/sync-guidelines-and-agents.py")
+        merge = self.contents("scripts/sync-guidelines-auto-merge.py")
+        self.assertIn("expected_agents(root)", source)
+        self.assertIn("sync.diff_plan(root, entries, contents)", source)
+        self.assertIn('changed.add("AGENTS.md")', source)
+        self.assertIn("staged != changed", source)
+        self.assertIn("agents_expected=agents_expected", source)
+        self.assertIn('expected.add("AGENTS.md")', merge)
+        self.assertIn('noncanonical AGENTS.md', merge)
+        self.assertIn('require_regular_guideline_file(root, merge_sha, "AGENTS.md")', merge)
+        self.assertIn("verified_base", merge)
+        self.assertIn("--match-head-commit", merge)
+
+    def test_combined_rollout_reuses_validated_legacy_migrator(self):
+        source = self.contents("scripts/sync-guidelines-and-agents.py")
+        self.assertIn("apply_agents_content() {", source)
+        self.assertIn("TRUSTED_LEGACY", source)
+        self.assertIn('result.returncode not in (0, 2)', source)
+
     def test_lightweight_checks_do_not_use_checks_runner(self):
         for name in (
             "pr-test-validation.yml",
