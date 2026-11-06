@@ -356,11 +356,11 @@ if begins != len(matches) or ends != len(matches):
     print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
 
-# A single historic unversioned block may be replaced only when its bytes
+# A single historic unversioned block may be retained only when its bytes
 # match the pinned, reviewed pre-migration payload. Never trust a marker alone.
 legacy = [m for m in matches if m.group("suffix") is None]
 if legacy:
-    if len(matches) != 1 or len(legacy) != 1:
+    if len(legacy) != 1:
         print("ERROR: Ambiguous legacy AGENTS.md sections; manual review required.")
         sys.exit(1)
     trusted_legacy = trusted_legacy_path.read_bytes()
@@ -408,40 +408,65 @@ for match in matches:
         print("ERROR: Existing managed section hash mismatch.")
         sys.exit(1)
 
-# Keep each rollout in its own immutable, hash-identified section.
-# Never delete an older managed block or repository-owned instructions.
-payload = source if source.endswith((b"\n", b"\r")) else source + newline
-suffix = b":" + content_hash.encode("ascii")
-begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
-end = b"<!-- END ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
-managed = begin + newline + payload + end + newline
+# Distribute only missing named sections; never replace existing instructions.
+# The old legacy migration replaced a full historical block with the current
+# payload, destroying Git, test, and review rules when the payload was shorter.
+# A new versioned section is immutable and hashed from its actual bytes.
+heading = re.compile(rb"(?m)^## ([^\r\n]+)[ \t]*\r?\n")
+sections = list(heading.finditer(source))
+if not sections or sections[0].start() != 0:
+    print("ERROR: AGENTS payload must start with a ## heading.")
+    sys.exit(1)
+names = [item.group(1) for item in sections]
+if len(names) != len(set(names)):
+    print("ERROR: Duplicate AGENTS payload section heading.")
+    sys.exit(1)
 
-# A rerun of the same content is idempotent. A changed payload is a new
-# rollout; older sections remain intact for an explicit, reviewed migration.
-existing = [m for m in matches if m.group("suffix") == suffix]
-if existing:
-    if len(existing) != 1 or original[existing[0].start():existing[0].end()].rstrip(b"\r\n") != managed.rstrip(b"\r\n"):
-        print("ERROR: Existing managed section with this content hash differs; refusing overwrite.")
-        sys.exit(1)
-    print("Organization-managed AGENTS.md content already current.")
+# Existing headings may be within legacy, previously managed, or repository-
+# owned text. Those sections must not be changed by an automatic rollout.
+existing_names = set(heading.findall(original))
+missing = []
+missing_names = []
+for index, item in enumerate(sections):
+    if item.group(1) in existing_names:
+        continue
+    boundary = (sections[index + 1].start()
+                if index + 1 < len(sections) else len(source))
+    section = source[item.start():boundary].strip(b"\r\n")
+    if section:
+        missing.append(section)
+        missing_names.append(item.group(1).decode("utf-8"))
+
+if not missing:
+    print("Organization-managed AGENTS.md sections already present; no change.")
     sys.exit(2)
 
 if mode == "check":
-    print("Managed sections validated; legacy migration is safe." if legacy
-          else "Managed sections validated.")
+    print("Managed sections validated; missing sections:",
+          ", ".join(missing_names))
     sys.exit(0)
 
-if legacy:
-    # Preserve every byte outside the trusted legacy markers.
-    section = legacy[0]
-    updated = original[:section.start()] + managed + original[section.end():]
-    path.write_bytes(updated)
-    print("Migrated trusted legacy AGENTS.md content:", content_hash)
-else:
-    prefix = original.rstrip(b"\r\n") if original.strip() else b""
-    updated = prefix + (newline + newline if prefix else b"") + managed
-    path.write_bytes(updated)
-    print("Appended organization-managed AGENTS.md content:", content_hash)
+# Hash exactly the appended content, since each repository can need a
+# different subset of the centrally defined sections.
+payload = b"\n\n".join(missing) + b"\n"
+content_id = hashlib.sha256(payload).hexdigest()[:12].encode("ascii")
+suffix = b":" + content_id
+if suffix in seen_hashes:
+    print("ERROR: Existing managed section hash conflicts with missing content.")
+    sys.exit(1)
+begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+end = b"<!-- END ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
+# Retain original bytes without exception (including the legacy block).
+normalized = payload.replace(b"\n", newline)
+managed = begin + newline + normalized + end + newline
+separator = (newline if original.endswith((b"\n", b"\r")) else
+             newline + newline) if original else b""
+updated = original + separator + managed
+if not updated.startswith(original):
+    print("ERROR: AGENTS.md update was not append-only.")
+    sys.exit(1)
+path.write_bytes(updated)
+print("Appended missing AGENTS.md sections:", ", ".join(missing_names))
 PY
   return $?
 }
