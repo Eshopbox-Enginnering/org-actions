@@ -104,6 +104,8 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
     def test_staging_only_rollout_has_distinct_success_code(self):
         script = (ROOT / "scripts/update-agents.sh").read_text()
         self.assertIn('return 14', script)
+        self.assertIn('return 16', script)
+        self.assertIn('Staging-only PRs', script)
         self.assertEqual(len(re.findall(r'(?m)^    14\)', script)), 1)
         self.assertEqual(len(re.findall(r'(?m)^      14\)', script)), 1)
         self.assertIn('Production current; updating staging only.', script)
@@ -293,6 +295,8 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('process_repo "$TARGET_REPO"', single)
         self.assertIn('10)', single)
         self.assertIn('12)', single)
+        self.assertIn('14)', single)
+        self.assertIn('16)', single)
         self.assertIn('staging_merged=$((staging_merged + 1))', single)
         self.assertIn('production_merged=$((production_merged + 1))', single)
         self.assertNotIn('single_pr_created', SCRIPT)
