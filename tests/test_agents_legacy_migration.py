@@ -104,8 +104,8 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
     def test_staging_only_rollout_has_distinct_success_code(self):
         script = (ROOT / "scripts/update-agents.sh").read_text()
         self.assertIn('return 14', script)
-        self.assertEqual(len(re.findall(r'(?m)^    14\\)', script)), 1)
-        self.assertEqual(len(re.findall(r'(?m)^      14\\)', script)), 1)
+        self.assertEqual(len(re.findall(r'(?m)^    14\)', script)), 1)
+        self.assertEqual(len(re.findall(r'(?m)^      14\)', script)), 1)
         self.assertIn('Production current; updating staging only.', script)
         self.assertIn('Staging already contains all named sections', script)
 
