@@ -840,6 +840,11 @@ process_repo() {
     '+refs/heads/*:refs/remotes/origin/*' \
     --depth=100 >/dev/null 2>&1 || true
 
+  # Required for staging-only repair, which can commit before the
+  # production rollout reaches its later identity setup.
+  git config user.name "eshopbox-org-agents[bot]"
+  git config user.email "eshopbox-org-agents[bot]@users.noreply.github.com"
+
 
   # ----------------------------------------------------------
   # Detect type
