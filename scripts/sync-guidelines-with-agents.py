@@ -41,6 +41,12 @@ def rollout(args, env, target, repository):
         "--destination", args.destination, "--source-scope", args.source_scope,
         "--issue", args.issue, "--org", args.org,
     ]
+    # For APPLY, create a single combined documentation + AGENTS.md PR per
+    # target branch, rather than two independent rollout families.
+    if args.operation == "APPLY" and args.update_agents:
+        print(f"Combined guideline + AGENTS.md rollout for {repository or target}", flush=True)
+        run_checked([sys.executable, "scripts/sync-guidelines-and-agents.py", *common], env)
+        return
     run_checked([sys.executable, "scripts/sync-guidelines-auto-merge.py", *common], env)
     if not args.update_agents:
         print("AGENTS.md update disabled by workflow input.", flush=True)
