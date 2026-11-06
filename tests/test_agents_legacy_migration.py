@@ -119,6 +119,44 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('git checkout -b "$branch"', script)
         self.assertIn('--base "$production_branch"', script)
 
+    def test_divergence_detector_with_real_git_branches(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        start = script.index("  # Identify divergence only;")
+        guard = script[start:].split("<<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        with tempfile.TemporaryDirectory() as temporary:
+            repo = pathlib.Path(temporary)
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=repo, check=True,
+                                      capture_output=True, text=True).stdout.strip()
+            git("init", "-b", "main")
+            git("config", "user.email", "test@example.com")
+            git("config", "user.name", "Test")
+            agents = repo / "AGENTS.md"
+            agents.write_text("## Git\nKeep existing instructions.\n", encoding="utf-8")
+            git("add", "AGENTS.md")
+            git("commit", "-m", "main rules")
+            main_sha = git("rev-parse", "HEAD")
+            git("update-ref", "refs/remotes/origin/main", main_sha)
+            git("checkout", "-b", "staging")
+            agents.write_text("## AI context and token efficiency (organization-managed)\nKeep local guidance.\n",
+                              encoding="utf-8")
+            git("add", "AGENTS.md")
+            git("commit", "-m", "staging rules")
+            stage_sha = git("rev-parse", "HEAD")
+            git("update-ref", "refs/remotes/origin/staging", stage_sha)
+            def probe():
+                return subprocess.run(
+                    [sys.executable, "-", "main", "staging",
+                     str(ROOT / "payload/agents-update.md")],
+                    input=guard, cwd=repo, capture_output=True, text=True)
+            different = probe()
+            self.assertEqual(different.returncode, 3, different.stdout + different.stderr)
+            self.assertIn("Only on staging:", different.stdout)
+            self.assertIn("Only on main:", different.stdout)
+            git("update-ref", "refs/remotes/origin/staging", main_sha)
+            identical = probe()
+            self.assertEqual(identical.returncode, 0, identical.stdout + identical.stderr)
+
     def test_crlf_source_and_target_are_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
