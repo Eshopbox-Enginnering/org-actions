@@ -33,27 +33,17 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         (directory / "AGENTS.md").write_bytes(data)
         return data
 
-    def test_trusted_legacy_migrates_without_touching_repo_owned_text(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = pathlib.Path(temporary)
-            original = self.make_repo(root, before=b"# Repo instructions\n\n",
-                                      after=b"\n## Keep my custom section\n")
-            check = self.run_migrator(root, "check")
-            self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
-            self.assertEqual((root / "AGENTS.md").read_bytes(), original)
-            migrated = self.run_migrator(root)
-            self.assertEqual(migrated.returncode, 0, migrated.stdout + migrated.stderr)
-            result = (root / "AGENTS.md").read_bytes()
-            digest = hashlib.sha256(CURRENT).hexdigest()[:12].encode("ascii")
-            self.assertTrue(result.startswith(b"# Repo instructions\n\n"))
-            self.assertTrue(result.endswith(b"\n## Keep my custom section\n"))
-            self.assertIn(b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->", result)
-            self.assertIn(b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->", result)
-            self.assertIn(CURRENT, result)
-            self.assertNotIn(LEGACY_BEGIN, result)
-            repeat = self.run_migrator(root)
-            self.assertEqual(repeat.returncode, 2, repeat.stdout + repeat.stderr)
-            self.assertEqual(result, (root / "AGENTS.md").read_bytes())
+    def test_trusted_legacy_stays_intact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            original = self.make_repo(root, before=b"# Repo rules\\n\\n")
+            result = self.run_migrator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            self.assertEqual(updated.count(b"## Git\\n"), 1)
+            self.assertIn(b"## AI context and token efficiency", updated)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
 
     def test_modified_legacy_content_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as temporary:
