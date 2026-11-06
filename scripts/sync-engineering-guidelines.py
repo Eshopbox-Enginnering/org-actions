@@ -245,23 +245,26 @@ def process(repo, org, selected, contents, phase, operation, issue,
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
     if production not in ALLOWED_BRANCHES:
-        print(f'{name}: BLOCK unsupported production branch {production}')
-        return 'blocked' if promotion_pr is not None else 'skipped'
+        strict = promotion_pr is not None or require_production
+        print(f"{name}: {'BLOCK' if strict else 'SKIP'} unsupported production branch {production}")
+        return 'blocked' if strict else 'skipped'
     with rollout_workspace(prefix='guidelines-') as temp:
         root = Path(temp) / name
         full = f'{org}/{name}'
         cmd('gh', 'repo', 'clone', full, str(root), '--', '--depth=1', '--branch', production)
         kind = detect_type(root)
         if kind not in selected or not selected[kind]:
-            print(f'{name}: BLOCK type={kind}, no matching selected guidelines')
-            return 'blocked' if (promotion_pr is not None or require_production) else 'skipped'
+            strict = promotion_pr is not None or require_production
+            print(f"{name}: {'BLOCK' if strict else 'SKIP'} type={kind}, no matching selected guidelines")
+            return 'blocked' if strict else 'skipped'
         entries = selected[kind]
         if stage_pr_holder is not None:
             stage_pr_holder['kind'] = kind
         staging = find_staging(root, production)
         if not staging:
-            print(f'{name}: BLOCK no supported staging branch')
-            return 'blocked'
+            strict = promotion_pr is not None or require_production
+            print(f"{name}: {'BLOCK' if strict else 'SKIP'} no supported staging branch")
+            return 'blocked' if strict else 'skipped'
         if phase == 'staging':
             # Never bring production-only code into a staging PR.
             fetch_remote_branch(root, staging)
@@ -528,7 +531,8 @@ def main():
             continue
         try:
             outcome = process(repo, args.org, selected, contents, args.phase,
-                              args.operation, args.issue, promotion_pr=args.promotion_pr)
+                              args.operation, args.issue, promotion_pr=args.promotion_pr,
+                              require_production=args.target == 'single')
         except Exception as error:
             outcome = 'error'
             print(f"{repo['name']}: ERROR {error}", file=sys.stderr)
