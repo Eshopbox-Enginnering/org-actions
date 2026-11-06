@@ -438,25 +438,25 @@ if not sections or sections[0].start() != 0:
     path.write_bytes(updated)
     print("Appended custom organization-managed AGENTS.md content.")
     sys.exit(0)
-names = [item.group(1) for item in sections]
+names = [item.group(1).strip() for item in sections]
 if len(names) != len(set(names)):
     print("ERROR: Duplicate AGENTS payload section heading.")
     sys.exit(1)
 
 # Existing headings may be within legacy, previously managed, or repository-
 # owned text. Those sections must not be changed by an automatic rollout.
-existing_names = set(heading.findall(original))
+existing_names = {item.strip() for item in heading.findall(original)}
 missing = []
 missing_names = []
 for index, item in enumerate(sections):
-    if item.group(1) in existing_names:
+    if item.group(1).strip() in existing_names:
         continue
     boundary = (sections[index + 1].start()
                 if index + 1 < len(sections) else len(source))
     section = source[item.start():boundary].strip(b"\r\n")
     if section:
         missing.append(section)
-        missing_names.append(item.group(1).decode("utf-8"))
+        missing_names.append(item.group(1).strip().decode("utf-8"))
 
 if not missing:
     print("Organization-managed AGENTS.md sections already present; no change.")
@@ -469,7 +469,7 @@ if mode == "check":
 
 # Hash exactly the appended content, since each repository can need a
 # different subset of the centrally defined sections.
-payload = (b"\n\n".join(missing) + b"\n").replace(b"\n", newline)
+payload = (b"\n\n".join(missing) + b"\n").replace(b"\r\n", b"\n").replace(b"\n", newline)
 content_id = hashlib.sha256(payload).hexdigest()[:12].encode("ascii")
 suffix = b":" + content_id
 if suffix in seen_hashes:
@@ -873,7 +873,7 @@ import sys
 production, staging, payload_path = sys.argv[1:]
 heading = re.compile(rb"(?m)^## ([^\r\n]+)[ \t]*\r?\n")
 source = pathlib.Path(payload_path).read_bytes()
-desired = set(heading.findall(source))
+desired = {name.strip() for name in heading.findall(source)}
 if not desired:
     sys.exit(0)
 def headings(branch):
@@ -882,7 +882,7 @@ def headings(branch):
         capture_output=True, check=False)
     if result.returncode:
         return set()
-    return set(heading.findall(result.stdout))
+    return {name.strip() for name in heading.findall(result.stdout)}
 prod = headings(production) & desired
 stage = headings(staging) & desired
 if prod != stage:
