@@ -201,6 +201,50 @@ detect_repo_type() {
 }
 
 
+# Lightweight, conservative preflight for type-scoped bulk rollouts.
+# GitHub's non-recursive tree lists only root manifest names. A package.json-
+# only project (or an API failure) remains ambiguous and is cloned normally.
+# The authoritative type check still runs after cloning eligible candidates.
+preflight_repo_type() {
+  local repo="$1"
+  local production_branch="$2"
+  local manifests=""
+
+  if ! manifests=$(gh api "repos/$ORG/$repo/git/trees/$production_branch" \
+    --jq '.tree[] | select(.type == "blob") | .path' 2>/dev/null); then
+    echo "unknown"
+    return
+  fi
+
+  manifest_present() {
+    printf '%s\\n' "$manifests" | grep -Fxq "$1"
+  }
+
+  if manifest_present "composer.json"; then
+    echo "backend"
+    return
+  fi
+
+  local file
+  for file in angular.json vite.config.js vite.config.ts vite.config.mjs \
+              vue.config.js next.config.js next.config.ts next.config.mjs; do
+    if manifest_present "$file"; then
+      echo "frontend"
+      return
+    fi
+  done
+
+  for file in pom.xml build.gradle build.gradle.kts go.mod \
+              requirements.txt pyproject.toml; do
+    if manifest_present "$file"; then
+      echo "backend"
+      return
+    fi
+  done
+
+  echo "unknown"
+}
+
 # ============================================================
 # Target matching
 # ============================================================
@@ -806,6 +850,19 @@ process_repo() {
       return 2
   fi
 
+
+  # ----------------------------------------------------------
+  # Skip confidently mismatched repository types before expensive clone.
+  # Unknown / API errors fall through to the existing full type detection.
+  # ----------------------------------------------------------
+  if [ "$TARGET" = "backend" ] || [ "$TARGET" = "frontend" ]; then
+    preflight_type=$(preflight_repo_type "$repo" "$production_branch")
+    if [ "$preflight_type" != "unknown" ] && \
+       [ "$preflight_type" != "$TARGET" ]; then
+      echo "SKIP: Preflight detected type '$preflight_type'; target is '$TARGET'."
+      return 2
+    fi
+  fi
 
   # ----------------------------------------------------------
   # Clone production
