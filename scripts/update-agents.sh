@@ -217,7 +217,7 @@ preflight_repo_type() {
   fi
 
   manifest_present() {
-    printf '%s\\n' "$manifests" | grep -Fxq "$1"
+    printf '%s\n' "$manifests" | grep -Fxq "$1"
   }
 
   if manifest_present "composer.json"; then
