@@ -886,7 +886,7 @@ import re
 import subprocess
 import sys
 production, staging, payload_path = sys.argv[1:]
-heading = re.compile(rb"(?m)^## ([^\\r\\n]+)[ \\t]*\\r?\\n")
+heading = re.compile(rb"(?m)^## ([^\r\n]+)[ \t]*\r?\n")
 source = pathlib.Path(payload_path).read_bytes()
 desired = {name.strip() for name in heading.findall(source)}
 def headings(branch):
@@ -1548,6 +1548,10 @@ if [ "$TARGET" = "single" ]; then
       fi
       ;;
 
+    14)
+      staging_merged=$((staging_merged + 1))
+      ;;
+
     10)
       staging_merged=$((staging_merged + 1))
       production_merged=$((production_merged + 1))
@@ -1605,6 +1609,10 @@ else
 
       2)
         skipped=$((skipped + 1))
+        ;;
+
+      14)
+        staging_merged=$((staging_merged + 1))
         ;;
 
       10)
