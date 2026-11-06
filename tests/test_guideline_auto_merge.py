@@ -175,6 +175,40 @@ class GuidelineAutoMergeTests(unittest.TestCase):
         self.assertEqual(result, "blocked")
         self.assertEqual(process.call_count, 1)
 
+    def test_bulk_skips_ineligible_repositories_without_failing(self):
+        cases = (
+            ("unsupported production branch", {"name": "legacy", "defaultBranchRef": {"name": "stable"}}, "backend", "staging"),
+            ("unknown repository type", self.repo, "unknown", "staging"),
+            ("missing staging", self.repo, "backend", None),
+        )
+        for label, repo, kind, staging in cases:
+            with self.subTest(label=label), \
+                 patch.object(auto.sync, "rollout_workspace") as workspace, \
+                 patch.object(auto.sync, "cmd") as cmd, \
+                 patch.object(auto.sync, "detect_type", return_value=kind), \
+                 patch.object(auto.sync, "find_staging", return_value=staging):
+                workspace.return_value.__enter__.return_value = "/tmp"
+                result = auto.sync.process(
+                    repo, "Eshopbox-Enginnering", self.selected, self.contents,
+                    "staging", "DRY_RUN", "7218")
+                self.assertEqual(result, "skipped")
+                if label == "unsupported production branch":
+                    cmd.assert_not_called()
+
+    def test_exact_repos_and_promotions_still_block_missing_staging(self):
+        with patch.object(auto.sync, "rollout_workspace") as workspace, \
+             patch.object(auto.sync, "cmd"), \
+             patch.object(auto.sync, "detect_type", return_value="backend"), \
+             patch.object(auto.sync, "find_staging", return_value=None):
+            workspace.return_value.__enter__.return_value = "/tmp"
+            for kwargs in ({"require_production": True}, {"promotion_pr": 42}):
+                with self.subTest(kwargs=kwargs):
+                    result = auto.sync.process(
+                        self.repo, "Eshopbox-Enginnering",
+                        self.selected, self.contents,
+                        "staging", "DRY_RUN", "7218", **kwargs)
+                    self.assertEqual(result, "blocked")
+
     def test_both_branches_already_current(self):
         def process(*args, **kwargs):
             if args[4] == "staging":
