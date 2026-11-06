@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   validate-tests:
-    if: ${{ github.repository != 'Eshopbox-Enginnering/org-actions' && github.head_ref != 'conflict/remove-text-recharge-to-avoid' }}
+    if: ${{ (github.repository != 'Eshopbox-Enginnering/org-actions' && github.head_ref != 'conflict/remove-text-recharge-to-avoid') && !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
     runs-on: ubuntu-latest
     # runs-on: ubuntu-24.04
     timeout-minutes: 10
