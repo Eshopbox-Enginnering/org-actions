@@ -356,11 +356,11 @@ if begins != len(matches) or ends != len(matches):
     print("ERROR: Mismatched or malformed organization-managed markers.")
     sys.exit(1)
 
-# A single historic unversioned block may be replaced only when its bytes
+# A single historic unversioned block may be retained only when its bytes
 # match the pinned, reviewed pre-migration payload. Never trust a marker alone.
 legacy = [m for m in matches if m.group("suffix") is None]
 if legacy:
-    if len(matches) != 1 or len(legacy) != 1:
+    if len(legacy) != 1:
         print("ERROR: Ambiguous legacy AGENTS.md sections; manual review required.")
         sys.exit(1)
     trusted_legacy = trusted_legacy_path.read_bytes()
@@ -431,17 +431,14 @@ if mode == "check":
           else "Managed sections validated.")
     sys.exit(0)
 
-if legacy:
-    # Preserve every byte outside the trusted legacy markers.
-    section = legacy[0]
-    updated = original[:section.start()] + managed + original[section.end():]
-    path.write_bytes(updated)
-    print("Migrated trusted legacy AGENTS.md content:", content_hash)
-else:
-    prefix = original.rstrip(b"\r\n") if original.strip() else b""
-    updated = prefix + (newline + newline if prefix else b"") + managed
-    path.write_bytes(updated)
-    print("Appended organization-managed AGENTS.md content:", content_hash)
+# Never replace the trusted historical block with a smaller new payload:
+# doing so silently deletes Git, test, and review instructions.
+# Preserve it (and all repository-owned instructions) exactly, then append
+# the new versioned section. This also safely supports future rollouts.
+prefix = original.rstrip(b"\r\n") if original.strip() else b""
+updated = prefix + (newline + newline if prefix else b"") + managed
+path.write_bytes(updated)
+print("Appended organization-managed AGENTS.md content:", content_hash)
 PY
   return $?
 }
