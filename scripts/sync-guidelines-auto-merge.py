@@ -33,7 +33,8 @@ def require_regular_guideline_file(root, ref, destination):
 
 
 def verify_merged_document_commit(root, merge_sha, verified_base,
-                                  verified_head, expected, entries, contents):
+                                  verified_head, expected, entries, contents,
+                                  agents_expected=None):
     """Validate the exact resulting merge tree before reporting success."""
     sync.cmd("git", "fetch", "origin", merge_sha, cwd=root)
     parents = sync.cmd("git", "rev-list", "--parents", "-n", "1",
@@ -55,9 +56,16 @@ def verify_merged_document_commit(root, merge_sha, verified_base,
             cwd=root, capture_output=True)
         if result.returncode or result.stdout != contents[entry["source_url"]]:
             raise ValueError(f"Merged PR has noncanonical document: {destination}")
+    if agents_expected is not None:
+        require_regular_guideline_file(root, merge_sha, "AGENTS.md")
+        result = subprocess.run(("git", "show", f"{merge_sha}:AGENTS.md"),
+                                cwd=root, capture_output=True)
+        if result.returncode or result.stdout != agents_expected:
+            raise ValueError("Merged PR has noncanonical AGENTS.md")
 
 
-def merge_guideline_pr(full, number, target, entries, contents):
+def merge_guideline_pr(full, number, target, entries, contents,
+                       agents_expected=None):
     """Verify the PR's effective patch, its base, and canonical bytes before merge."""
     pr = sync.gh_json("pr", "view", str(number), "--repo", full,
                       "--json", "number,baseRefName,headRefName,state,mergedAt,url")
@@ -103,6 +111,18 @@ def merge_guideline_pr(full, number, target, entries, contents):
                 cwd=root, capture_output=True)
             if actual.returncode or actual.stdout != canonical:
                 raise ValueError(f"{full} PR #{number}: noncanonical document {dest}")
+        if agents_expected is not None:
+            base_agents = subprocess.run(
+                ("git", "show", f"origin/{target}:AGENTS.md"),
+                cwd=root, capture_output=True)
+            if base_agents.returncode or base_agents.stdout != agents_expected:
+                expected.add("AGENTS.md")
+            require_regular_guideline_file(root, f"origin/{head}", "AGENTS.md")
+            head_agents = subprocess.run(
+                ("git", "show", f"origin/{head}:AGENTS.md"),
+                cwd=root, capture_output=True)
+            if head_agents.returncode or head_agents.stdout != agents_expected:
+                raise ValueError(f"{full} PR #{number}: noncanonical AGENTS.md")
         if changes != expected or not changes:
             raise ValueError(
                 f"{full} PR #{number}: changed files {sorted(changes)} "
@@ -135,7 +155,7 @@ def merge_guideline_pr(full, number, target, entries, contents):
             raise ValueError(f"{full} PR #{number}: merge not confirmed")
         verify_merged_document_commit(
             root, merged["mergeCommit"]["oid"], verified_base, verified_head,
-            expected, entries, contents)
+            expected, entries, contents, agents_expected=agents_expected)
     print(f"{full}: MERGED {target} PR #{number}")
     return "merged"
 
