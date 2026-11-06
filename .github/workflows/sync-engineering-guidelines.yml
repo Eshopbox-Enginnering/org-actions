@@ -106,12 +106,12 @@ jobs:
         run: gh auth setup-git
       - name: Validate rollout scripts and regression tests
         run: |
-          python3 -m py_compile scripts/sync-engineering-guidelines.py scripts/sync-guidelines-auto-merge.py scripts/sync-guidelines-with-agents.py
+          python3 -m py_compile scripts/sync-engineering-guidelines.py scripts/sync-guidelines-auto-merge.py scripts/sync-guidelines-with-agents.py scripts/sync-guidelines-and-agents.py
           bash -n scripts/update-agents.sh
           python3 -m unittest discover -s tests -p 'test_*guideline*.py' -v
           python3 -m unittest discover -s tests -p 'test_sync_guidelines_with_agents.py' -v
           python3 -m unittest discover -s tests -p 'test_agents_legacy_migration.py' -v
-      - name: Sync and merge selected guidelines
+      - name: Sync and merge selected guidelines and AGENTS.md
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           CONFIRMATION: ${{ inputs.confirmation }}

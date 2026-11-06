@@ -70,6 +70,36 @@ class CombinedRolloutTests(unittest.TestCase):
                 module.main()
         self.assertEqual(len(calls), 1)
 
+    def test_apply_uses_one_combined_creator_per_selected_repo(self):
+        argv = [value if value != "DRY_RUN" else "APPLY" for value in BASE]
+        calls = []
+        with patch.dict(os.environ, {"CONFIRMATION": "APPLY"}), patch.object(
+                sys, "argv", argv), patch.object(
+                module, "run_checked",
+                side_effect=lambda command, env: calls.append(command)):
+            module.main()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(
+            command[1] == "scripts/sync-guidelines-and-agents.py"
+            for command in calls))
+        self.assertEqual(
+            [command[command.index("--repository") + 1] for command in calls],
+            ["a-service", "b-service"])
+
+    def test_apply_without_agents_keeps_guideline_only_flow(self):
+        argv = [value if value != "DRY_RUN" else "APPLY" for value in BASE]
+        argv += ["--update-agents", "false"]
+        calls = []
+        with patch.dict(os.environ, {"CONFIRMATION": "APPLY"}), patch.object(
+                sys, "argv", argv), patch.object(
+                module, "run_checked",
+                side_effect=lambda command, env: calls.append(command)):
+            module.main()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(
+            command[1] == "scripts/sync-guidelines-auto-merge.py"
+            for command in calls))
+
     def test_existing_single_target_is_supported(self):
         argv = [
             "run", "--operation", "DRY_RUN", "--target", "single",
