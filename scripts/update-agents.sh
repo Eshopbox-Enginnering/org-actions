@@ -448,7 +448,7 @@ if mode == "check":
 
 # Hash exactly the appended content, since each repository can need a
 # different subset of the centrally defined sections.
-payload = b"\n\n".join(missing) + b"\n"
+payload = (b"\n\n".join(missing) + b"\n").replace(b"\n", newline)
 content_id = hashlib.sha256(payload).hexdigest()[:12].encode("ascii")
 suffix = b":" + content_id
 if suffix in seen_hashes:
@@ -457,8 +457,7 @@ if suffix in seen_hashes:
 begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
 end = b"<!-- END ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
 # Retain original bytes without exception (including the legacy block).
-normalized = payload.replace(b"\n", newline)
-managed = begin + newline + normalized + end + newline
+managed = begin + newline + payload + end + newline
 separator = (newline if original.endswith((b"\n", b"\r")) else
              newline + newline) if original else b""
 updated = original + separator + managed
