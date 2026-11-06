@@ -98,6 +98,38 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn("if prod != stage:", script)
         self.assertIn('["git", "show", f"origin/{branch}:AGENTS.md"]', script)
 
+    def test_crlf_source_and_target_are_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            crlf = root / "crlf.md"
+            crlf.write_bytes(CURRENT.replace(b"\n", b"\r\n"))
+            original = b"# Local rules\r\n"
+            (root / "AGENTS.md").write_bytes(original)
+            digest = hashlib.sha256(crlf.read_bytes()).hexdigest()[:12]
+            def invoke():
+                return subprocess.run(
+                    [sys.executable, "-", str(crlf), digest, "apply",
+                     str(ROOT / "payload/agents-legacy-v1.md")],
+                    input=MIGRATOR, text=True, capture_output=True, cwd=root)
+            first = invoke()
+            self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertNotIn(b"\r\r\n", updated)
+            self.assertEqual(invoke().returncode, 2)
+            self.assertEqual(updated, (root / "AGENTS.md").read_bytes())
+
+    def test_heading_with_trailing_spaces_is_not_duplicated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            original = b"## Git   \nKeep local rules.\n"
+            (root / "AGENTS.md").write_bytes(original)
+            outcome = self.run_migrator(root)
+            self.assertEqual(outcome.returncode, 0, outcome.stdout + outcome.stderr)
+            updated = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(updated.startswith(original))
+            self.assertEqual(updated.count(b"## Git"), 1)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
+
     def test_modified_legacy_content_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
