@@ -14,12 +14,16 @@ class EngineeringGuidelineSyncTests(unittest.TestCase):
     def setUp(self):
         self.catalog = json.loads((ROOT / 'engineering-guidelines/catalog.json').read_text())
 
-    def test_five_backend_guidelines_and_frontend_catalog(self):
-        self.assertEqual(set(x['id'] for x in self.catalog['backend']), {'401', 'cache', 'logging', '429', 'status'})
-        self.assertEqual(self.catalog['frontend'], [])
-        for entry in self.catalog['backend']:
-            sync.validate_source(entry['source_url'])
-            sync.validate_destination(entry['destination'])
+    def test_backend_guidelines_and_shared_frontend_catalog(self):
+        self.assertEqual(
+            set(x['id'] for x in self.catalog['backend']),
+            {'401', 'cache', 'logging', '429', 'status', 'ai-context'})
+        self.assertEqual(
+            set(x['id'] for x in self.catalog['frontend']), {'ai-context'})
+        for scope in ('backend', 'frontend'):
+            for entry in self.catalog[scope]:
+                sync.validate_source(entry['source_url'])
+                sync.validate_destination(entry['destination'])
 
     def test_one_off_frontend_guideline(self):
         result = sync.select_files(

@@ -1,6 +1,6 @@
 # Engineering guideline synchronization
 
-This workflow distributes Markdown engineering standards to supported Eshopbox repositories without editing AGENTS.md or unrelated files.
+This workflow distributes Markdown engineering standards to supported Eshopbox repositories. By default, it then runs the existing AGENTS.md updater for the same target (`update_agents=true`); set it to `false` for guideline-only synchronization.
 
 ## Central catalog
 
@@ -14,7 +14,7 @@ This workflow distributes Markdown engineering standards to supported Eshopbox r
 }
 ```
 
-The backend source documents are now committed under `engineering-guidelines/backend/`, and the catalog refers to those checked-in files. The initial backend catalog contains the five files from [Central Backlog #7218](https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/7218#issuecomment-6575357434). The frontend catalog is initially empty: add future frontend-only entries there, or use the one-off input described below. You may use either a GitHub issue attachment URL or a checked-in file under `engineering-guidelines/` as the `source_url`. Prefer checked-in sources for long-term stability and reviewable source updates.
+The backend source documents are now committed under `engineering-guidelines/backend/`, and the catalog refers to those checked-in files. The initial backend catalog contains the five files from [Central Backlog #7218](https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/7218#issuecomment-6575357434). The shared AI context/token-efficiency guideline is registered under **both** backend and frontend catalogs so every eligible repository can receive the local file. Add future frontend-specific entries to the frontend catalog, or use the one-off input described below. You may use either a GitHub issue attachment URL or a checked-in file under `engineering-guidelines/` as the `source_url`. Prefer checked-in sources for long-term stability and reviewable source updates.
 
 ## Run workflow
 

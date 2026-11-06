@@ -52,6 +52,11 @@
   - If any reply is "⚠️ Needs human decision", don't trigger a review. Tell the user which threads need them; they'll decide and comment "@codex review" themselves.
   - Otherwise, comment "@codex review" on the PR. After 3 review rounds with new blocking findings, stop and ask the user.
 
+## AI context and token efficiency (organization-managed)
+- For coding, reviews, debugging, and documentation, read and follow the local `docs/engineering-guidelines/ai-agent-context-token-efficiency.md` file **when present**. This guideline applies to both frontend and backend repositories.
+- Prefer task-specific files, scoped searches, concise tool output, and targeted incremental verification. Preserve complete testing, security, relevant caller analysis, repository-specific instructions, and required PR/approval workflows. Never compromise correctness to save tokens.
+- If the guideline is missing, report that fact when relevant; do not assume that a central GitHub link has been read.
+
 ## Engineering standards (organization-managed)
 - Before implementing or reviewing a code change, read the relevant standards **from this repository's local** `docs/engineering-guidelines/` directory, when present. These documents are mandatory for applicable changes; do not assume a GitHub URL or another repository's file has been fetched into your context.
 - Authentication, unauthorized responses, or HTTP 401: `docs/engineering-guidelines/eshopbox-401-error-handling-preserve-enhance.md`.
