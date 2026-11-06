@@ -418,7 +418,7 @@ if not sections or sections[0].start() != 0:
     # Backward-compatible custom content files: append the complete file as
     # one immutable hash-verified block, without changing existing AGENTS.md.
     # Never delete or modify an existing managed block.
-    payload = source if source.endswith((b"\\n", b"\\r")) else source + newline
+    payload = source if source.endswith((b"\n", b"\r")) else source + newline
     # Use the historical full-content hash for custom payload idempotency.
     suffix = b":" + content_hash.encode("ascii")
     begin = b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE" + suffix + b" -->"
@@ -430,7 +430,7 @@ if not sections or sections[0].start() != 0:
     if mode == "check":
         print("Validated custom content file; will append a new managed block.")
         sys.exit(0)
-    separator = newline if original.endswith((b"\\n", b"\\r")) else (newline + newline if original else b"")
+    separator = newline if original.endswith((b"\n", b"\r")) else (newline + newline if original else b"")
     updated = original + separator + managed
     if not updated.startswith(original):
         print("ERROR: Custom content rollout was not append-only.")
