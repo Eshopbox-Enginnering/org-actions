@@ -92,8 +92,6 @@ def phase(repo, args, selected, contents, branch_name):
             raise ValueError(f"No selected guidelines for repository type={kind}")
         doc_plan = sync.diff_plan(root, entries, contents)
         doc_edits = [row for row in doc_plan if row[1] != "SKIP"]
-        agents_before = (root / "AGENTS.md").read_bytes() if (
-            root / "AGENTS.md").exists() else None
         agents_expected, agents_changed = expected_agents(root)
         changed = {dest for dest, _, _, _ in doc_edits}
         if agents_changed:
@@ -161,35 +159,71 @@ def phase(repo, args, selected, contents, branch_name):
         return "merged"
 
 
+def rollout_one(repo, args, selected, contents, strict=False):
+    if repo.get("isArchived") or repo.get("isFork"):
+        if strict:
+            raise ValueError("Cannot update archived or forked repository")
+        return "skipped"
+    production = (repo.get("defaultBranchRef") or {}).get("name", "")
+    if production not in sync.ALLOWED_BRANCHES:
+        if strict:
+            raise ValueError(f"Unsupported production branch: {production}")
+        return "skipped"
+    with sync.rollout_workspace(prefix="combined-discover-") as temporary:
+        root = Path(temporary) / repo["name"]
+        sync.cmd("gh", "repo", "clone", f"{args.org}/{repo['name']}",
+                 str(root), "--", "--depth=1", "--branch", production)
+        kind = sync.detect_type(root)
+        staging = sync.find_staging(root, production)
+    if kind not in selected or not selected[kind]:
+        if strict:
+            raise ValueError(f"No matching guidelines for repository type={kind}")
+        return "skipped"
+    if not staging:
+        if strict:
+            raise ValueError("Cannot find supported staging branch")
+        return "skipped"
+    first = phase(repo, args, selected, contents, staging)
+    second = phase(repo, args, selected, contents, production)
+    print(f"SUMMARY {repo['name']}: staging={first}, production={second}", flush=True)
+    return "merged" if "merged" in (first, second) else "current"
+
+
 def rollout(args):
     if args.operation != "APPLY" or args.phase != "staging":
         raise ValueError("Combined PR rollout requires APPLY and phase=staging")
     if not re.fullmatch(r"[0-9]+", args.issue):
         raise ValueError("Central Backlog issue must be numeric")
-    if args.target != "single" or not re.fullmatch(r"[A-Za-z0-9_.-]+", args.repository):
-        raise ValueError("Combined PR runner requires a single repository per invocation")
+    if args.target not in ("single", "backend", "frontend", "all"):
+        raise ValueError("Unsupported combined target")
+    if args.target == "single" and not re.fullmatch(r"[A-Za-z0-9_.-]+", args.repository):
+        raise ValueError("Combined PR runner needs a valid repository")
+    if args.target != "single" and args.repository:
+        raise ValueError("Bulk rollout must not specify a single repository")
     if __import__("os").environ.get("CONFIRMATION") != "APPLY":
         raise ValueError("APPLY requires confirmation APPLY")
     selected, contents = select_catalog(args)
-    repo = sync.gh_json(
-        "repo", "view", f"{args.org}/{args.repository}",
-        "--json", "name,defaultBranchRef,isArchived,isFork")
-    if repo.get("isArchived") or repo.get("isFork"):
-        raise ValueError("Cannot update archived or forked repository")
-    production = (repo.get("defaultBranchRef") or {}).get("name", "")
-    if production not in sync.ALLOWED_BRANCHES:
-        raise ValueError(f"Unsupported production branch: {production}")
-    with sync.rollout_workspace(prefix="combined-discover-") as temporary:
-        root = Path(temporary) / repo["name"]
-        sync.cmd("gh", "repo", "clone", f"{args.org}/{repo['name']}",
-                 str(root), "--", "--depth=1", "--branch", production)
-        staging = sync.find_staging(root, production)
-    if not staging:
-        raise ValueError("Cannot find supported staging branch")
-    first = phase(repo, args, selected, contents, staging)
-    second = phase(repo, args, selected, contents, production)
-    print(f"SUMMARY {repo['name']}: staging={first}, production={second}", flush=True)
-
+    if args.target in ("backend", "frontend"):
+        selected = {args.target: selected.get(args.target, [])}
+    if args.target == "single":
+        repos = [sync.gh_json(
+            "repo", "view", f"{args.org}/{args.repository}",
+            "--json", "name,defaultBranchRef,isArchived,isFork")]
+    else:
+        repos = sync.gh_json("repo", "list", args.org, "--limit", "1000",
+                             "--json", "name,defaultBranchRef,isArchived,isFork")
+    outcomes = {}
+    for repo in repos:
+        try:
+            outcome = rollout_one(repo, args, selected, contents,
+                                  strict=args.target == "single")
+        except Exception as exc:
+            outcome = "failed"
+            print(f"{repo['name']}: ERROR {exc}", file=sys.stderr)
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+    print("SUMMARY " + json.dumps(outcomes, sort_keys=True), flush=True)
+    if outcomes.get("failed"):
+        raise ValueError("Combined rollout had failed repositories")
 
 def main():
     parser = argparse.ArgumentParser()
