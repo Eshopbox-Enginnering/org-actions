@@ -46,14 +46,28 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             result = (root / "AGENTS.md").read_bytes()
             digest = hashlib.sha256(CURRENT).hexdigest()[:12].encode("ascii")
             self.assertTrue(result.startswith(b"# Repo instructions\n\n"))
-            self.assertTrue(result.endswith(b"\n## Keep my custom section\n"))
+            self.assertIn(b"\n## Keep my custom section\n", result)
             self.assertIn(b"<!-- BEGIN ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->", result)
             self.assertIn(b"<!-- END ESHOPBOX-AGENTS-UPDATE:" + digest + b" -->", result)
             self.assertIn(CURRENT, result)
-            self.assertNotIn(LEGACY_BEGIN, result)
+            self.assertIn(original, result)
             repeat = self.run_migrator(root)
             self.assertEqual(repeat.returncode, 2, repeat.stdout + repeat.stderr)
             self.assertEqual(result, (root / "AGENTS.md").read_bytes())
+
+    def test_trusted_legacy_survives_new_managed_rollout_without_loss(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            original = self.make_repo(root, before=b"# Repo owned intro\\n\\n")
+            applied = self.run_migrator(root)
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            actual = (root / "AGENTS.md").read_bytes()
+            self.assertTrue(actual.startswith(original.rstrip(b"\\r\\n")))
+            self.assertIn(LEGACY_BEGIN + TRUSTED + LEGACY_END, actual)
+            self.assertIn(CURRENT, actual)
+            self.assertEqual(actual.count(b"## Git"), 1)
+            self.assertEqual(actual.count(b"## AI context and token efficiency"), 1)
+            self.assertEqual(self.run_migrator(root).returncode, 2)
 
     def test_modified_legacy_content_rejected_without_modification(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -83,9 +97,9 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
             self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
             result = (root / "AGENTS.md").read_bytes()
             self.assertTrue(result.startswith(b"# Frontend-only rules\nKeep existing Angular guidance.\n"))
-            self.assertTrue(result.endswith(b"\n## Custom rules\nNever use direct API URLs.\n"))
+            self.assertIn(b"\n## Custom rules\nNever use direct API URLs.\n", result)
             self.assertIn(CURRENT, result)
-            self.assertNotIn(LEGACY_BEGIN, result)
+            self.assertIn(original, result)
 
     def test_legacy_nonblank_changes_remain_blocked_even_with_blank_lines(self):
         with tempfile.TemporaryDirectory() as temporary:
