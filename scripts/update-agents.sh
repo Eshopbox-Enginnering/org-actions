@@ -861,6 +861,42 @@ process_repo() {
     fi
 
 
+  # Fail closed if the proposed main-derived AGENTS patch is unsafe on
+  # staging. Staging and main may have distinct managed section sets; a
+  # production-derived commit must never add duplicate headings to staging.
+  if ! python3 - "$production_branch" "$staging_branch" "$CONTENT_PATH" <<'PY'
+import pathlib
+import re
+import subprocess
+import sys
+
+production, staging, payload_path = sys.argv[1:]
+heading = re.compile(rb"(?m)^## ([^\r\n]+)[ \t]*\r?\n")
+source = pathlib.Path(payload_path).read_bytes()
+desired = set(heading.findall(source))
+if not desired:
+    sys.exit(0)
+def headings(branch):
+    result = subprocess.run(
+        ["git", "show", f"origin/{branch}:AGENTS.md"],
+        capture_output=True, check=False)
+    if result.returncode:
+        return set()
+    return set(heading.findall(result.stdout))
+prod = headings(production) & desired
+stage = headings(staging) & desired
+if prod != stage:
+    print("FAILED: AGENTS.md instructions differ between staging and main; "
+          "cannot safely replay main-derived additions to staging.")
+    print("Only on staging:", sorted((stage - prod)))
+    print("Only on main:", sorted((prod - stage)))
+    sys.exit(1)
+PY
+  then
+    cleanup_repo "$workdir"
+    return 1
+  fi
+
   # ==========================================================
   # EXISTING ROLLOUT BRANCH
   # ==========================================================
