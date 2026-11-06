@@ -101,6 +101,15 @@ class LegacyAgentsMigrationTests(unittest.TestCase):
         self.assertIn('git checkout --detach "origin/$staging_branch"', script)
         self.assertNotIn('FAILED: AGENTS.md instructions differ between staging and main', script)
 
+    def test_git_identity_set_before_staging_only_commit(self):
+        script = (ROOT / "scripts/update-agents.sh").read_text()
+        repo_processing = script.split("process_repo() {", 1)[1]
+        identity = repo_processing.index('git config user.name "eshopbox-org-agents[bot]"')
+        staging_only = repo_processing.index('if [ "$production_current" -eq 1 ]; then')
+        self.assertLess(identity, staging_only)
+        self.assertIn('git config user.email "eshopbox-org-agents[bot]@users.noreply.github.com"',
+                      repo_processing[:staging_only])
+
     def test_staging_only_rollout_has_distinct_success_code(self):
         script = (ROOT / "scripts/update-agents.sh").read_text()
         self.assertIn('return 14', script)
