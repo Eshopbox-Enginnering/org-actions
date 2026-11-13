@@ -578,7 +578,7 @@ test('unknown required-workflow ID without source SHA fails closed', () => {
 
 test('observed GitHub required workflow run without workflow_sha matches reviewed identity', () => {
   const head = '8'.repeat(40);
-  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40) };
+  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849 };
   const expected = { path: '.github/workflows/java-test-coverage.yml',
     repository_id: 1041381819, ref: 'refs/heads/main' };
   const run = { id: 43198519093, head_sha: head, event: 'pull_request',
@@ -633,7 +633,7 @@ test('strict required workflow refuses green lookalike from different source', (
 
 function liveRequiredChecksFixture() {
   const head = '8'.repeat(40);
-  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40) };
+  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849 };
   const makeRun = (id, workflowId, path, check_suite_id, conclusion = 'success') => ({
     id, name: path.split('/').pop(), path, check_suite_id, workflow_id: workflowId,
     workflow_url: `https://api.github.com/repos/Eshopbox-Enginnering/esb-product-engine-jobs/actions/required_workflows/${workflowId}`,
@@ -674,7 +674,9 @@ function liveRequiredChecksFixture() {
   ];
   return { head, number: 440, protection: null, rules, checks, statuses: [],
     runs, strictTestValidation: true,
-    workflowSources: { '1041381819': source, '1041381819@main': source } };
+    workflowSources: { '1041381819': source, '1041381819@main': source,
+      '1041381819@main@' + coverage: source,
+      '1041381819@main@' + title: { ...source, workflowId: 251714341 } } };
 }
 
 test('live PR #440 check matrix accepts successful workflow with conditional skipped coverage', () => {
@@ -810,15 +812,29 @@ test('clean security receipt allows clean review', () => {
   assert.doesNotThrow(() => verifySecurity({ head, comments }));
 });
 
+test('unknown required workflow ID is rejected even with a matching workflow path', () => {
+  const expected = { path: '.github/workflows/java-test-coverage.yml', repository_id: 1041381819, ref: 'refs/heads/main' };
+  const sources = { '1041381819@main@.github/workflows/java-test-coverage.yml':
+    { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849 } };
+  const run = { workflow_id: 999000001, path: expected.path,
+    workflow_url: 'https://api.github.com/repos/Eshopbox-Enginnering/service/actions/required_workflows/999000001' };
+  assert.equal(requiredWorkflowMatches({ run, expected, sources }), false);
+  assert.equal(requiredWorkflowMatches({ run: { ...run, workflow_id: 400272849,
+    workflow_url: run.workflow_url.replace('999000001', '400272849') }, expected, sources }), true);
+});
+
 test('required workflow source ref is resolved without an undocumented workflow ID', async () => {
   const rules = [{ type: 'workflows', parameters: { workflows: [
     { path: '.github/workflows/validate.yml', repository_id: 123, ref: 'refs/heads/main' }
   ] } }];
-  const request = async (route) => route.includes('/repositories/') ?
-    { data: { id: 123, full_name: 'Eshopbox-Enginnering/org-actions' } } :
-    { data: { sha: 'a'.repeat(40) } };
+  const request = async (route) => {
+    if (route.includes('/repositories/')) return { data: { id: 123, full_name: 'Eshopbox-Enginnering/org-actions' } };
+    if (route.includes('/actions/workflows/')) return { data: { id: 400272849, path: '.github/workflows/validate.yml' } };
+    return { data: { sha: 'a'.repeat(40) } };
+  };
   const sources = await resolveWorkflowSources({ rules, request });
   assert.equal(sources['123@main'].sha, 'a'.repeat(40));
+  assert.equal(sources['123@main@.github/workflows/validate.yml'].workflowId, 400272849);
   const run = { path: '.github/workflows/validate.yml', workflow_sha: 'a'.repeat(40),
     workflow_url: 'https://api.github.com/repos/example/service/actions/required_workflows/400272849' };
   assert.equal(requiredWorkflowMatches({ run, expected: rules[0].parameters.workflows[0], sources }), true);
