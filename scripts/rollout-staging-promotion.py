@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Controlled deployment-automation inventory and PR-only rollout (#7319).
 
-DRY_RUN examines candidate repos. APPLY may open main PRs only for an explicit,
-reviewed allowlist. It NEVER merges, tags, dispatches or modifies staging.
+DRY_RUN examines backend candidates. APPLY creates a staging PR, waits for
+its standard-rule merge, and only then creates/merges a main PR. No bypass.
 """
 import json
 import os
@@ -12,7 +12,6 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = ROOT / "staging-deploy/approved-repositories.json"
 SOURCE_FILES = {
     "staging-deploy/auto-staging-deploy.cjs": ".github/scripts/auto-staging-deploy.cjs",
     "staging-deploy/auto-staging-pr.cjs": ".github/scripts/auto-staging-pr.cjs",
@@ -105,71 +104,119 @@ def check_repo(org, name):
         return "BLOCK no cicd.yml", None
     if "workflow_dispatch:" not in workflow.stdout or "dev-*" not in workflow.stdout:
         return "BLOCK cicd.yml lacks workflow_dispatch or dev-* tag trigger", None
-    # Other checks (required workflow identities, branch rules, GitHub App
-    # permissions) must be manually reviewed before entry in the allowlist.
     return "CANDIDATE main/staging/cicd.yml present", repo
 
 
-def install(full, name, base, issue):
+def stage_payload(root):
+    changed = []
+    for src, target in SOURCE_FILES.items():
+        desired = (ROOT / src).read_bytes()
+        destination = root / target
+        if destination.is_symlink() or any(
+            parent.is_symlink() for parent in destination.parents
+            if parent != root and root in parent.parents
+        ):
+            raise ValueError(f"Refusing symlink destination: {target}")
+        if not destination.resolve().is_relative_to(root.resolve()):
+            raise ValueError(f"Destination leaves checkout: {target}")
+        if destination.exists() and destination.read_bytes() == desired:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(desired)
+        changed.append(target)
+    return changed
+
+
+def pr_for_branch(full, branch):
+    result = cmd("gh", "pr", "list", "--repo", full, "--head", branch,
+                 "--state", "all", "--json", "number,url,state,baseRefName,mergedAt")
+    found = json.loads(result)
+    if len(found) > 1:
+        raise RuntimeError(f"Ambiguous prior PRs for {branch}")
+    return found[0] if found else None
+
+
+def verify_pr(full, pr, target):
+    if pr["baseRefName"] != target:
+        raise RuntimeError(f"Existing PR targets {pr['baseRefName']}, expected {target}")
+    if pr["state"] == "CLOSED" and not pr.get("mergedAt"):
+        raise RuntimeError(f"Previous {target} PR was closed without merge: {pr['url']}")
+    return bool(pr.get("mergedAt"))
+
+
+def merge_regular_pr(full, number, target, sha):
+    # Never use --admin, force, or a ruleset/required-check bypass.
+    cmd("gh", "pr", "merge", str(number), "--repo", full, "--merge",
+        "--match-head-commit", sha)
+    pr = json.loads(cmd("gh", "pr", "view", str(number), "--repo", full,
+                        "--json", "mergedAt,mergeCommit,baseRefName"))
+    if not pr.get("mergedAt") or pr.get("baseRefName") != target:
+        raise RuntimeError(f"{full}: {target} PR merge not confirmed")
+    return pr["mergeCommit"]["oid"]
+
+
+def install_phase(full, name, target, issue):
     with tempfile.TemporaryDirectory(prefix="staging-rollout-") as directory:
-        cmd("gh", "repo", "clone", full, directory, "--", "--depth=1", "--branch", base)
+        cmd("gh", "repo", "clone", full, directory, "--", "--depth=1",
+            "--branch", target)
         root = Path(directory)
-        changed = []
-        for src, target in SOURCE_FILES.items():
-            desired = (ROOT / src).read_bytes()
-            destination = root / target
-            if destination.is_symlink():
-                raise ValueError(f"Refusing symlink destination: {target}")
-            if destination.exists() and destination.read_bytes() == desired:
-                continue
-            # A parent path may itself be a symlink. Never follow it outside
-            # the clean target checkout during installer writes.
-            if any(parent.is_symlink() for parent in destination.parents if parent != root and root in parent.parents):
-                raise ValueError(f"Refusing symlink parent: {target}")
-            if not destination.resolve().is_relative_to(root.resolve()):
-                raise ValueError(f"Destination leaves checkout: {target}")
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(desired)
-            changed.append(target)
+        changed = stage_payload(root)
         if not changed:
-            print(f"{name}: NO_CHANGE canonical automation already installed", flush=True)
-            return
-        # Stable branch based on exact changes against this default branch.
+            print(f"{name} {target}: NO_CHANGE", flush=True)
+            return "current"
         base_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
-        branch = f"org-action/staging-promotion-{issue}-{base_sha[:12]}"
-        existing = cmd("gh", "pr", "list", "--repo", full, "--head", branch,
-                       "--state", "all", "--json", "number,url,state", check=False)
-        if existing.returncode:
-            raise RuntimeError(f"{name}: cannot inspect existing PRs")
-        prior = json.loads(existing.stdout)
+        # Use the same org-action branch family as the existing guideline sync:
+        # a target-specific branch, based on the destination base and payload.
+        import hashlib
+        payload_hash = hashlib.sha256(b"".join(
+            (ROOT / src).read_bytes() for src in SOURCE_FILES)).hexdigest()[:10]
+        branch = f"org-action/staging-promotion-{target}-{issue}-{base_sha[:10]}-{payload_hash}"
+        prior = pr_for_branch(full, branch)
         if prior:
-            open_prs = [item for item in prior if item.get("state", "").upper() == "OPEN"]
-            if open_prs:
-                print(f"{name}: RESUME existing open rollout PR {open_prs[0]['url']}", flush=True)
-                return
-            raise RuntimeError(f"{name}: previous rollout PR is closed; a new reviewed branch is required")
-        remote = cmd("git", "ls-remote", "--heads", "origin", branch, cwd=root)
-        if remote:
-            raise RuntimeError(f"{name}: orphaned rollout branch exists; review and resolve it before retry")
-        cmd("git", "checkout", "-b", branch, cwd=root)
-        cmd("git", "add", "--", *changed, cwd=root)
-        cmd("git", "-c", "user.name=eshopbox-org-actions[bot]",
-            "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-            "commit", "-m", f"feat: stage deployment automation rollout (#{issue})", cwd=root)
-        cmd("git", "push", "-u", "origin", branch, cwd=root)
-        body = (
-            f"Central Backlog: https://github.com/{full.split('/')[0]}/Central-Backlog/issues/{issue}\n\n"
-            "Repository-specific staging automation rollout for review.\n\n"
-            "IMPORTANT: This PR must not merge until required-workflow identities, "
-            "App permissions, branch protections, CI/CD tag behavior, and test suite "
-            "are verified for THIS repository. No deployment is requested.\n\n"
-            f"Files: {', '.join(changed)}\n\n"
-            "Staging companion PR must be created/merged before this main PR.\n"
-        )
-        url = cmd("gh", "pr", "create", "--repo", full, "--base", base, "--head", branch,
-                  "--title", f"Feature to Main: Add PR-based staging promotion (#{issue})",
-                  "--body", body, cwd=root)
-        print(f"{name}: CREATED_MAIN_PR {url}", flush=True)
+            if verify_pr(full, prior, target):
+                print(f"{name} {target}: ALREADY_MERGED {prior['url']}", flush=True)
+                return "merged"
+            print(f"{name} {target}: RESUME {prior['url']}", flush=True)
+            pr_number = prior["number"]
+        else:
+            if cmd("git", "ls-remote", "--heads", "origin", branch, cwd=root):
+                raise RuntimeError(f"{name}: orphaned rollout branch {branch}")
+            cmd("git", "checkout", "-b", branch, cwd=root)
+            cmd("git", "add", "--", *changed, cwd=root)
+            cmd("git", "-c", "user.name=eshopbox-org-actions[bot]",
+                "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+                "commit", "-m", f"feat: enable staging promotion automation (#{issue})", cwd=root)
+            cmd("git", "push", "-u", "origin", branch, cwd=root)
+            body = (
+                f"Central Backlog: https://github.com/{full.split('/')[0]}/Central-Backlog/issues/{issue}\\n\\n"
+                "One atomic staging-promotion rollout change, containing only the "
+                "workflow and accompanying scripts/tests.\\n\\n"
+                "Merge uses regular GitHub branch protection; no admin bypass.\\n\\n"
+                f"Files: {', '.join(changed)}"
+            )
+            url = cmd("gh", "pr", "create", "--repo", full, "--base", target,
+                      "--head", branch,
+                      "--title", f"Feature to {'Staging' if target == 'staging' else 'Main'}: Add staging promotion automation (#{issue})",
+                      "--body", body, cwd=root)
+            pr = pr_for_branch(full, branch)
+            if not pr or pr["url"] != url:
+                raise RuntimeError(f"{name}: cannot verify created PR {url}")
+            pr_number = pr["number"]
+            print(f"{name} {target}: CREATED {url}", flush=True)
+        # The PR may have checks pending. Use normal merge, and stop if
+        # GitHub rejects it. Do not create a main PR before staging merges.
+        current_head = json.loads(cmd("gh", "pr", "view", str(pr_number),
+                                     "--repo", full, "--json", "headRefOid"))
+        sha = current_head["headRefOid"]
+        merge_regular_pr(full, pr_number, target, sha)
+        print(f"{name} {target}: MERGED PR #{pr_number}", flush=True)
+        return "merged"
+
+
+def install(full, name, issue):
+    # One open PR per repository at a time: staging first, then main.
+    install_phase(full, name, "staging", issue)
+    return install_phase(full, name, "main", issue)
 
 
 def main():
@@ -180,31 +227,25 @@ def main():
         raise ValueError("APPLY requires explicit confirmation")
     org = os.environ["ORG"]
     issue = "7319"
-    manifest = json.loads(MANIFEST.read_text())
-    approved = manifest["approved"]
     names = named_repositories(os.environ.get("TARGET", "single"),
                                os.environ.get("REPOSITORY", ""),
                                os.environ.get("REPOSITORIES", ""), org)
-    print(f"Operation={operation} scanned={len(names)} approved={len(approved)}", flush=True)
+    print(f"Operation={operation} scanned={len(names)} backend-only sequential rollout", flush=True)
     blocked = 0
     for name in names:
         try:
             status, _repo = check_repo(org, name)
-            allow = name in approved
-            print(f"{name}: {status} | {'APPROVED' if allow else 'AUDIT_ONLY'}", flush=True)
+            print(f"{name}: {status}", flush=True)
             if status != "CANDIDATE main/staging/cicd.yml present":
                 if status.startswith("BLOCK"):
                     blocked += 1
                 continue
             if operation == "APPLY":
-                if not allow:
-                    print(f"{name}: SKIP not explicitly approved for this code", flush=True)
-                    continue
-                install(f"{org}/{name}", name, "main", issue)
+                install(f"{org}/{name}", name, issue)
         except Exception as exc:
             blocked += 1
             print(f"{name}: BLOCK {exc}", flush=True)
-    print(f"Audit complete. Blocked={blocked}; no PRs merged or deployments triggered.", flush=True)
+    print(f"Rollout complete. Blocked={blocked}; no application deployments triggered.", flush=True)
     if operation == "APPLY" and blocked:
         raise SystemExit("APPLY incomplete: one or more repositories blocked")
 
