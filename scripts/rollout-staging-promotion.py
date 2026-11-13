@@ -88,6 +88,12 @@ def install(full, name, base, issue):
                 raise ValueError(f"Refusing symlink destination: {target}")
             if destination.exists() and destination.read_bytes() == desired:
                 continue
+            # A parent path may itself be a symlink. Never follow it outside
+            # the clean target checkout during installer writes.
+            if any(parent.is_symlink() for parent in destination.parents if parent != root and root in parent.parents):
+                raise ValueError(f"Refusing symlink parent: {target}")
+            if not destination.resolve().is_relative_to(root.resolve()):
+                raise ValueError(f"Destination leaves checkout: {target}")
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(desired)
             changed.append(target)
@@ -107,8 +113,7 @@ def install(full, name, base, issue):
             return
         remote = cmd("git", "ls-remote", "--heads", "origin", branch, cwd=root)
         if remote:
-            print(f"{name}: BLOCK rollout branch already exists", flush=True)
-            return
+            raise RuntimeError(f"{name}: orphaned rollout branch exists; review and resolve it before retry")
         cmd("git", "checkout", "-b", branch, cwd=root)
         cmd("git", "add", "--", *changed, cwd=root)
         cmd("git", "-c", "user.name=eshopbox-org-actions[bot]",
@@ -150,8 +155,9 @@ def main():
             status, _repo = check_repo(org, name)
             allow = name in approved
             print(f"{name}: {status} | {'APPROVED' if allow else 'AUDIT_ONLY'}", flush=True)
-            if status.startswith("BLOCK"):
-                blocked += 1
+            if status != "CANDIDATE main/staging/cicd.yml present":
+                if status.startswith("BLOCK"):
+                    blocked += 1
                 continue
             if operation == "APPLY":
                 if not allow:
