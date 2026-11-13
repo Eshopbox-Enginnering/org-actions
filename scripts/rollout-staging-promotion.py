@@ -254,6 +254,18 @@ def install(full, name, issue):
             "--branch", "main")
         root = Path(directory)
         changed = stage_payload(root)
+        # The full staging PR diff must contain ONLY managed files, not unrelated
+        # commits present on main but missing from staging. Fail closed before
+        # any branch push or PR creation. This also preserves main's exact
+        # feature commit for the required staging-presence check.
+        cmd("git", "fetch", "origin",
+            "+refs/heads/staging:refs/remotes/origin/staging", cwd=root)
+        pending_main = set(cmd("git", "diff", "--name-only",
+                               "origin/staging...HEAD", cwd=root).splitlines())
+        if pending_main - set(SOURCE_FILES.values()):
+            raise RuntimeError(
+                f"{name}: staging is missing unrelated main changes; "
+                f"refusing polluted staging PR: {sorted(pending_main - set(SOURCE_FILES.values()))}")
         if not changed:
             print(f"{name}: NO_CHANGE already installed on main", flush=True)
             return "current"
