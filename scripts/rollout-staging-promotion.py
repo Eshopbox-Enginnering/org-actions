@@ -4,8 +4,10 @@
 DRY_RUN examines backend candidates. APPLY creates a staging PR, waits for
 its standard-rule merge, and only then creates/merges a main PR. No bypass.
 """
+import base64
 import json
 import os
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -20,10 +22,52 @@ SOURCE_FILES = {
     "staging-deploy/auto-staging-pr.test.cjs": ".github/scripts/auto-staging-pr.test.cjs",
     "staging-deploy/auto-staging-deploy.yml": ".github/workflows/auto-staging-deploy.yml",
 }
+TOKEN_LAST_REFRESH = 0
+TOKEN_REFRESHING = False
+
+def refresh_app_token():
+    """Refresh installation credentials when a batch outlives its original token."""
+    global TOKEN_LAST_REFRESH, TOKEN_REFRESHING
+    if not os.environ.get("APP_PRIVATE_KEY") or TOKEN_REFRESHING:
+        return
+    if time.monotonic() - TOKEN_LAST_REFRESH < 35 * 60:
+        return
+    TOKEN_REFRESHING = True
+    try:
+        now = int(time.time())
+        encode = lambda obj: base64.urlsafe_b64encode(json.dumps(
+            obj, separators=(",", ":")).encode()).decode().rstrip("=")
+        data = encode({"alg": "RS256", "typ": "JWT"}) + "." + encode({
+            "iat": now - 60, "exp": now + 540, "iss": os.environ["APP_ID"]})
+        with tempfile.NamedTemporaryFile(mode="w", prefix="gh-app-key-") as key:
+            os.chmod(key.name, 0o600)
+            key.write(os.environ["APP_PRIVATE_KEY"])
+            key.flush()
+            signature = subprocess.run(
+                ["openssl", "dgst", "-sha256", "-sign", key.name],
+                input=data.encode(), capture_output=True, check=True).stdout
+        jwt = data + "." + base64.urlsafe_b64encode(signature).decode().rstrip("=")
+        auth = ["-H", f"Authorization: Bearer {jwt}"]
+        installed = subprocess.run(
+            ["gh", "api", f"orgs/{os.environ['ORG']}/installation", *auth],
+            capture_output=True, text=True, check=True)
+        iid = json.loads(installed.stdout)["id"]
+        minted = subprocess.run(
+            ["gh", "api", "--method", "POST",
+             f"app/installations/{iid}/access_tokens", *auth],
+            capture_output=True, text=True, check=True)
+        os.environ["GH_TOKEN"] = json.loads(minted.stdout)["token"]
+        os.environ["GITHUB_TOKEN"] = os.environ["GH_TOKEN"]
+        TOKEN_LAST_REFRESH = time.monotonic()
+    finally:
+        TOKEN_REFRESHING = False
+
+
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def cmd(*args, cwd=None, check=True):
+    refresh_app_token()
     p = subprocess.run(args, cwd=cwd, text=True, capture_output=True)
     if check and p.returncode:
         raise RuntimeError(f"{' '.join(args[:4])}: {p.stderr.strip()[:400]}")
@@ -145,29 +189,60 @@ def verify_pr(full, pr, target):
     return bool(pr.get("mergedAt"))
 
 
-def merge_regular_pr(full, number, target, sha):
-    # No admin bypass. Wait for required checks and block on conflicts.
-    for attempt in range(60):
+def managed_open_prs(full, issue):
+    prs = json.loads(cmd("gh", "pr", "list", "--repo", full, "--state",
+                         "open", "--limit", "1000",
+                         "--json", "number,url,headRefName,baseRefName"))
+    prefix = f"org-action/staging-promotion-{issue}-"
+    return [pr for pr in prs if pr["headRefName"].startswith(prefix)]
+
+
+def validate_payload(root, branch, feature_sha, base_sha, changed):
+    """Fail closed if the retained commit, ancestry or exact bytes change."""
+    cmd("git", "fetch", "origin", branch, cwd=root)
+    if cmd("git", "rev-parse", "FETCH_HEAD", cwd=root) != feature_sha:
+        raise RuntimeError("Managed rollout branch HEAD changed")
+    parents = cmd("git", "rev-list", "--parents", "-n", "1",
+                  feature_sha, cwd=root).split()
+    if len(parents) != 2 or parents[1] != base_sha:
+        raise RuntimeError("Managed rollout commit ancestry differs from main")
+    files = cmd("git", "diff", "--name-only", base_sha,
+                feature_sha, cwd=root).splitlines()
+    if set(files) != set(changed):
+        raise RuntimeError("Managed rollout contains unexpected file changes")
+    for src, target in SOURCE_FILES.items():
+        actual = subprocess.run(["git", "show", f"{feature_sha}:{target}"],
+                                cwd=root, capture_output=True, check=True).stdout
+        if actual != (ROOT / src).read_bytes():
+            raise RuntimeError(f"Managed rollout payload mismatch: {target}")
+
+
+def merge_regular_pr(full, number, target, sha, validate=None):
+    repo = gh_api(f"repos/{full}")
+    if not repo.get("allow_merge_commit"):
+        # Rebase/squash could rewrite the staged feature SHA and fail the main gate.
+        raise RuntimeError(f"{full}: merge commits disabled; cannot preserve staged feature SHA")
+    deadline = time.monotonic() + 40 * 60
+    submitted = False
+    while time.monotonic() < deadline:
         pr = json.loads(cmd("gh", "pr", "view", str(number), "--repo", full,
                             "--json", "headRefOid,baseRefName,state,mergeStateStatus,mergedAt"))
         if pr.get("mergedAt"):
             return "already merged"
         if pr["headRefOid"] != sha or pr["baseRefName"] != target or pr["state"] != "OPEN":
             raise RuntimeError(f"{full}: {target} PR changed during validation")
-        if pr["mergeStateStatus"] == "CLEAN":
-            break
         if pr["mergeStateStatus"] == "DIRTY":
             raise RuntimeError(f"{full}: {target} PR has conflicts")
-        if attempt == 59:
-            raise RuntimeError(f"{full}: {target} required checks did not become mergeable")
+        if not submitted and pr["mergeStateStatus"] == "CLEAN":
+            if validate:
+                validate()
+            cmd("gh", "pr", "merge", str(number), "--repo", full, "--merge",
+                "--match-head-commit", sha)
+            submitted = True
+        # A merge queue may accept a PR before mergedAt is set.
         time.sleep(10)
-    cmd("gh", "pr", "merge", str(number), "--repo", full, "--merge",
-        "--match-head-commit", sha)
-    pr = json.loads(cmd("gh", "pr", "view", str(number), "--repo", full,
-                        "--json", "mergedAt,mergeCommit,baseRefName"))
-    if not pr.get("mergedAt") or pr.get("baseRefName") != target:
-        raise RuntimeError(f"{full}: {target} PR merge not confirmed")
-    return pr["mergeCommit"]["oid"]
+    raise RuntimeError(f"{full}: {target} PR not merged within 40 minutes; left open")
+
 
 
 def install(full, name, issue):
@@ -182,11 +257,17 @@ def install(full, name, issue):
         if not changed:
             print(f"{name}: NO_CHANGE already installed on main", flush=True)
             return "current"
-        import hashlib
         base_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
         payload_hash = hashlib.sha256(b"".join(
             (ROOT / src).read_bytes() for src in SOURCE_FILES)).hexdigest()[:10]
         branch = f"org-action/staging-promotion-{issue}-{base_sha[:10]}-{payload_hash}"
+        active = managed_open_prs(full, issue)
+        foreign = [pr for pr in active if pr["headRefName"] != branch]
+        if foreign:
+            raise RuntimeError(f"{name}: older rollout PR still open; reconcile: " +
+                               ", ".join(pr["url"] for pr in foreign))
+        if len(active) > 1:
+            raise RuntimeError(f"{name}: multiple open rollout PRs need reconciliation")
         existing = {target: pr_for_branch(full, branch, target)
                     for target in ("staging", "main")}
         if existing["main"] and not (existing["staging"] and existing["staging"].get("mergedAt")):
@@ -215,6 +296,7 @@ def install(full, name, issue):
                 "commit", "-m", f"feat: enable staging promotion automation (#{issue})", cwd=root)
             cmd("git", "push", "-u", "origin", branch, cwd=root)
         feature_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
+        validate_payload(root, branch, feature_sha, base_sha, changed)
         for target in ("staging", "main"):
             if target == "main" and not cmd("git", "ls-remote", "--heads",
                                              "origin", branch, cwd=root):
@@ -249,7 +331,9 @@ def install(full, name, issue):
                     raise RuntimeError(f"{name}: cannot verify created PR {url}")
                 number = pr["number"]
                 print(f"{name} {target}: CREATED {url}", flush=True)
-            merge_regular_pr(full, number, target, feature_sha)
+            merge_regular_pr(full, number, target, feature_sha,
+                             validate=lambda: validate_payload(
+                                 root, branch, feature_sha, base_sha, changed))
             print(f"{name} {target}: MERGED PR #{number}", flush=True)
         return "merged"
 
