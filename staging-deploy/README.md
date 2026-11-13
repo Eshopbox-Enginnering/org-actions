@@ -13,16 +13,18 @@ This installer does **not** read, create, or modify `AGENTS.md`. The deployed ar
 - `DRY_RUN` inventories repositories with a `main` default branch, a `staging` branch and `.github/workflows/cicd.yml` supporting `workflow_dispatch` and `dev-*` tags.
 - `APPLY` requires confirmation `APPLY`. It opens **main PRs for review only**; it never merges PRs, tags commits, triggers staging or changes the staging branch. Staging companions must follow review and staging-first process.
 - Only names explicitly approved in [approved-repositories.json](./approved-repositories.json) are eligible for APPLY. Other repositories are shown as `AUDIT_ONLY` and skipped.
-- The initial approved entry is the existing source pilot `esb-product-engine-jobs`; it should be a no-op if its canonical automation files are already in place.
+- Candidate approval is managed through the manifest; it does not indicate that rollout PRs were merged or deployments are enabled. The audit identified 21 backend candidates in run 43409005535; their approval is tracked separately in PRs #312 (staging) and #311 (main).
 - GitHub App installation must grant **Workflows: write** along with Contents and Pull requests; the generated workflow explicitly requests this permission to support workflow-file PR merges.
-- Copied source includes repository-specific required-workflow identity mappings. **Do not approve another repository until its required workflows, rule source identities, branch protections, GitHub App permissions, deployment workflow, tag format and integration tests are validated, and the script is parameterized for that repository.** In particular, never copy the pilot's hardcoded rule IDs to an unreviewed repository.
+- Required-workflow identities are resolved from each repository's **active GitHub branch rules**, including configured source repository, workflow path, ref/SHA and live source workflow ID. Unknown or mismatched identities fail closed. Workflow IDs from the original pilot are no longer hardcoded.
+- Active organization rulesets were inspected across all 21 basic candidates. All have the core staging-presence, protected-branch, test-coverage and title/ticket rules. `esb-client-order-return` and `esbeventpipeline` additionally have large-PR/WIP restrictions. These protections remain in force.
+- These checks do not replace a functional smoke test on each repository. Verify the generated staging/main installation PRs, CI/CD dispatch, GitHub App permission, runner and tag handling before broader use.
 - No automatic staging merge or deployment is enabled by this installer itself. The `/deploy-staging` command remains the trigger for installed workflow, until separate no-command readiness automation is designed and reviewed.
 
 ## Steps
 
 1. Merge the org-actions rollout PR after tests/review; this installs only central rollout tooling, not destination repository changes.
 2. Run `operation=DRY_RUN`, `target=backend` to get the inventory and identify repo-specific differences. Check every skip/block reason.
-3. Review eligibility and refactor required-check trust configuration for each repository before adding it to the allowlist.
+3. Confirm the approved-manifest PRs and dynamic required-workflow validation PRs are merged before running APPLY; check actual repository rules and smoke tests on the generated installation PRs.
 4. Run `operation=DRY_RUN`, `target=selected` for a small approved pilot batch.
 5. Run `operation=APPLY`, `target=selected`, `confirmation=APPLY` to create destination **main PRs only**.
 6. Review destination PRs, create separate staging companion PRs, merge staging first, then main, and validate `/deploy-staging` on a safe smoke PR.
