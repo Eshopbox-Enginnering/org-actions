@@ -67,6 +67,31 @@ class RolloutSafetyTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         mod.main()
 
+    def test_closed_rollout_pr_is_blocker_not_success(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as temp:
+            clone = Path(temp)
+            files = {src: (ROOT / src).read_bytes() for src in mod.SOURCE_FILES}
+            def command(*args, cwd=None, check=True):
+                if args[:3] == ("gh", "repo", "clone"):
+                    for src, dest in mod.SOURCE_FILES.items():
+                        target = clone / dest
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(b"old data")
+                    return ""
+                if args[:3] == ("git", "rev-parse", "HEAD"):
+                    return "a" * 40
+                if args[:3] == ("gh", "pr", "list"):
+                    return mock.Mock(returncode=0, stdout='[{"state":"CLOSED","url":"https://github.com/org/repo/pull/1"}]')
+                raise AssertionError(f"Unexpected command: {args}")
+            # temp workspace chosen by the rollout function remains under a
+            # dedicated clone directory. Simulate only the pre-commit sequence.
+            with mock.patch.object(mod.tempfile, "TemporaryDirectory") as temp_dir:
+                temp_dir.return_value.__enter__.return_value = str(clone)
+                with mock.patch.object(mod, "cmd", side_effect=command):
+                    with self.assertRaisesRegex(RuntimeError, "closed"):
+                        mod.install("org/repo", "repo", "main", "7319")
+
     def test_dry_run_never_installs_even_approved_repo(self):
         env = {"OPERATION": "DRY_RUN", "CONFIRMATION": "", "ORG": "Eshopbox-Enginnering",
                "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
