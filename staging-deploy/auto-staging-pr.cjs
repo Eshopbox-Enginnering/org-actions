@@ -175,13 +175,19 @@ async function checkReady({ github, repo, number, head, getPR, pages }) {
   }`, { ...repo, number });
   if (result.repository.pullRequest.headRefOid !== head) throw new Error('PR head changed during validation.');
   const rules = await pages('GET /repos/{owner}/{repo}/rules/branches/{branch}', { branch: 'main' });
-  const runs = await pages('GET /repos/{owner}/{repo}/actions/runs', { head_sha: head });
+  let runs = await pages('GET /repos/{owner}/{repo}/actions/runs', { head_sha: head });
   let checks = await pages('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { ref: head, filter: 'latest' });
   let statuses = await pages('GET /repos/{owner}/{repo}/commits/{ref}/statuses', { ref: head });
   if (pr.merge_commit_sha) {
     const mergeChecks = await pages('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { ref: pr.merge_commit_sha, filter: 'latest' });
     const mergeStatuses = await pages('GET /repos/{owner}/{repo}/commits/{ref}/statuses', { ref: pr.merge_commit_sha });
-    if (mergeChecks.length || mergeStatuses.length) { checks = mergeChecks; statuses = mergeStatuses; }
+    if (mergeChecks.length || mergeStatuses.length) {
+      checks = mergeChecks;
+      statuses = mergeStatuses;
+      // Required workflow runs must come from the same SHA as check suites.
+      // Otherwise successful merge-queue job suites appear to be missing.
+      runs = await pages('GET /repos/{owner}/{repo}/actions/runs', { head_sha: pr.merge_commit_sha });
+    }
   }
   const workflowSources = await resolveWorkflowSources({ rules, request: (route, args) => github.request(route, args) });
   verifyChecks({ head, number, protection: result.repository.pullRequest.baseRef?.branchProtectionRule,
@@ -269,7 +275,12 @@ async function deploy({ github, appGithub, context, core, command, git, sleep = 
       // but only when GitHub identifies a merged staging PR at this commit.
       const candidates = await pages('GET /repos/{owner}/{repo}/pulls', { state: 'closed', base: 'staging' });
       stage = candidates.find(p => p.merged_at && p.merge_commit_sha === git.staging &&
-        (p.head.ref.startsWith('conflict/resolved/') || p.head.sha === head));
+        (p.head.sha === head ||
+          (p.head.ref === `conflict/resolved/${issue || number}` &&
+           // The conflict-resolution PR must explicitly reference this
+           // original main PR and its reviewed SHA, not another feature.
+           (p.body || '').includes(pr.html_url) &&
+           (p.body || '').includes(head))));
       if (!stage) throw new Error('PR head is in staging, but no merged staging PR matches the current snapshot. Cannot safely identify a promotion to tag.');
     }
     if (!stage) {
