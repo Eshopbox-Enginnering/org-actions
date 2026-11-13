@@ -75,6 +75,17 @@ class RolloutSafetyTests(unittest.TestCase):
         self.assertLess(source.index('refusing polluted staging PR'),
                         source.index('cmd("git", "push", "-u", "origin", branch'))
 
+    def test_full_history_is_fetched_before_staging_diff(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        self.assertIn('cmd("git", "fetch", "--unshallow", "origin", cwd=root)', source)
+        self.assertIn('cmd("git", "merge-base", "origin/staging", "HEAD"', source)
+        self.assertIn("no verified merge base", source)
+        self.assertLess(source.index('cmd("git", "fetch", "--unshallow"'),
+                        source.index('"origin/staging...HEAD"'))
+        self.assertLess(source.index("no verified merge base"),
+                        source.index('"origin/staging...HEAD"'))
+
     def test_closed_pr_must_not_be_reopened(self):
         with self.assertRaisesRegex(RuntimeError, "closed without merge"):
             mod.verify_pr("org/api", {
