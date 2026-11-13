@@ -1,0 +1,94 @@
+name: Deploy PR to staging
+
+# Only an explicit PR comment can request staging promotion.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+  checks: read
+  statuses: read
+
+jobs:
+  deploy:
+    if: github.event.issue.pull_request && github.event.comment.body == '/deploy-staging'
+    runs-on: self-hosted
+    timeout-minutes: 90
+    # One staging merge/tag/deployment at a time, across all PRs in this repo.
+    concurrency:
+      group: auto-staging-deploy
+      cancel-in-progress: false
+    steps:
+      - name: Checkout trusted workflow code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          path: .auto-staging-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Validate staging automation script and regression tests
+        working-directory: .auto-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          node --check .github/scripts/auto-staging-pr.cjs
+          node --test .github/scripts/auto-staging-deploy.test.cjs .github/scripts/auto-staging-pr.test.cjs
+
+      - name: Mint staging branch writer token
+        if: vars.ORG_AGENTS_APP_ID != ''
+        id: staging-app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Check gates, merge staging PR, tag, and report deployment
+        id: deploy
+        uses: actions/github-script@v7
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGING_PUSH_TOKEN: ${{ steps.staging-app.outputs.token }}
+          DEPLOY_DIRECTORY: .auto-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        with:
+          script: |
+            const path = require('node:path');
+            const directory = path.join(process.env.GITHUB_WORKSPACE, process.env.DEPLOY_DIRECTORY);
+            const { command, StagingGit } = require(path.join(directory, '.github/scripts/auto-staging-deploy.cjs'));
+            const { deploy } = require(path.join(directory, '.github/scripts/auto-staging-pr.cjs'));
+            const run = (file, args, options) => command(file, args, directory, options);
+            if (!process.env.STAGING_PUSH_TOKEN) throw new Error('Staging GitHub App token is required; refusing to use GITHUB_TOKEN for PR writes.');
+            const appGithub = new github.constructor({ auth: process.env.STAGING_PUSH_TOKEN });
+            await deploy({ github, appGithub, context, core, command: run, git: new StagingGit(run, { useStagingApp: true }) });
+
+      - name: Report setup failure
+        if: failure() && steps.deploy.outputs.reported != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: `Staging deployment stopped: runner setup or workflow execution failed. See ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}.`,
+            });
+
+      - name: Remove this run's isolated checkout
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          DEPLOY_DIRECTORY: .auto-staging-${{ github.run_id }}-${{ github.run_attempt }}
+        with:
+          script: |
+            const fs = require('node:fs/promises');
+            const path = require('node:path');
+            const root = path.resolve(process.env.GITHUB_WORKSPACE);
+            const target = path.resolve(root, process.env.DEPLOY_DIRECTORY);
+            if (path.dirname(target) !== root || !path.basename(target).startsWith('.auto-staging-')) {
+              throw new Error('Refusing to remove an unexpected checkout path');
+            }
+            await fs.rm(target, { recursive: true, force: true });
