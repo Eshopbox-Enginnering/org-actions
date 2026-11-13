@@ -84,10 +84,10 @@ def install(full, name, base, issue):
         for src, target in SOURCE_FILES.items():
             desired = (ROOT / src).read_bytes()
             destination = root / target
+            if destination.is_symlink():
+                raise ValueError(f"Refusing symlink destination: {target}")
             if destination.exists() and destination.read_bytes() == desired:
                 continue
-            if destination.exists() and destination.is_symlink():
-                raise ValueError(f"Refusing symlink destination: {target}")
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(desired)
             changed.append(target)
