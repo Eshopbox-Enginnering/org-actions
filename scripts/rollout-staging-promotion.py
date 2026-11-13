@@ -195,6 +195,9 @@ def install(full, name, issue):
         if remote:
             if not any(existing.values()):
                 raise RuntimeError(f"{name}: orphaned rollout branch {branch}")
+            # Discard only the temporary clone's uncommitted staging bytes.
+            # Git will then safely check out the previously reviewed branch.
+            cmd("git", "reset", "--hard", "HEAD", cwd=root)
             cmd("git", "fetch", "origin", branch, cwd=root)
             cmd("git", "checkout", "-B", branch, "FETCH_HEAD", cwd=root)
             actual_files = cmd("git", "diff", "--name-only", "origin/main...HEAD", cwd=root).splitlines()
@@ -202,7 +205,7 @@ def install(full, name, issue):
                 raise RuntimeError(f"{name}: existing branch payload differs from reviewed rollout")
             for src, target in SOURCE_FILES.items():
                 actual = cmd("git", "show", f"HEAD:{target}", cwd=root)
-                if actual.encode() != (ROOT / src).read_bytes():
+                if actual != (ROOT / src).read_text().strip():
                     raise RuntimeError(f"{name}: existing branch file differs: {target}")
         else:
             cmd("git", "checkout", "-b", branch, cwd=root)
