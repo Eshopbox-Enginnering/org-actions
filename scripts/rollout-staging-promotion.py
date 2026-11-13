@@ -216,6 +216,13 @@ def install(full, name, issue):
             cmd("git", "push", "-u", "origin", branch, cwd=root)
         feature_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
         for target in ("staging", "main"):
+            if target == "main" and not cmd("git", "ls-remote", "--heads",
+                                             "origin", branch, cwd=root):
+                # GitHub may auto-delete the head branch after staging merges.
+                # Re-create only this exact, already-reviewed feature SHA;
+                # do not change its contents or force-push anything.
+                cmd("git", "push", "origin",
+                    f"{feature_sha}:refs/heads/{branch}", cwd=root)
             prior = existing[target]
             if prior:
                 if verify_pr(full, prior, target):
