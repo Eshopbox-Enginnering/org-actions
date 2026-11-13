@@ -21,6 +21,37 @@ class RolloutSafetyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.named_repositories("selected", "", ",".join(f"repo{i}" for i in range(26)), "org")
 
+    def test_backend_selection_and_classification(self):
+        with mock.patch.object(mod, "cmd", return_value='[{"name":"backend-a","isArchived":false},{"name":"frontend-a","isArchived":false}]'):
+            self.assertEqual(mod.named_repositories("backend", "", "", "org"),
+                             ["backend-a", "frontend-a"])
+        def api(path):
+            if path.endswith("/contents"):
+                return [{"name": "pom.xml"}]
+            raise AssertionError(path)
+        with mock.patch.object(mod, "gh_api", side_effect=api):
+            self.assertTrue(mod.detect_backend("org", "backend-a"))
+        with mock.patch.object(mod, "gh_api", return_value=[{"name": "angular.json"}, {"name": "package.json"}]):
+            self.assertFalse(mod.detect_backend("org", "frontend-a"))
+        with mock.patch.object(mod, "gh_api", return_value=[{"name": "README.md"}]):
+            self.assertFalse(mod.detect_backend("org", "unknown-a"))
+
+    def test_node_backend_detection_and_frontend_exclusion(self):
+        with mock.patch.object(mod, "gh_api", return_value=[{"name": "package.json"}]):
+            with mock.patch.object(mod, "cmd", return_value='{"dependencies":{"express":"^4"}}'):
+                self.assertTrue(mod.detect_backend("org", "api"))
+            with mock.patch.object(mod, "cmd", return_value='{"dependencies":{"react":"^18"}}'):
+                self.assertFalse(mod.detect_backend("org", "frontend"))
+
+    def test_single_frontend_repo_is_skipped_for_apply(self):
+        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "Eshopbox-Enginnering",
+               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
+        with mock.patch.dict(mod.os.environ, env):
+            with mock.patch.object(mod, "check_repo", return_value=("SKIP frontend/unknown repository", None)):
+                with mock.patch.object(mod, "install") as install:
+                    mod.main()
+                    install.assert_not_called()
+
     def test_source_payload_targets_are_tightly_scoped(self):
         self.assertEqual(set(mod.SOURCE_FILES.values()), {
             ".github/scripts/auto-staging-deploy.cjs",

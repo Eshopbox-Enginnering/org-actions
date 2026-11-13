@@ -2,6 +2,12 @@
 
 This feature uses the same **DRY_RUN → explicit APPLY** approach as [Sync Engineering Guidelines](../.github/workflows/sync-engineering-guidelines.yml), with a separate workflow: [Roll out staging promotion automation](../.github/workflows/rollout-staging-promotion.yml).
 
+## Backend-only selection
+
+Choose `target=backend` in the rollout workflow. It inventories unarchived repositories, identifies backend projects using the same root-file signals as the engineering-guidelines sync (Maven, Gradle, Go, Python, PHP, or Node backend dependencies), and **skips frontend and unclassified repositories**. The same backend eligibility guard applies to `single`, `selected`, and `all` targets, so an explicitly selected frontend repo is not installed by mistake.
+
+This installer does **not** read, create, or modify `AGENTS.md`. The deployed artifacts are limited to `.github/workflows/auto-staging-deploy.yml` and four `.github/scripts/auto-staging-*.cjs` files. Updating `AGENTS.md` is a separate optional engineering-guidelines process, not a prerequisite for staging promotion.
+
 ## Scope and safety
 
 - `DRY_RUN` inventories repositories with a `main` default branch, a `staging` branch and `.github/workflows/cicd.yml` supporting `workflow_dispatch` and `dev-*` tags.
@@ -15,7 +21,7 @@ This feature uses the same **DRY_RUN → explicit APPLY** approach as [Sync Engi
 ## Steps
 
 1. Merge the org-actions rollout PR after tests/review; this installs only central rollout tooling, not destination repository changes.
-2. Run `operation=DRY_RUN`, `target=all` to get the inventory and identify repo-specific differences. Check every skip/block reason.
+2. Run `operation=DRY_RUN`, `target=backend` to get the inventory and identify repo-specific differences. Check every skip/block reason.
 3. Review eligibility and refactor required-check trust configuration for each repository before adding it to the allowlist.
 4. Run `operation=DRY_RUN`, `target=selected` for a small approved pilot batch.
 5. Run `operation=APPLY`, `target=selected`, `confirmation=APPLY` to create destination **main PRs only**.

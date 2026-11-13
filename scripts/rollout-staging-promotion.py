@@ -42,7 +42,7 @@ def named_repositories(target, single, selected, org):
         names = [n.strip() for n in selected.split(",") if n.strip()]
         if len(names) > 25:
             raise ValueError("selected is limited to 25 repositories")
-    elif target == "all":
+    elif target in ("backend", "all"):
         items = json.loads(cmd("gh", "repo", "list", org, "--limit", "1000",
                                "--json", "name,isArchived"))
         names = [i["name"] for i in items if not i["isArchived"]]
@@ -55,11 +55,45 @@ def named_repositories(target, single, selected, org):
     return names
 
 
+def detect_backend(org, name):
+    """Match the shared guideline classifier; unknown and frontend fail closed.
+
+    Fetch metadata rather than inferring frontend/backend from the repo name.
+    For Node apps, inspect package.json dependencies instead of installing
+    frontend workflows by accident.
+    """
+    full = f"{org}/{name}"
+    entries = gh_api(f"repos/{full}/contents")
+    if not isinstance(entries, list):
+        raise ValueError("Cannot inspect repository root")
+    filenames = {entry.get("name") for entry in entries}
+    if "composer.json" in filenames:
+        return True
+    frontend = {"angular.json", "vite.config.js", "vite.config.ts",
+                "vite.config.mjs", "vue.config.js", "next.config.js",
+                "next.config.ts", "next.config.mjs"}
+    backend = {"pom.xml", "build.gradle", "build.gradle.kts", "go.mod",
+               "requirements.txt", "pyproject.toml"}
+    if filenames & frontend:
+        return False
+    if filenames & backend:
+        return True
+    if "package.json" in filenames:
+        package = cmd("gh", "api", f"repos/{full}/contents/package.json",
+                      "-H", "Accept: application/vnd.github.raw+json")
+        if any(x in package for x in ('"express"', '"fastify"', '"koa"',
+                                     '"nestjs"', '"@nestjs/core"')):
+            return True
+    return False
+
+
 def check_repo(org, name):
     full = f"{org}/{name}"
     repo = gh_api(f"repos/{full}")
     if repo.get("archived") or repo.get("disabled"):
         return "SKIP archived/disabled", None
+    if not detect_backend(org, name):
+        return "SKIP frontend/unknown repository", None
     if repo.get("default_branch") != "main":
         return "BLOCK default branch is not main", None
     staging = cmd("gh", "api", f"repos/{full}/branches/staging", check=False)

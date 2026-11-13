@@ -10,10 +10,10 @@ on:
         type: choice
         options: [DRY_RUN, APPLY]
       target:
-        description: Repositories to audit or update
+        description: Audit backend repositories or select specific repos (frontend/unknown always skipped)
         required: true
         type: choice
-        options: [single, selected, all]
+        options: [single, selected, backend, all]
       repository:
         description: Name when target=single
         required: false
