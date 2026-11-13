@@ -52,7 +52,7 @@ class RolloutSafetyTests(unittest.TestCase):
         import inspect
         source = inspect.getsource(mod.install)
         self.assertIn('for target in ("staging", "main"):', source)
-        self.assertIn('merge_regular_pr(full, number, target, feature_sha)', source)
+        self.assertIn('merge_regular_pr(full, number, target, feature_sha,', source)
         self.assertNotIn("install_phase", source)
         self.assertIn("main PR exists before staging was merged", source)
         self.assertNotIn("--admin", source)
@@ -61,7 +61,7 @@ class RolloutSafetyTests(unittest.TestCase):
         import inspect
         source = inspect.getsource(mod.install)
         loop = source.index('for target in ("staging", "main"):')
-        merge = source.index("merge_regular_pr(full, number, target, feature_sha)", loop)
+        merge = source.index("merge_regular_pr(full, number, target, feature_sha,", loop)
         self.assertLess(loop, merge)
         # The merge throws if blocked, so the next iteration cannot run.
         self.assertNotIn("except", source[loop:merge])
@@ -82,12 +82,14 @@ class RolloutSafetyTests(unittest.TestCase):
 
     def test_merge_uses_normal_method_only(self):
         calls = []
+        views = [
+            '{"headRefOid":"abc123","baseRefName":"staging","state":"OPEN","mergeStateStatus":"CLEAN","mergedAt":null}',
+            '{"headRefOid":"abc123","baseRefName":"staging","state":"MERGED","mergeStateStatus":"UNKNOWN","mergedAt":"2026-11-13T12:00:00Z"}',
+        ]
         def cmd(*args, **kwargs):
             calls.append(args)
             if args[:3] == ("gh", "pr", "view"):
-                if "headRefOid,baseRefName,state,mergeStateStatus,mergedAt" in args:
-                    return '{"headRefOid":"abc123","baseRefName":"staging","state":"OPEN","mergeStateStatus":"CLEAN","mergedAt":null}'
-                return '{"mergedAt":"2026-11-13T12:00:00Z","mergeCommit":{"oid":"abc"},"baseRefName":"staging"}'
+                return views.pop(0)
             return ""
         with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": True}):
             with mock.patch.object(mod.time, "sleep"):
