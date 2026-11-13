@@ -82,7 +82,11 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
       // and refuses unknown/lookalike IDs rather than trusting the pilot.
       if (!id || !Number.isSafeInteger(source.workflowId) ||
           Number(id) !== source.workflowId ||
-          Number(run.workflow_id) !== source.workflowId) return false;
+          Number(run.workflow_id) !== source.workflowId ||
+          // A workflow ID by itself cannot prove the configured ref. This
+          // binding came from the current rule's source repository/ref/path.
+          canonicalWorkflowRef(source.ref) !== canonicalWorkflowRef(requiredRef) ||
+          source.path !== expectedLocation.file) return false;
     }
   } else if (expectedLocation.source || requiredRef) return false;
   // A SHA-pinned rule must be backed by a verified revision, even when the
@@ -250,7 +254,8 @@ async function resolveWorkflowSources({ rules, request }) {
         workflow.path !== location.file) {
       throw new Error(`Cannot verify source workflow identity for ${repository.full_name}:${location.file}`);
     }
-    const verifiedSource = { name: repository.full_name, sha: revision, workflowId: workflow.id };
+    const verifiedSource = { name: repository.full_name, sha: revision, workflowId: workflow.id,
+      ref: ref || entry.sha, path: location.file };
     // Multiple required workflows commonly share org-actions@main, but
     // have different workflow IDs. Keep the path in the binding key.
     sources[`${key}@${normalizedRef(ref)}@${location.file}`] = verifiedSource;
