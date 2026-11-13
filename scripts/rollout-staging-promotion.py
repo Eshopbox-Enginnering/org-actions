@@ -13,13 +13,27 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "staging-deploy/approved-repositories.json"
-SOURCE_FILES = {
-    "staging-deploy/auto-staging-deploy.cjs": ".github/scripts/auto-staging-deploy.cjs",
-    "staging-deploy/auto-staging-pr.cjs": ".github/scripts/auto-staging-pr.cjs",
-    "staging-deploy/auto-staging-deploy.test.cjs": ".github/scripts/auto-staging-deploy.test.cjs",
-    "staging-deploy/auto-staging-pr.test.cjs": ".github/scripts/auto-staging-pr.test.cjs",
-    "staging-deploy/auto-staging-deploy.yml": ".github/workflows/auto-staging-deploy.yml",
-}
+CALLER = """name: Deploy PR to staging
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+  checks: read
+  statuses: read
+
+jobs:
+  deploy:
+    if: github.event.issue.pull_request && github.event.comment.body == '/deploy-staging'
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/reusable-backend-staging-promotion.yml@main
+    secrets: inherit
+"""
+SOURCE_FILES = {}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
@@ -115,8 +129,7 @@ def install(full, name, base, issue):
         cmd("gh", "repo", "clone", full, directory, "--", "--depth=1", "--branch", base)
         root = Path(directory)
         changed = []
-        for src, target in SOURCE_FILES.items():
-            desired = (ROOT / src).read_bytes()
+        for target, desired in {'.github/workflows/auto-staging-deploy.yml': CALLER.encode()}.items():
             destination = root / target
             if destination.is_symlink():
                 raise ValueError(f"Refusing symlink destination: {target}")
@@ -159,10 +172,9 @@ def install(full, name, base, issue):
         cmd("git", "push", "-u", "origin", branch, cwd=root)
         body = (
             f"Central Backlog: https://github.com/{full.split('/')[0]}/Central-Backlog/issues/{issue}\n\n"
-            "Repository-specific staging automation rollout for review.\n\n"
-            "IMPORTANT: This PR must not merge until required-workflow identities, "
-            "App permissions, branch protections, CI/CD tag behavior, and test suite "
-            "are verified for THIS repository. No deployment is requested.\n\n"
+            "Thin caller for centrally maintained /deploy-staging automation.\n\n"
+            "Uses the shared GitHub workflow; no copied JavaScript or repository allowlist. "
+            "No deployment requested.\n\n"
             f"Files: {', '.join(changed)}\n\n"
             "Staging companion PR must be created/merged before this main PR.\n"
         )
@@ -180,26 +192,20 @@ def main():
         raise ValueError("APPLY requires explicit confirmation")
     org = os.environ["ORG"]
     issue = "7319"
-    manifest = json.loads(MANIFEST.read_text())
-    approved = manifest["approved"]
     names = named_repositories(os.environ.get("TARGET", "single"),
                                os.environ.get("REPOSITORY", ""),
                                os.environ.get("REPOSITORIES", ""), org)
-    print(f"Operation={operation} scanned={len(names)} approved={len(approved)}", flush=True)
+    print(f"Operation={operation} scanned={len(names)} backend-only caller rollout", flush=True)
     blocked = 0
     for name in names:
         try:
             status, _repo = check_repo(org, name)
-            allow = name in approved
-            print(f"{name}: {status} | {'APPROVED' if allow else 'AUDIT_ONLY'}", flush=True)
+            print(f"{name}: {status}", flush=True)
             if status != "CANDIDATE main/staging/cicd.yml present":
                 if status.startswith("BLOCK"):
                     blocked += 1
                 continue
             if operation == "APPLY":
-                if not allow:
-                    print(f"{name}: SKIP not explicitly approved for this code", flush=True)
-                    continue
                 install(f"{org}/{name}", name, "main", issue)
         except Exception as exc:
             blocked += 1
