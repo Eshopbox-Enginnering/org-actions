@@ -128,12 +128,12 @@ def stage_payload(root):
     return changed
 
 
-def pr_for_branch(full, branch):
+def pr_for_branch(full, branch, target):
     result = cmd("gh", "pr", "list", "--repo", full, "--head", branch,
                  "--state", "all", "--json", "number,url,state,baseRefName,mergedAt")
-    found = json.loads(result)
+    found = [pr for pr in json.loads(result) if pr["baseRefName"] == target]
     if len(found) > 1:
-        raise RuntimeError(f"Ambiguous prior PRs for {branch}")
+        raise RuntimeError(f"Ambiguous {target} PRs for {branch}")
     return found[0] if found else None
 
 
@@ -146,9 +146,7 @@ def verify_pr(full, pr, target):
 
 
 def merge_regular_pr(full, number, target, sha):
-    # Never use --admin, force, or a ruleset/required-check bypass.
-    # Wait for standard checks; never bypass them. Blocked or unmergeable PRs
-    # are left open and the repository's main rollout is not attempted.
+    # No admin bypass. Wait for required checks and block on conflicts.
     for attempt in range(60):
         pr = json.loads(cmd("gh", "pr", "view", str(number), "--repo", full,
                             "--json", "headRefOid,baseRefName,state,mergeStateStatus,mergedAt"))
@@ -158,9 +156,8 @@ def merge_regular_pr(full, number, target, sha):
             raise RuntimeError(f"{full}: {target} PR changed during validation")
         if pr["mergeStateStatus"] == "CLEAN":
             break
-        if pr["mergeStateStatus"] in ("DIRTY", "UNKNOWN"):
-            if pr["mergeStateStatus"] == "DIRTY":
-                raise RuntimeError(f"{full}: {target} PR has conflicts")
+        if pr["mergeStateStatus"] == "DIRTY":
+            raise RuntimeError(f"{full}: {target} PR has conflicts")
         if attempt == 59:
             raise RuntimeError(f"{full}: {target} required checks did not become mergeable")
         time.sleep(10)
@@ -173,68 +170,78 @@ def merge_regular_pr(full, number, target, sha):
     return pr["mergeCommit"]["oid"]
 
 
-def install_phase(full, name, target, issue):
+def install(full, name, issue):
+    # One shared feature commit from main is proposed to staging, then main.
+    # GitHub's main-branch required check can therefore prove that the exact
+    # non-merge feature commit already exists in staging. No exemptions needed.
     with tempfile.TemporaryDirectory(prefix="staging-rollout-") as directory:
         cmd("gh", "repo", "clone", full, directory, "--", "--depth=1",
-            "--branch", target)
+            "--branch", "main")
         root = Path(directory)
         changed = stage_payload(root)
         if not changed:
-            print(f"{name} {target}: NO_CHANGE", flush=True)
+            print(f"{name}: NO_CHANGE already installed on main", flush=True)
             return "current"
-        base_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
-        # Use the same org-action branch family as the existing guideline sync:
-        # a target-specific branch, based on the destination base and payload.
         import hashlib
+        base_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
         payload_hash = hashlib.sha256(b"".join(
             (ROOT / src).read_bytes() for src in SOURCE_FILES)).hexdigest()[:10]
-        branch = f"org-action/staging-promotion-{target}-{issue}-{base_sha[:10]}-{payload_hash}"
-        prior = pr_for_branch(full, branch)
-        if prior:
-            if verify_pr(full, prior, target):
-                print(f"{name} {target}: ALREADY_MERGED {prior['url']}", flush=True)
-                return "merged"
-            print(f"{name} {target}: RESUME {prior['url']}", flush=True)
-            pr_number = prior["number"]
-        else:
-            if cmd("git", "ls-remote", "--heads", "origin", branch, cwd=root):
+        branch = f"org-action/staging-promotion-{issue}-{base_sha[:10]}-{payload_hash}"
+        existing = {target: pr_for_branch(full, branch, target)
+                    for target in ("staging", "main")}
+        if existing["main"] and not (existing["staging"] and existing["staging"].get("mergedAt")):
+            raise RuntimeError(f"{name}: main PR exists before staging was merged")
+        remote = cmd("git", "ls-remote", "--heads", "origin", branch, cwd=root)
+        if remote:
+            if not any(existing.values()):
                 raise RuntimeError(f"{name}: orphaned rollout branch {branch}")
+            cmd("git", "fetch", "origin", branch, cwd=root)
+            cmd("git", "checkout", "-B", branch, "FETCH_HEAD", cwd=root)
+            actual_files = cmd("git", "diff", "--name-only", "origin/main...HEAD", cwd=root).splitlines()
+            if set(actual_files) != set(changed):
+                raise RuntimeError(f"{name}: existing branch payload differs from reviewed rollout")
+            for src, target in SOURCE_FILES.items():
+                actual = cmd("git", "show", f"HEAD:{target}", cwd=root)
+                if actual.encode() != (ROOT / src).read_bytes():
+                    raise RuntimeError(f"{name}: existing branch file differs: {target}")
+        else:
             cmd("git", "checkout", "-b", branch, cwd=root)
             cmd("git", "add", "--", *changed, cwd=root)
             cmd("git", "-c", "user.name=eshopbox-org-actions[bot]",
                 "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
                 "commit", "-m", f"feat: enable staging promotion automation (#{issue})", cwd=root)
             cmd("git", "push", "-u", "origin", branch, cwd=root)
-            body = (
-                f"Central Backlog: https://github.com/{full.split('/')[0]}/Central-Backlog/issues/{issue}\\n\\n"
-                "One atomic staging-promotion rollout change, containing only the "
-                "workflow and accompanying scripts/tests.\\n\\n"
-                "Merge uses regular GitHub branch protection; no admin bypass.\\n\\n"
-                f"Files: {', '.join(changed)}"
-            )
-            url = cmd("gh", "pr", "create", "--repo", full, "--base", target,
-                      "--head", branch,
-                      "--title", f"Feature to {'Staging' if target == 'staging' else 'Main'}: Add staging promotion automation (#{issue})",
-                      "--body", body, cwd=root)
-            pr = pr_for_branch(full, branch)
-            if not pr or pr["url"] != url:
-                raise RuntimeError(f"{name}: cannot verify created PR {url}")
-            pr_number = pr["number"]
-            print(f"{name} {target}: CREATED {url}", flush=True)
-        # The PR may have checks pending. Use normal merge, and stop if
-        # GitHub rejects it. Do not create a main PR before staging merges.
-        current_head = json.loads(cmd("gh", "pr", "view", str(pr_number),
-                                     "--repo", full, "--json", "headRefOid"))
-        sha = current_head["headRefOid"]
-        merge_regular_pr(full, pr_number, target, sha)
-        print(f"{name} {target}: MERGED PR #{pr_number}", flush=True)
+        feature_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
+        for target in ("staging", "main"):
+            prior = existing[target]
+            if prior:
+                if verify_pr(full, prior, target):
+                    print(f"{name} {target}: ALREADY_MERGED {prior['url']}", flush=True)
+                    continue
+                number = prior["number"]
+                print(f"{name} {target}: RESUME {prior['url']}", flush=True)
+            else:
+                # On main, staged feature commit is now in staging by ancestry.
+                # Do not open the main PR until staging merged successfully.
+                body = (
+                    f"Central Backlog: https://github.com/{full.split('/')[0]}/Central-Backlog/issues/{issue}\\n\\n"
+                    "One atomic rollout: workflow plus four scripts/tests. "
+                    "Exact feature commit goes to staging first, then main; "
+                    "normal GitHub checks and branch protection apply.\\n\\n"
+                    f"Files: {', '.join(changed)}"
+                )
+                url = cmd("gh", "pr", "create", "--repo", full,
+                          "--base", target, "--head", branch,
+                          "--title", f"Feature to {'Staging' if target == 'staging' else 'Main'}: Add staging promotion automation (#{issue})",
+                          "--body", body, cwd=root)
+                pr = pr_for_branch(full, branch, target)
+                if not pr or pr["url"] != url:
+                    raise RuntimeError(f"{name}: cannot verify created PR {url}")
+                number = pr["number"]
+                print(f"{name} {target}: CREATED {url}", flush=True)
+            merge_regular_pr(full, number, target, feature_sha)
+            print(f"{name} {target}: MERGED PR #{number}", flush=True)
         return "merged"
-
-
-def install(full, name, issue):
-    # One open PR per repository at a time: staging first, then main.
-    install_phase(full, name, "staging", issue)
-    return install_phase(full, name, "main", issue)
 
 
 def main():
