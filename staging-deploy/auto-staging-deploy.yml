@@ -47,6 +47,7 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
 
       - name: Check gates, merge staging PR, tag, and report deployment
         id: deploy
