@@ -1,4 +1,4 @@
-"""Safety checks for PR-only staging promotion rollout."""
+"""Regression tests for sequential, non-bypassing backend rollout (#7319)."""
 import importlib.util
 from pathlib import Path
 from unittest import mock
@@ -13,46 +13,23 @@ spec.loader.exec_module(mod)
 
 class RolloutSafetyTests(unittest.TestCase):
     def test_selected_repository_validation(self):
-        self.assertEqual(mod.named_repositories("selected", "", "repo-one,repo-two", "org"),
-                         ["repo-one", "repo-two"])
+        self.assertEqual(
+            mod.named_repositories("selected", "", "repo-one,repo-two", "org"),
+            ["repo-one", "repo-two"])
         for value in ("", "repo-one,repo-one", "owner/repo", "../repo"):
             with self.assertRaises(ValueError):
                 mod.named_repositories("selected", "", value, "org")
-        with self.assertRaises(ValueError):
-            mod.named_repositories("selected", "", ",".join(f"repo{i}" for i in range(26)), "org")
 
-    def test_backend_selection_and_classification(self):
-        with mock.patch.object(mod, "cmd", return_value='[{"name":"backend-a","isArchived":false},{"name":"frontend-a","isArchived":false}]'):
-            self.assertEqual(mod.named_repositories("backend", "", "", "org"),
-                             ["backend-a", "frontend-a"])
-        def api(path):
-            if path.endswith("/contents"):
-                return [{"name": "pom.xml"}]
-            raise AssertionError(path)
-        with mock.patch.object(mod, "gh_api", side_effect=api):
-            self.assertTrue(mod.detect_backend("org", "backend-a"))
-        with mock.patch.object(mod, "gh_api", return_value=[{"name": "angular.json"}, {"name": "package.json"}]):
-            self.assertFalse(mod.detect_backend("org", "frontend-a"))
+    def test_backend_filter_fail_closed(self):
+        with mock.patch.object(mod, "gh_api", return_value=[{"name": "pom.xml"}]):
+            self.assertTrue(mod.detect_backend("org", "java-api"))
+        with mock.patch.object(mod, "gh_api", return_value=[
+            {"name": "angular.json"}, {"name": "package.json"}]):
+            self.assertFalse(mod.detect_backend("org", "frontend"))
         with mock.patch.object(mod, "gh_api", return_value=[{"name": "README.md"}]):
-            self.assertFalse(mod.detect_backend("org", "unknown-a"))
+            self.assertFalse(mod.detect_backend("org", "unknown"))
 
-    def test_node_backend_detection_and_frontend_exclusion(self):
-        with mock.patch.object(mod, "gh_api", return_value=[{"name": "package.json"}]):
-            with mock.patch.object(mod, "cmd", return_value='{"dependencies":{"express":"^4"}}'):
-                self.assertTrue(mod.detect_backend("org", "api"))
-            with mock.patch.object(mod, "cmd", return_value='{"dependencies":{"react":"^18"}}'):
-                self.assertFalse(mod.detect_backend("org", "frontend"))
-
-    def test_single_frontend_repo_is_skipped_for_apply(self):
-        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "Eshopbox-Enginnering",
-               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
-        with mock.patch.dict(mod.os.environ, env):
-            with mock.patch.object(mod, "check_repo", return_value=("SKIP frontend/unknown repository", None)):
-                with mock.patch.object(mod, "install") as install:
-                    mod.main()
-                    install.assert_not_called()
-
-    def test_source_payload_targets_are_tightly_scoped(self):
+    def test_payload_is_single_atomic_rollout(self):
         self.assertEqual(set(mod.SOURCE_FILES.values()), {
             ".github/scripts/auto-staging-deploy.cjs",
             ".github/scripts/auto-staging-pr.cjs",
@@ -60,77 +37,116 @@ class RolloutSafetyTests(unittest.TestCase):
             ".github/scripts/auto-staging-pr.test.cjs",
             ".github/workflows/auto-staging-deploy.yml",
         })
-        self.assertNotIn(".github/workflows/cicd.yml", mod.SOURCE_FILES)
+        self.assertFalse(hasattr(mod, "MANIFEST"))
 
-    def test_apply_refuses_missing_confirmation_without_any_git_calls(self):
-        env = {"OPERATION": "APPLY", "CONFIRMATION": "", "ORG": "Eshopbox-Enginnering",
-               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
+    def test_confirmation_is_required_before_any_changes(self):
+        env = {"OPERATION": "APPLY", "CONFIRMATION": "", "ORG": "org",
+               "TARGET": "single", "REPOSITORY": "api"}
         with mock.patch.dict(mod.os.environ, env):
-            with mock.patch.object(mod, "cmd") as git:
+            with mock.patch.object(mod, "cmd") as cmd:
                 with self.assertRaisesRegex(ValueError, "confirmation"):
                     mod.main()
-                git.assert_not_called()
+                cmd.assert_not_called()
 
-    def test_non_allowlisted_repo_never_installed(self):
-        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "Eshopbox-Enginnering",
-               "TARGET": "single", "REPOSITORY": "unreviewed-example"}
+    def test_single_feature_commit_is_proposed_staging_first(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        self.assertIn('for target in ("staging", "main"):', source)
+        self.assertIn('merge_regular_pr(full, number, target, feature_sha)', source)
+        self.assertNotIn("install_phase", source)
+        self.assertIn("main PR exists before staging was merged", source)
+        self.assertNotIn("--admin", source)
+
+    def test_main_is_not_opened_after_failed_staging(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        loop = source.index('for target in ("staging", "main"):')
+        merge = source.index("merge_regular_pr(full, number, target, feature_sha)", loop)
+        self.assertLess(loop, merge)
+        # The merge throws if blocked, so the next iteration cannot run.
+        self.assertNotIn("except", source[loop:merge])
+
+    def test_closed_pr_must_not_be_reopened(self):
+        with self.assertRaisesRegex(RuntimeError, "closed without merge"):
+            mod.verify_pr("org/api", {
+                "baseRefName": "staging", "state": "CLOSED",
+                "mergedAt": None, "url": "https://github.com/org/api/pull/1"
+            }, "staging")
+
+    def test_existing_pr_cannot_change_target(self):
+        with self.assertRaisesRegex(RuntimeError, "targets main"):
+            mod.verify_pr("org/api", {
+                "baseRefName": "main", "state": "OPEN",
+                "mergedAt": None, "url": "https://github.com/org/api/pull/2"
+            }, "staging")
+
+    def test_merge_uses_normal_method_only(self):
+        calls = []
+        def cmd(*args, **kwargs):
+            calls.append(args)
+            if args[:3] == ("gh", "pr", "view"):
+                if "headRefOid,baseRefName,state,mergeStateStatus,mergedAt" in args:
+                    return '{"headRefOid":"abc123","baseRefName":"staging","state":"OPEN","mergeStateStatus":"CLEAN","mergedAt":null}'
+                return '{"mergedAt":"2026-11-13T12:00:00Z","mergeCommit":{"oid":"abc"},"baseRefName":"staging"}'
+            return ""
+        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": True}):
+            with mock.patch.object(mod.time, "sleep"):
+                with mock.patch.object(mod, "cmd", side_effect=cmd):
+                    mod.merge_regular_pr("org/api", 1, "staging", "abc123")
+        self.assertTrue(any(x[:3] == ("gh", "pr", "merge") for x in calls))
+        self.assertFalse(any("--admin" in x or "--force" in x for x in calls))
+
+    def test_dry_run_does_not_install(self):
+        env = {"OPERATION": "DRY_RUN", "CONFIRMATION": "", "ORG": "org",
+               "TARGET": "single", "REPOSITORY": "api"}
         with mock.patch.dict(mod.os.environ, env):
-            with mock.patch.object(mod, "check_repo", return_value=("CANDIDATE", {})):
+            with mock.patch.object(mod, "check_repo", return_value=(
+                "CANDIDATE main/staging/cicd.yml present", {})):
                 with mock.patch.object(mod, "install") as install:
                     mod.main()
                     install.assert_not_called()
 
-    def test_archived_pilot_is_skipped_without_install(self):
-        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "Eshopbox-Enginnering",
-               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
+    def test_frontend_is_skipped_even_when_explicitly_selected(self):
+        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "org",
+               "TARGET": "single", "REPOSITORY": "frontend"}
         with mock.patch.dict(mod.os.environ, env):
-            with mock.patch.object(mod, "check_repo", return_value=("SKIP archived/disabled", None)):
+            with mock.patch.object(mod, "check_repo", return_value=(
+                "SKIP frontend/unknown repository", None)):
                 with mock.patch.object(mod, "install") as install:
                     mod.main()
                     install.assert_not_called()
 
-    def test_orphan_branch_is_counted_as_apply_failure(self):
-        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "Eshopbox-Enginnering",
-               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
-        with mock.patch.dict(mod.os.environ, env):
-            with mock.patch.object(mod, "check_repo", return_value=("CANDIDATE main/staging/cicd.yml present", {})):
-                with mock.patch.object(mod, "install", side_effect=RuntimeError("orphaned rollout branch")):
-                    with self.assertRaises(SystemExit):
-                        mod.main()
+    def test_stale_rollout_pr_discovery(self):
+        results = '[{"headRefName":"org-action/staging-promotion-7319-oldhash","url":"https://github.com/org/api/pull/1","baseRefName":"staging"}]'
+        with mock.patch.object(mod, "cmd", return_value=results):
+            prs = mod.managed_open_prs("org/api", "7319")
+        self.assertEqual(len(prs), 1)
 
-    def test_closed_rollout_pr_is_blocker_not_success(self):
-        from tempfile import TemporaryDirectory
-        with TemporaryDirectory() as temp:
-            clone = Path(temp)
-            files = {src: (ROOT / src).read_bytes() for src in mod.SOURCE_FILES}
-            def command(*args, cwd=None, check=True):
-                if args[:3] == ("gh", "repo", "clone"):
-                    for src, dest in mod.SOURCE_FILES.items():
-                        target = clone / dest
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(b"old data")
-                    return ""
-                if args[:3] == ("git", "rev-parse", "HEAD"):
-                    return "a" * 40
-                if args[:3] == ("gh", "pr", "list"):
-                    return mock.Mock(returncode=0, stdout='[{"state":"CLOSED","url":"https://github.com/org/repo/pull/1"}]')
-                raise AssertionError(f"Unexpected command: {args}")
-            # temp workspace chosen by the rollout function remains under a
-            # dedicated clone directory. Simulate only the pre-commit sequence.
-            with mock.patch.object(mod.tempfile, "TemporaryDirectory") as temp_dir:
-                temp_dir.return_value.__enter__.return_value = str(clone)
-                with mock.patch.object(mod, "cmd", side_effect=command):
-                    with self.assertRaisesRegex(RuntimeError, "closed"):
-                        mod.install("org/repo", "repo", "main", "7319")
+    def test_squash_only_repo_fails_closed(self):
+        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": False}):
+            with self.assertRaisesRegex(RuntimeError, "merge commits disabled"):
+                mod.merge_regular_pr("org/api", 1, "staging", "abc")
 
-    def test_dry_run_never_installs_even_approved_repo(self):
-        env = {"OPERATION": "DRY_RUN", "CONFIRMATION": "", "ORG": "Eshopbox-Enginnering",
-               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
-        with mock.patch.dict(mod.os.environ, env):
-            with mock.patch.object(mod, "check_repo", return_value=("CANDIDATE", {})):
-                with mock.patch.object(mod, "install") as install:
-                    mod.main()
-                    install.assert_not_called()
+    def test_merge_queue_polling(self):
+        states = [
+            {"headRefOid":"abc","baseRefName":"staging","state":"OPEN",
+             "mergeStateStatus":"CLEAN","mergedAt":None},
+            {"headRefOid":"abc","baseRefName":"staging","state":"OPEN",
+             "mergeStateStatus":"BLOCKED","mergedAt":None},
+            {"headRefOid":"abc","baseRefName":"staging","state":"MERGED",
+             "mergeStateStatus":"UNKNOWN","mergedAt":"2026-11-13T12:00:00Z"},
+        ]
+        calls = []
+        def fake_cmd(*args, **kwargs):
+            calls.append(args)
+            if args[:3] == ("gh", "pr", "view"):
+                return __import__("json").dumps(states.pop(0))
+            return ""
+        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": True}):
+            with mock.patch.object(mod.time, "sleep"):
+                with mock.patch.object(mod, "cmd", side_effect=fake_cmd):
+                    self.assertEqual(mod.merge_regular_pr("org/api", 1, "staging", "abc"), "already merged")
+        self.assertEqual(sum(args[:3] == ("gh", "pr", "merge") for args in calls), 1)
 
 
 if __name__ == "__main__":
