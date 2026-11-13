@@ -36,14 +36,8 @@ const canonicalWorkflowRef = ref => {
   if (/^refs\/(heads|tags)\//.test(value) || /^[a-f0-9]{40}$/i.test(value)) return value;
   return `refs/heads/${value}`;
 };
-// Reviewed required-workflow IDs from GitHub's org-ruleset runs for PR #440.
-// Bind each ID to the *configured* source identity. Rule changes fail closed
-// until this protected-branch mapping is reviewed and updated.
-const TRUSTED_REQUIRED_WORKFLOWS = Object.freeze({
-  '400272849': Object.freeze({ path: '.github/workflows/java-test-coverage.yml', repository_id: 1041381819, ref: 'refs/heads/main' }),
-  '251714341': Object.freeze({ path: '.github/workflows/pr-ticket-validation.yml', repository_id: 1041381819, ref: 'refs/heads/main' }),
-});
-
+// The required-workflow identity must come from the active GitHub rule and
+// source repository, never from an ID observed in one target repository.
 function requiredWorkflowMatches({ run, expected, sources = {} }) {
   const location = workflowLocation(run);
   const rawPath = String(expected.path || '');
@@ -81,14 +75,12 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
     } else {
       const match = /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/actions\/required_workflows\/(\d+)$/.exec(url);
       const id = match?.[1];
-      const trusted = id && TRUSTED_REQUIRED_WORKFLOWS[id];
-      // The ID alone is not sufficient. Verify the mapping against the active
-      // rule's source repository, path and ref (including pinned SHAs).
-      if (!trusted || String(run.workflow_id) !== id ||
-          trusted.path !== expectedLocation.file ||
-          Number(trusted.repository_id) !== Number(expected.repository_id) ||
-          canonicalWorkflowRef(trusted.ref) !== canonicalWorkflowRef(requiredRef) ||
-          (expected.sha && trusted.sha !== expected.sha)) return false;
+      // Check the ID against the live source workflow, resolved from the
+      // rule's repository_id + workflow path. This works for all backends
+      // and refuses unknown/lookalike IDs rather than trusting the pilot.
+      if (!id || !Number.isSafeInteger(source.workflowId) ||
+          Number(id) !== source.workflowId ||
+          Number(run.workflow_id) !== source.workflowId) return false;
     }
   } else if (expectedLocation.source || requiredRef) return false;
   // A SHA-pinned rule must be backed by a verified revision, even when the
@@ -244,13 +236,26 @@ async function resolveWorkflowSources({ rules, request }) {
     if (!/^[a-f0-9]{40}$/.test(revision || '')) {
       throw new Error(`Cannot verify required workflow revision for ${repository.full_name}@${ref}`);
     }
+    // Resolve the active required workflow's stable GitHub ID from the
+    // configured source repository. Do not infer it from a target run.
+    const location = workflowLocation({ path: rawPath.split('@')[0] });
+    const workflow = (await request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}', {
+      owner: repository.full_name.split('/')[0],
+      repo: repository.full_name.split('/')[1],
+      workflow_id: location.file.split('/').pop(),
+    })).data;
+    if (!Number.isSafeInteger(workflow?.id) || workflow.id <= 0 ||
+        workflow.path !== location.file) {
+      throw new Error(`Cannot verify source workflow identity for ${repository.full_name}:${location.file}`);
+    }
+    const verifiedSource = { name: repository.full_name, sha: revision, workflowId: workflow.id };
     if (sources[key] && sources[key].sha !== revision) {
       // Different refs in the same source repository are valid independent
       // requirements; index by rule's repo and ref instead of repository alone.
-      sources[`${key}@${normalizedRef(ref)}`] = { name: repository.full_name, sha: revision };
+      sources[`${key}@${normalizedRef(ref)}`] = verifiedSource;
     } else {
-      sources[key] = { name: repository.full_name, sha: revision };
-      sources[`${key}@${normalizedRef(ref)}`] = { name: repository.full_name, sha: revision };
+      sources[key] = verifiedSource;
+      sources[`${key}@${normalizedRef(ref)}`] = verifiedSource;
     }
   }
   return sources;
