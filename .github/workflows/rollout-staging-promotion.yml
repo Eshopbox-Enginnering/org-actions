@@ -51,6 +51,11 @@ jobs:
           app-id: ${{ vars.ORG_AGENTS_APP_ID }}
           private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+      - name: Configure Git authentication for reviewed PR creation
+        if: inputs.operation == 'APPLY'
+        env:
+          GH_TOKEN: ${{ steps.github-app.outputs.token }}
+        run: gh auth setup-git
       - name: Preview eligibility or open reviewed PRs
         env:
           GH_TOKEN: ${{ steps.github-app.outputs.token }}
