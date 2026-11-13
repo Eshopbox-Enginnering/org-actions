@@ -54,7 +54,9 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
   const url = String(run.workflow_url || '');
   const requiredWorkflowRun = /\/actions\/required_workflows\/\d+$/.test(url);
   const source = expected.repository_id == null ? null :
-    (sources[`${expected.repository_id}@${normalizedRef(requiredRef)}`] || sources[String(expected.repository_id)]);
+    (sources[`${expected.repository_id}@${normalizedRef(requiredRef)}@${expectedLocation.file}`] ||
+      sources[`${expected.repository_id}@${normalizedRef(requiredRef)}`] ||
+      sources[String(expected.repository_id)]);
   if (expected.repository_id != null && (!source || !source.name)) return false;
   const sourceName = source?.name;
   if (location.source) {
@@ -249,6 +251,9 @@ async function resolveWorkflowSources({ rules, request }) {
       throw new Error(`Cannot verify source workflow identity for ${repository.full_name}:${location.file}`);
     }
     const verifiedSource = { name: repository.full_name, sha: revision, workflowId: workflow.id };
+    // Multiple required workflows commonly share org-actions@main, but
+    // have different workflow IDs. Keep the path in the binding key.
+    sources[`${key}@${normalizedRef(ref)}@${location.file}`] = verifiedSource;
     if (sources[key] && sources[key].sha !== revision) {
       // Different refs in the same source repository are valid independent
       // requirements; index by rule's repo and ref instead of repository alone.
