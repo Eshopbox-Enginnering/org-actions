@@ -404,6 +404,31 @@ test('strict readiness accepts a completed required workflow with successful job
   }));
 });
 
+test('merge-SHA required workflow runs match their check suite when selected', () => {
+  const head = 'a'.repeat(40), merge = 'b'.repeat(40);
+  const path = '.github/workflows/pr-test-validation.yml';
+  const checks = [{ id: 31, name: 'validate-tests', check_suite: { id: 57 },
+    status: 'completed', conclusion: 'success', app: { id: 123 } }];
+  const data = {
+    head, workflowRunSha: merge, number: 42, protection: null,
+    rules: [{ type: 'workflows', parameters: { workflows: [{ path }] } }],
+    runs: [{ id: 21, head_sha: merge, event: 'pull_request', path,
+      check_suite_id: 57, pull_requests: [{ number: 42 }],
+      status: 'completed', conclusion: 'success' }],
+    checks, statuses: [], strictTestValidation: true,
+  };
+  assert.doesNotThrow(() => verifyChecks(data));
+  assert.throws(() => verifyChecks({ ...data, workflowRunSha: head }), /missing required workflow/);
+});
+
+test('conflict resolution candidates must identify the exact original main PR and SHA', () => {
+  const source = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, 'auto-staging-pr.cjs'), 'utf8');
+  assert.match(source, /p\.head\.ref === `conflict\/resolved\/\$\{issue \|\| number\}`/);
+  assert.match(source, /\(p\.body \|\| ''\)\.includes\(pr\.html_url\)/);
+  assert.match(source, /\(p\.body \|\| ''\)\.includes\(head\)/);
+});
+
 test('idempotent staging promotions reuse the original merged snapshot after staging advances', () => {
   assert.equal(promotionSnapshot({
     stagingSHA: 'b'.repeat(40), mergedSHA: 'a'.repeat(40), previouslyMerged: true,
