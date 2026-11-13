@@ -1,0 +1,69 @@
+name: Roll out staging promotion automation
+
+# A controlled, review-first installer. It never deploys or merges PRs.
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Preview (DRY_RUN) or open review PRs (APPLY)
+        required: true
+        type: choice
+        options: [DRY_RUN, APPLY]
+      target:
+        description: Repositories to audit or update
+        required: true
+        type: choice
+        options: [single, selected, all]
+      repository:
+        description: Name when target=single
+        required: false
+        type: string
+      repositories:
+        description: Comma-separated names when target=selected (max 25)
+        required: false
+        type: string
+      confirmation:
+        description: Enter APPLY to authorize opening PRs; does not merge anything
+        required: false
+        type: string
+
+concurrency:
+  group: staging-promotion-rollout
+  cancel-in-progress: false
+
+jobs:
+  rollout:
+    runs-on: ubuntu-latest
+    environment: agents-org-production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate installer syntax
+        run: |
+          python3 -m py_compile scripts/rollout-staging-promotion.py
+          python3 -m unittest discover -s tests -p 'test_rollout_staging_promotion.py' -v
+          node --check staging-deploy/auto-staging-pr.cjs
+          node --check staging-deploy/auto-staging-deploy.cjs
+      - name: Mint existing organization GitHub App token
+        id: github-app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Configure Git authentication for reviewed PR creation
+        if: inputs.operation == 'APPLY'
+        env:
+          GH_TOKEN: ${{ steps.github-app.outputs.token }}
+        run: gh auth setup-git
+      - name: Preview eligibility or open reviewed PRs
+        env:
+          GH_TOKEN: ${{ steps.github-app.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+          OPERATION: ${{ inputs.operation }}
+          TARGET: ${{ inputs.target }}
+          REPOSITORY: ${{ inputs.repository }}
+          REPOSITORIES: ${{ inputs.repositories }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: python3 scripts/rollout-staging-promotion.py

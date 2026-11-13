@@ -1,0 +1,27 @@
+name: Verify EKS deployment
+description: Verify that the expected EKS image is rolled out and Ready; fail the caller job with actionable diagnostics.
+inputs:
+  namespace:
+    description: Kubernetes namespace
+    required: true
+  release:
+    description: Helm release name
+    required: true
+  image:
+    description: Full expected container image (repository:tag)
+    required: true
+  timeout:
+    description: Rollout timeout in seconds
+    required: false
+    default: '300'
+runs:
+  using: composite
+  steps:
+    - name: Verify EKS deployment
+      shell: bash
+      env:
+        VERIFY_NAMESPACE: ${{ inputs.namespace }}
+        VERIFY_RELEASE: ${{ inputs.release }}
+        VERIFY_IMAGE: ${{ inputs.image }}
+        VERIFY_TIMEOUT: ${{ inputs.timeout }}
+      run: bash "${{ github.action_path }}/verify-eks-rollout.sh" "$VERIFY_NAMESPACE" "$VERIFY_RELEASE" "$VERIFY_IMAGE" "$VERIFY_TIMEOUT"

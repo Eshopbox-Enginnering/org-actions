@@ -1,0 +1,138 @@
+name: Sync Engineering Guidelines
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Preview changes or create and merge guideline PRs
+        type: choice
+        required: true
+        options: [DRY_RUN, APPLY]
+      target:
+        description: Repository selection
+        type: choice
+        required: true
+        options: [single, selected, backend, frontend, all]
+      repository:
+        description: Repository name (only when target=single)
+        type: string
+        required: false
+      repositories:
+        description: Comma-separated repository names when target=selected (max 25)
+        type: string
+        required: false
+      update_agents:
+        description: Sync AGENTS.md after guideline sync (recommended)
+        type: boolean
+        required: true
+        default: true
+      phase:
+        description: Staging APPLY creates and merges staging first, then main
+        type: choice
+        required: true
+        options: [staging, production]
+      file_id:
+        description: Catalog ID (all, 401, cache, logging, 429, status, or future IDs)
+        type: string
+        required: true
+        default: all
+      source_url:
+        description: Optional one-off GitHub attachment URL or central engineering-guidelines/FILE.md
+        type: string
+        required: false
+      destination:
+        description: One-off destination path under docs/engineering-guidelines/NAME.md
+        type: string
+        required: false
+      source_scope:
+        description: One-off file applies to which repo type
+        type: choice
+        required: true
+        options: [backend, frontend]
+      central_backlog_issue:
+        description: Issue number used for PR references
+        type: string
+        required: true
+        default: '7218'
+      confirmation:
+        description: APPLY requires entering exactly APPLY
+        type: string
+        required: false
+
+concurrency:
+  group: engineering-guidelines-rollout
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    environment: agents-org-production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate inputs
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          TARGET: ${{ inputs.target }}
+          REPOSITORY: ${{ inputs.repository }}
+          REPOSITORIES: ${{ inputs.repositories }}
+          UPDATE_AGENTS: ${{ inputs.update_agents }}
+        run: |
+          set -euo pipefail
+          if [ "$OPERATION" = APPLY ] && [ "$CONFIRMATION" != APPLY ]; then
+            echo 'APPLY requires confirmation APPLY'; exit 1
+          fi
+          if [ "$TARGET" = single ] && [ -z "$REPOSITORY" ]; then
+            echo 'Single target requires a repository'; exit 1
+          fi
+          if [ "$TARGET" = selected ] && [ -z "$REPOSITORIES" ]; then
+            echo 'Selected target requires comma-separated repositories'; exit 1
+          fi
+          if [ "$UPDATE_AGENTS" = true ] && [ "${{ inputs.phase }}" != staging ]; then
+            echo 'To update AGENTS.md, choose phase=staging'; exit 1
+          fi
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Configure Git authentication
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
+      - name: Validate rollout scripts and regression tests
+        run: |
+          python3 -m py_compile scripts/sync-engineering-guidelines.py scripts/sync-guidelines-auto-merge.py scripts/sync-guidelines-with-agents.py scripts/sync-guidelines-and-agents.py
+          bash -n scripts/update-agents.sh
+          python3 -m unittest discover -s tests -p 'test_*guideline*.py' -v
+          python3 -m unittest discover -s tests -p 'test_sync_guidelines_with_agents.py' -v
+          python3 -m unittest discover -s tests -p 'test_agents_legacy_migration.py' -v
+      - name: Sync and merge selected guidelines and AGENTS.md
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ORG: ${{ github.repository_owner }}
+          OPERATION: ${{ inputs.operation }}
+          TARGET: ${{ inputs.target }}
+          REPOSITORY: ${{ inputs.repository }}
+          REPOSITORIES: ${{ inputs.repositories }}
+          UPDATE_AGENTS: ${{ inputs.update_agents }}
+          PHASE: ${{ inputs.phase }}
+          FILE_ID: ${{ inputs.file_id }}
+          SOURCE_URL: ${{ inputs.source_url }}
+          DESTINATION: ${{ inputs.destination }}
+          SOURCE_SCOPE: ${{ inputs.source_scope }}
+          ISSUE: ${{ inputs.central_backlog_issue }}
+        run: |
+          set -euo pipefail
+          python3 scripts/sync-guidelines-with-agents.py \
+            --operation "$OPERATION" --target "$TARGET" \
+            --repository "$REPOSITORY" --repositories "$REPOSITORIES" \
+            --update-agents "$UPDATE_AGENTS" --phase "$PHASE" \
+            --file-id "$FILE_ID" --source-url "$SOURCE_URL" \
+            --destination "$DESTINATION" --source-scope "$SOURCE_SCOPE" \
+            --issue "$ISSUE" --org "$ORG"

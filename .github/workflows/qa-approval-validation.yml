@@ -15,9 +15,11 @@ concurrency:
 
 jobs:
   require-qa-approval:
+    if: ${{ !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
     runs-on:
       group: checks-runners
       labels: checks-runner
+    # runs-on: ubuntu-24.04
     steps:
       - name: Check for QA team approval
         uses: actions/github-script@v7

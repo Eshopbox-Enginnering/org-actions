@@ -1,0 +1,169 @@
+name: Update AGENTS.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: "Operation"
+        required: true
+        type: choice
+        options:
+          - DRY_RUN
+          - APPLY
+
+      target:
+        description: "Target repositories"
+        required: true
+        type: choice
+        options:
+          - single
+          - backend
+          - frontend
+          - all
+
+      repository:
+        description: "Repository name when target=single"
+        required: false
+        type: string
+
+      central_backlog_issue:
+        description: "Central Backlog issue number, e.g. 2516"
+        required: true
+        type: string
+
+      confirmation:
+        description: "For APPLY only, enter exactly: APPLY"
+        required: false
+        type: string
+
+      content_file:
+        description: "Content file to append to AGENTS.md"
+        required: true
+        default: "payload/agents-update.md"
+        type: string
+
+
+concurrency:
+  group: agents-org-update
+  cancel-in-progress: false
+
+
+jobs:
+
+  validate:
+    name: Validate request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout org-actions
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OPERATION="${{ inputs.operation }}"
+          TARGET="${{ inputs.target }}"
+          REPOSITORY="${{ inputs.repository }}"
+          CENTRAL_BACKLOG_ISSUE="${{ inputs.central_backlog_issue }}"
+          CONFIRMATION="${{ inputs.confirmation }}"
+          CONTENT_FILE="${{ inputs.content_file }}"
+
+          if [ ! -f "$CONTENT_FILE" ]; then
+            echo "ERROR: Content file does not exist: $CONTENT_FILE"
+            exit 1
+          fi
+
+          if [ ! -s "$CONTENT_FILE" ]; then
+            echo "ERROR: Content file is empty: $CONTENT_FILE"
+            exit 1
+          fi
+
+          if [ "$TARGET" = "single" ] && [ -z "$REPOSITORY" ]; then
+            echo "ERROR: repository is required when target=single."
+            exit 1
+          fi
+
+          if ! [[ "$CENTRAL_BACKLOG_ISSUE" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: central_backlog_issue must be numeric."
+            exit 1
+          fi
+
+          if [ "$OPERATION" = "APPLY" ] && [ "$CONFIRMATION" != "APPLY" ]; then
+            echo "ERROR: For APPLY, confirmation must be exactly: APPLY"
+            exit 1
+          fi
+
+          echo "Validation successful."
+          echo "Operation             : $OPERATION"
+          echo "Target                : $TARGET"
+          echo "Repository            : ${REPOSITORY:-N/A}"
+          echo "Central Backlog issue : $CENTRAL_BACKLOG_ISSUE"
+          echo "Content file          : $CONTENT_FILE"
+
+
+  update-agents:
+    name: Update AGENTS.md
+    needs: validate
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: agents-org-production
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout org-actions
+        uses: actions/checkout@v4
+
+      - name: Validate AGENTS legacy migration and repository detection
+        run: |
+          set -euo pipefail
+          bash -n scripts/update-agents.sh
+          python3 -m unittest discover -s tests -p 'test_agents_legacy_migration.py' -v
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Configure Git authentication
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          gh auth setup-git
+
+          echo "GitHub authentication configured."
+
+      - name: Run AGENTS.md updater
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+          ORG: ${{ github.repository_owner }}
+
+          OPERATION: ${{ inputs.operation }}
+
+          TARGET: ${{ inputs.target }}
+
+          TARGET_REPO: ${{ inputs.repository }}
+
+          CENTRAL_BACKLOG_ISSUE: ${{ inputs.central_backlog_issue }}
+
+          CONTENT_FILE: ${{ inputs.content_file }}
+
+          BATCH_ID: ${{ github.run_id }}
+
+        run: |
+          set -euo pipefail
+
+          chmod +x scripts/update-agents.sh
+
+          scripts/update-agents.sh

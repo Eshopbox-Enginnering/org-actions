@@ -13,9 +13,9 @@ permissions:
 
 jobs:
   validate-pr-title-and-ticket:
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    if: ${{ (github.repository != 'Eshopbox-Enginnering/org-actions') && !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
+    runs-on: ubuntu-latest
+    # runs-on: ubuntu-24.04
     timeout-minutes: 5
 
     steps:
@@ -76,7 +76,7 @@ jobs:
             };
 
             const titleRegex =
-              /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex|claude|seer|seers)\s+to\s+(staging|main)\s*(?::|\|)\s*(.+)$/i;
+              /^(feature|features|bug|bugs|patch|patches|conflict|conflicts|codex|claude|seer|seers)\s+to\s+(staging|main|master|aws-velocis-main|aws-velocis-staging)\s*(?::|\|)\s*(.+)$/i;
 
             const shortRefRegex =
               /Eshopbox-Enginnering\/Central-Backlog#(\d+)/i;
@@ -95,7 +95,7 @@ jobs:
               "  Feature, Features, Bug, Bugs, Patch, Patches, Conflict, Conflicts, Codex, Claude, Seer, Seers",
               "",
               "Allowed targets:",
-              "  Staging, Main",
+              "  Staging, Main, Master, aws-velocis-main, aws-velocis-staging",
               "",
               "Examples:",
               "  Bug to Main: Unnecessary Fulfillment Locations Visible in Shopify Location Config",

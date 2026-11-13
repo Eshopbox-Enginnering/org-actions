@@ -1,0 +1,39 @@
+name: Validate staging promotion rollout
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/rollout-staging-promotion.py'
+      - 'staging-deploy/**'
+      - 'tests/test_rollout_staging_promotion.py'
+      - '.github/workflows/rollout-staging-promotion.yml'
+      - '.github/workflows/test-staging-rollout.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Python installer
+        run: |
+          python3 -m py_compile scripts/rollout-staging-promotion.py
+          python3 -m unittest discover -s tests -p 'test_rollout_staging_promotion.py' -v
+      - name: Validate centralized JavaScript
+        run: |
+          node --check staging-deploy/auto-staging-deploy.cjs
+          node --check staging-deploy/auto-staging-pr.cjs
+      - name: Run installed-layout staging behavioral suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          mkdir -p "$tmp/.github/scripts" "$tmp/.github/workflows"
+          cp staging-deploy/*.cjs "$tmp/.github/scripts/"
+          cp staging-deploy/auto-staging-deploy.yml "$tmp/.github/workflows/"
+          (cd "$tmp" && node --test .github/scripts/auto-staging-deploy.test.cjs .github/scripts/auto-staging-pr.test.cjs)
