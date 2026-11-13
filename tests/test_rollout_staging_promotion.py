@@ -52,15 +52,11 @@ class RolloutSafetyTests(unittest.TestCase):
                     mod.main()
                     install.assert_not_called()
 
-    def test_source_payload_targets_are_tightly_scoped(self):
-        self.assertEqual(set(mod.SOURCE_FILES.values()), {
-            ".github/scripts/auto-staging-deploy.cjs",
-            ".github/scripts/auto-staging-pr.cjs",
-            ".github/scripts/auto-staging-deploy.test.cjs",
-            ".github/scripts/auto-staging-pr.test.cjs",
-            ".github/workflows/auto-staging-deploy.yml",
-        })
-        self.assertNotIn(".github/workflows/cicd.yml", mod.SOURCE_FILES)
+    def test_installer_uses_only_centralized_caller(self):
+        self.assertEqual(mod.SOURCE_FILES, {})
+        self.assertIn("reusable-backend-staging-promotion.yml@main", mod.CALLER)
+        self.assertIn("secrets: inherit", mod.CALLER)
+        self.assertNotIn("approved-repositories.json", mod.CALLER)
 
     def test_apply_refuses_missing_confirmation_without_any_git_calls(self):
         env = {"OPERATION": "APPLY", "CONFIRMATION": "", "ORG": "Eshopbox-Enginnering",
