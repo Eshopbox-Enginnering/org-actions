@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_FILES = {
@@ -146,6 +147,23 @@ def verify_pr(full, pr, target):
 
 def merge_regular_pr(full, number, target, sha):
     # Never use --admin, force, or a ruleset/required-check bypass.
+    # Wait for standard checks; never bypass them. Blocked or unmergeable PRs
+    # are left open and the repository's main rollout is not attempted.
+    for attempt in range(60):
+        pr = json.loads(cmd("gh", "pr", "view", str(number), "--repo", full,
+                            "--json", "headRefOid,baseRefName,state,mergeStateStatus,mergedAt"))
+        if pr.get("mergedAt"):
+            return "already merged"
+        if pr["headRefOid"] != sha or pr["baseRefName"] != target or pr["state"] != "OPEN":
+            raise RuntimeError(f"{full}: {target} PR changed during validation")
+        if pr["mergeStateStatus"] == "CLEAN":
+            break
+        if pr["mergeStateStatus"] in ("DIRTY", "UNKNOWN"):
+            if pr["mergeStateStatus"] == "DIRTY":
+                raise RuntimeError(f"{full}: {target} PR has conflicts")
+        if attempt == 59:
+            raise RuntimeError(f"{full}: {target} required checks did not become mergeable")
+        time.sleep(10)
     cmd("gh", "pr", "merge", str(number), "--repo", full, "--merge",
         "--match-head-commit", sha)
     pr = json.loads(cmd("gh", "pr", "view", str(number), "--repo", full,
