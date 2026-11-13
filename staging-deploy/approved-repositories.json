@@ -1,12 +1,132 @@
 {
   "schema": 1,
-  "description": "Explicitly approved repositories for the repository-specific #7319 automation. All other repositories are audit-only until their required-workflow IDs, CI/CD and branch rules are reviewed.",
+  "description": "21 backend repositories passed the basic branch/CI/CD audit in run 43409005535. Inclusion approves PR generation, not deployment or merging. Each destination requires required-workflow identity, App installation/permissions and runner checks before merge.",
   "approved": {
     "esb-product-engine-jobs": {
       "production_branch": "main",
       "staging_branch": "staging",
       "deployment_workflow": ".github/workflows/cicd.yml",
       "note": "Source pilot. Its current required-workflow trust mapping is specific to this repository."
+    },
+    "esb-client-portal-jobs": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-client-order-return": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-shipping-engine-jobs": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "eshopbox-inventory-service": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esbproductengine": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-shipping-wms-order": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-returns-engine": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-automation-service": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-billing-and-subscription": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-zoho-support-middleware": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-platform-service": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esbeventpipeline": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-inventory-listener": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "notifications": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-payment-service-jobs": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-return-jobs": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-building-blocks-jobs": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-product-inventory-jobs": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "claims-jobs-service": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
+    },
+    "esb-consignment-export-service": {
+      "production_branch": "main",
+      "staging_branch": "staging",
+      "deployment_workflow": ".github/workflows/cicd.yml",
+      "note": "Passed basic audit 43409005535; verify required workflow rules, GitHub App access, runner, and CI/CD behavior before merging rollout PR."
     }
   }
 }
