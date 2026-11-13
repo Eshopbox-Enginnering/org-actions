@@ -109,8 +109,11 @@ def install(full, name, base, issue):
             raise RuntimeError(f"{name}: cannot inspect existing PRs")
         prior = json.loads(existing.stdout)
         if prior:
-            print(f"{name}: BLOCK existing rollout PR {prior[0]['url']}", flush=True)
-            return
+            open_prs = [item for item in prior if item.get("state", "").upper() == "OPEN"]
+            if open_prs:
+                print(f"{name}: RESUME existing open rollout PR {open_prs[0]['url']}", flush=True)
+                return
+            raise RuntimeError(f"{name}: previous rollout PR is closed; a new reviewed branch is required")
         remote = cmd("git", "ls-remote", "--heads", "origin", branch, cwd=root)
         if remote:
             raise RuntimeError(f"{name}: orphaned rollout branch exists; review and resolve it before retry")
