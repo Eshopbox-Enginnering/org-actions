@@ -1,11 +1,11 @@
 name: Roll out staging promotion automation
 
-# A controlled, review-first installer. It never deploys or merges PRs.
+# A backend-only sequential rollout. Standard checks are enforced; no admin bypass.
 on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Preview (DRY_RUN) or open review PRs (APPLY)
+        description: Audit (DRY_RUN) or staging-first standard merges (APPLY)
         required: true
         type: choice
         options: [DRY_RUN, APPLY]
@@ -23,7 +23,7 @@ on:
         required: false
         type: string
       confirmation:
-        description: Enter APPLY to authorize opening PRs; does not merge anything
+        description: Enter APPLY to authorize staging and main PR creation and normal merges
         required: false
         type: string
 
@@ -57,7 +57,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.github-app.outputs.token }}
         run: gh auth setup-git
-      - name: Preview eligibility or open reviewed PRs
+      - name: Audit or sequentially install approved backend automation
         env:
           GH_TOKEN: ${{ steps.github-app.outputs.token }}
           ORG: ${{ github.repository_owner }}
