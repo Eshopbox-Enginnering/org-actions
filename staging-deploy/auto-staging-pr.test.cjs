@@ -675,8 +675,8 @@ function liveRequiredChecksFixture() {
   return { head, number: 440, protection: null, rules, checks, statuses: [],
     runs, strictTestValidation: true,
     workflowSources: { '1041381819': source, '1041381819@main': source,
-      '1041381819@main@' + coverage: source,
-      '1041381819@main@' + title: { ...source, workflowId: 251714341 } } };
+      ['1041381819@main@' + coverage]: source,
+      ['1041381819@main@' + title]: { ...source, workflowId: 251714341 } } };
 }
 
 test('live PR #440 check matrix accepts successful workflow with conditional skipped coverage', () => {
