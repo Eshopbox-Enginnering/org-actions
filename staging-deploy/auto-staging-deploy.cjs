@@ -256,8 +256,8 @@ async function resolveWorkflowSources({ rules, request }) {
   return sources;
 }
 
-function verifyChecks({ head, number, protection, rules, checks, statuses, runs, strictTestValidation = false, workflowSources = {} }) {
-  const applicable = runs.filter(r => r.head_sha === head && r.event === 'pull_request' &&
+function verifyChecks({ head, number, protection, rules, checks, statuses, runs, strictTestValidation = false, workflowSources = {}, workflowRunSha = head }) {
+  const applicable = runs.filter(r => r.head_sha === workflowRunSha && r.event === 'pull_request' &&
     (r.pull_requests || []).some(pr => pr.number === number));
   const required = [
     ...(protection?.requiresStatusChecks ? protection.requiredStatusChecks.map(c => ({ context: c.context, integration_id: c.app?.databaseId })) : []),
