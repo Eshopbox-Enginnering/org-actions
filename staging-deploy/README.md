@@ -8,6 +8,7 @@ This feature uses the same **DRY_RUN → explicit APPLY** approach as [Sync Engi
 - `APPLY` requires confirmation `APPLY`. It opens **main PRs for review only**; it never merges PRs, tags commits, triggers staging or changes the staging branch. Staging companions must follow review and staging-first process.
 - Only names explicitly approved in [approved-repositories.json](./approved-repositories.json) are eligible for APPLY. Other repositories are shown as `AUDIT_ONLY` and skipped.
 - The initial approved entry is the existing source pilot `esb-product-engine-jobs`; it should be a no-op if its canonical automation files are already in place.
+- GitHub App installation must grant **Workflows: write** along with Contents and Pull requests; the generated workflow explicitly requests this permission to support workflow-file PR merges.
 - Copied source includes repository-specific required-workflow identity mappings. **Do not approve another repository until its required workflows, rule source identities, branch protections, GitHub App permissions, deployment workflow, tag format and integration tests are validated, and the script is parameterized for that repository.** In particular, never copy the pilot's hardcoded rule IDs to an unreviewed repository.
 - No automatic staging merge or deployment is enabled by this installer itself. The `/deploy-staging` command remains the trigger for installed workflow, until separate no-command readiness automation is designed and reviewed.
 
