@@ -60,6 +60,8 @@ jobs:
       - name: Audit or sequentially install approved backend automation
         env:
           GH_TOKEN: ${{ steps.github-app.outputs.token }}
+          APP_ID: ${{ vars.ORG_AGENTS_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
           ORG: ${{ github.repository_owner }}
           OPERATION: ${{ inputs.operation }}
           TARGET: ${{ inputs.target }}
