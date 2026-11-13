@@ -86,6 +86,8 @@ class RolloutSafetyTests(unittest.TestCase):
         def cmd(*args, **kwargs):
             calls.append(args)
             if args[:3] == ("gh", "pr", "view"):
+                if "headRefOid,baseRefName,state,mergeStateStatus,mergedAt" in args:
+                    return '{"headRefOid":"abc123","baseRefName":"staging","state":"OPEN","mergeStateStatus":"CLEAN","mergedAt":null}'
                 return '{"mergedAt":"2026-11-13T12:00:00Z","mergeCommit":{"oid":"abc"},"baseRefName":"staging"}'
             return ""
         with mock.patch.object(mod, "cmd", side_effect=cmd):
