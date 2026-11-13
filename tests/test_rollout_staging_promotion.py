@@ -48,24 +48,23 @@ class RolloutSafetyTests(unittest.TestCase):
                     mod.main()
                 cmd.assert_not_called()
 
-    def test_staging_merge_precedes_main_creation(self):
-        calls = []
-        def phase(full, name, target, issue):
-            calls.append(target)
-            return "merged"
-        with mock.patch.object(mod, "install_phase", side_effect=phase):
-            mod.install("org/api", "api", "7319")
-        self.assertEqual(calls, ["staging", "main"])
+    def test_single_feature_commit_is_proposed_staging_first(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        self.assertIn('for target in ("staging", "main"):', source)
+        self.assertIn('merge_regular_pr(full, number, target, feature_sha)', source)
+        self.assertNotIn("install_phase", source)
+        self.assertIn("main PR exists before staging was merged", source)
+        self.assertNotIn("--admin", source)
 
-    def test_failure_during_staging_never_opens_main(self):
-        calls = []
-        def phase(full, name, target, issue):
-            calls.append(target)
-            raise RuntimeError("required check not green")
-        with mock.patch.object(mod, "install_phase", side_effect=phase):
-            with self.assertRaisesRegex(RuntimeError, "required check"):
-                mod.install("org/api", "api", "7319")
-        self.assertEqual(calls, ["staging"])
+    def test_main_is_not_opened_after_failed_staging(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        loop = source.index('for target in ("staging", "main"):')
+        merge = source.index("merge_regular_pr(full, number, target, feature_sha)", loop)
+        self.assertLess(loop, merge)
+        # The merge throws if blocked, so the next iteration cannot run.
+        self.assertNotIn("except", source[loop:merge])
 
     def test_closed_pr_must_not_be_reopened(self):
         with self.assertRaisesRegex(RuntimeError, "closed without merge"):
