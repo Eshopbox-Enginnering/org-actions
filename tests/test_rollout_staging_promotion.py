@@ -89,8 +89,10 @@ class RolloutSafetyTests(unittest.TestCase):
                     return '{"headRefOid":"abc123","baseRefName":"staging","state":"OPEN","mergeStateStatus":"CLEAN","mergedAt":null}'
                 return '{"mergedAt":"2026-11-13T12:00:00Z","mergeCommit":{"oid":"abc"},"baseRefName":"staging"}'
             return ""
-        with mock.patch.object(mod, "cmd", side_effect=cmd):
-            mod.merge_regular_pr("org/api", 1, "staging", "abc123")
+        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": True}):
+            with mock.patch.object(mod.time, "sleep"):
+                with mock.patch.object(mod, "cmd", side_effect=cmd):
+                    mod.merge_regular_pr("org/api", 1, "staging", "abc123")
         self.assertTrue(any(x[:3] == ("gh", "pr", "merge") for x in calls))
         self.assertFalse(any("--admin" in x or "--force" in x for x in calls))
 
@@ -113,6 +115,38 @@ class RolloutSafetyTests(unittest.TestCase):
                 with mock.patch.object(mod, "install") as install:
                     mod.main()
                     install.assert_not_called()
+
+    def test_stale_rollout_pr_discovery(self):
+        results = '[{"headRefName":"org-action/staging-promotion-7319-oldhash","url":"https://github.com/org/api/pull/1","baseRefName":"staging"}]'
+        with mock.patch.object(mod, "cmd", return_value=results):
+            prs = mod.managed_open_prs("org/api", "7319")
+        self.assertEqual(len(prs), 1)
+
+    def test_squash_only_repo_fails_closed(self):
+        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": False}):
+            with self.assertRaisesRegex(RuntimeError, "merge commits disabled"):
+                mod.merge_regular_pr("org/api", 1, "staging", "abc")
+
+    def test_merge_queue_polling(self):
+        states = [
+            {"headRefOid":"abc","baseRefName":"staging","state":"OPEN",
+             "mergeStateStatus":"CLEAN","mergedAt":None},
+            {"headRefOid":"abc","baseRefName":"staging","state":"OPEN",
+             "mergeStateStatus":"BLOCKED","mergedAt":None},
+            {"headRefOid":"abc","baseRefName":"staging","state":"MERGED",
+             "mergeStateStatus":"UNKNOWN","mergedAt":"2026-11-13T12:00:00Z"},
+        ]
+        calls = []
+        def fake_cmd(*args, **kwargs):
+            calls.append(args)
+            if args[:3] == ("gh", "pr", "view"):
+                return __import__("json").dumps(states.pop(0))
+            return ""
+        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": True}):
+            with mock.patch.object(mod.time, "sleep"):
+                with mock.patch.object(mod, "cmd", side_effect=fake_cmd):
+                    self.assertEqual(mod.merge_regular_pr("org/api", 1, "staging", "abc"), "already merged")
+        self.assertEqual(sum(args[:3] == ("gh", "pr", "merge") for args in calls), 1)
 
 
 if __name__ == "__main__":
