@@ -42,6 +42,7 @@ jobs:
       - name: Validate installer syntax
         run: |
           python3 -m py_compile scripts/rollout-staging-promotion.py
+          python3 -m unittest discover -s tests -p 'test_rollout_staging_promotion.py' -v
           node --check staging-deploy/auto-staging-pr.cjs
           node --check staging-deploy/auto-staging-deploy.cjs
       - name: Mint existing organization GitHub App token
