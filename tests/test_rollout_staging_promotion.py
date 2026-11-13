@@ -66,6 +66,15 @@ class RolloutSafetyTests(unittest.TestCase):
         # The merge throws if blocked, so the next iteration cannot run.
         self.assertNotIn("except", source[loop:merge])
 
+    def test_diverged_main_staging_rejects_unrelated_staging_diff(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        self.assertIn('origin/staging...HEAD', source)
+        self.assertIn('refusing polluted staging PR', source)
+        self.assertIn('pending_main - set(SOURCE_FILES.values())', source)
+        self.assertLess(source.index('refusing polluted staging PR'),
+                        source.index('cmd("git", "push", "-u", "origin", branch'))
+
     def test_closed_pr_must_not_be_reopened(self):
         with self.assertRaisesRegex(RuntimeError, "closed without merge"):
             mod.verify_pr("org/api", {
