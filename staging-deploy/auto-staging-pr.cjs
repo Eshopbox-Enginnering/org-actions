@@ -176,6 +176,7 @@ async function checkReady({ github, repo, number, head, getPR, pages }) {
   if (result.repository.pullRequest.headRefOid !== head) throw new Error('PR head changed during validation.');
   const rules = await pages('GET /repos/{owner}/{repo}/rules/branches/{branch}', { branch: 'main' });
   let runs = await pages('GET /repos/{owner}/{repo}/actions/runs', { head_sha: head });
+  let workflowRunSha = head;
   let checks = await pages('GET /repos/{owner}/{repo}/commits/{ref}/check-runs', { ref: head, filter: 'latest' });
   let statuses = await pages('GET /repos/{owner}/{repo}/commits/{ref}/statuses', { ref: head });
   if (pr.merge_commit_sha) {
@@ -187,11 +188,12 @@ async function checkReady({ github, repo, number, head, getPR, pages }) {
       // Required workflow runs must come from the same SHA as check suites.
       // Otherwise successful merge-queue job suites appear to be missing.
       runs = await pages('GET /repos/{owner}/{repo}/actions/runs', { head_sha: pr.merge_commit_sha });
+      workflowRunSha = pr.merge_commit_sha;
     }
   }
   const workflowSources = await resolveWorkflowSources({ rules, request: (route, args) => github.request(route, args) });
   verifyChecks({ head, number, protection: result.repository.pullRequest.baseRef?.branchProtectionRule,
-    rules, checks, statuses, runs, strictTestValidation: true, workflowSources });
+    rules, checks, statuses, runs, strictTestValidation: true, workflowSources, workflowRunSha });
 
 
 }
