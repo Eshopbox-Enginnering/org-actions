@@ -258,8 +258,16 @@ def install(full, name, issue):
         # commits present on main but missing from staging. Fail closed before
         # any branch push or PR creation. This also preserves main's exact
         # feature commit for the required staging-presence check.
+        # A depth-1 main clone cannot calculate the staging...main merge base.
+        # Recover complete history before inspecting the full effective PR diff.
+        # Never interpret missing history as an empty or safe staging diff.
+        cmd("git", "fetch", "--unshallow", "origin", cwd=root)
         cmd("git", "fetch", "origin",
             "+refs/heads/staging:refs/remotes/origin/staging", cwd=root)
+        merge_base = cmd("git", "merge-base", "origin/staging", "HEAD",
+                         cwd=root, check=False)
+        if merge_base.returncode or not merge_base.stdout.strip():
+            raise RuntimeError(f"{name}: staging and main have no verified merge base")
         pending_main = set(cmd("git", "diff", "--name-only",
                                "origin/staging...HEAD", cwd=root).splitlines())
         if pending_main - set(SOURCE_FILES.values()):
