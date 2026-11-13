@@ -468,7 +468,7 @@ test('required workflow source repo and ref must match, not just filename', () =
 });
 
 test('trusted workflow binding preserves heads versus tags namespaces', () => {
-  const sources = { '1041381819': { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40) } };
+  const sources = { '1041381819': { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849, ref: 'refs/heads/main', path: '.github/workflows/java-test-coverage.yml' } };
   const run = {
     path: '.github/workflows/java-test-coverage.yml',
     workflow_id: 400272849,
@@ -578,7 +578,7 @@ test('unknown required-workflow ID without source SHA fails closed', () => {
 
 test('observed GitHub required workflow run without workflow_sha matches reviewed identity', () => {
   const head = '8'.repeat(40);
-  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849 };
+  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849, ref: 'refs/heads/main', path: '.github/workflows/java-test-coverage.yml' };
   const expected = { path: '.github/workflows/java-test-coverage.yml',
     repository_id: 1041381819, ref: 'refs/heads/main' };
   const run = { id: 43198519093, head_sha: head, event: 'pull_request',
@@ -633,7 +633,7 @@ test('strict required workflow refuses green lookalike from different source', (
 
 function liveRequiredChecksFixture() {
   const head = '8'.repeat(40);
-  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849 };
+  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849, ref: 'refs/heads/main', path: '.github/workflows/java-test-coverage.yml' };
   const makeRun = (id, workflowId, path, check_suite_id, conclusion = 'success') => ({
     id, name: path.split('/').pop(), path, check_suite_id, workflow_id: workflowId,
     workflow_url: `https://api.github.com/repos/Eshopbox-Enginnering/esb-product-engine-jobs/actions/required_workflows/${workflowId}`,
@@ -676,7 +676,7 @@ function liveRequiredChecksFixture() {
     runs, strictTestValidation: true,
     workflowSources: { '1041381819': source, '1041381819@main': source,
       ['1041381819@main@' + coverage]: source,
-      ['1041381819@main@' + title]: { ...source, workflowId: 251714341 } } };
+      ['1041381819@main@' + title]: { ...source, workflowId: 251714341, path: title } } };
 }
 
 test('live PR #440 check matrix accepts successful workflow with conditional skipped coverage', () => {
@@ -815,7 +815,7 @@ test('clean security receipt allows clean review', () => {
 test('unknown required workflow ID is rejected even with a matching workflow path', () => {
   const expected = { path: '.github/workflows/java-test-coverage.yml', repository_id: 1041381819, ref: 'refs/heads/main' };
   const sources = { '1041381819@main@.github/workflows/java-test-coverage.yml':
-    { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849 } };
+    { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849, ref: 'refs/heads/main', path: '.github/workflows/java-test-coverage.yml' } };
   const run = { workflow_id: 999000001, path: expected.path,
     workflow_url: 'https://api.github.com/repos/Eshopbox-Enginnering/service/actions/required_workflows/999000001' };
   assert.equal(requiredWorkflowMatches({ run, expected, sources }), false);
