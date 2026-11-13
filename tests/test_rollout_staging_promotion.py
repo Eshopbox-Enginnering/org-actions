@@ -49,6 +49,24 @@ class RolloutSafetyTests(unittest.TestCase):
                     mod.main()
                     install.assert_not_called()
 
+    def test_archived_pilot_is_skipped_without_install(self):
+        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "Eshopbox-Enginnering",
+               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
+        with mock.patch.dict(mod.os.environ, env):
+            with mock.patch.object(mod, "check_repo", return_value=("SKIP archived/disabled", None)):
+                with mock.patch.object(mod, "install") as install:
+                    mod.main()
+                    install.assert_not_called()
+
+    def test_orphan_branch_is_counted_as_apply_failure(self):
+        env = {"OPERATION": "APPLY", "CONFIRMATION": "APPLY", "ORG": "Eshopbox-Enginnering",
+               "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
+        with mock.patch.dict(mod.os.environ, env):
+            with mock.patch.object(mod, "check_repo", return_value=("CANDIDATE main/staging/cicd.yml present", {})):
+                with mock.patch.object(mod, "install", side_effect=RuntimeError("orphaned rollout branch")):
+                    with self.assertRaises(SystemExit):
+                        mod.main()
+
     def test_dry_run_never_installs_even_approved_repo(self):
         env = {"OPERATION": "DRY_RUN", "CONFIRMATION": "", "ORG": "Eshopbox-Enginnering",
                "TARGET": "single", "REPOSITORY": "esb-product-engine-jobs"}
