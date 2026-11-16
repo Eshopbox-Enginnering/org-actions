@@ -9,6 +9,7 @@ on:
       - 'tests/test_rollout_staging_promotion.py'
       - '.github/workflows/rollout-staging-promotion.yml'
       - '.github/workflows/test-staging-rollout.yml'
+      - '.github/workflows/reusable-staging-deploy.yml'
 
 permissions:
   contents: read
@@ -27,13 +28,6 @@ jobs:
         run: |
           node --check staging-deploy/auto-staging-deploy.cjs
           node --check staging-deploy/auto-staging-pr.cjs
-      - name: Run installed-layout staging behavioral suites
-        shell: bash
+      - name: Run central staging behavioral suites
         run: |
-          set -euo pipefail
-          tmp="$(mktemp -d)"
-          trap 'rm -rf "$tmp"' EXIT
-          mkdir -p "$tmp/.github/scripts" "$tmp/.github/workflows"
-          cp staging-deploy/*.cjs "$tmp/.github/scripts/"
-          cp staging-deploy/auto-staging-deploy.yml "$tmp/.github/workflows/"
-          (cd "$tmp" && node --test .github/scripts/auto-staging-deploy.test.cjs .github/scripts/auto-staging-pr.test.cjs)
+          node --test staging-deploy/auto-staging-deploy.test.cjs staging-deploy/auto-staging-pr.test.cjs
