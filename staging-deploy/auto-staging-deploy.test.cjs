@@ -232,9 +232,9 @@ test('staging PR creation uses App-authenticated Octokit instead of runner CLI',
 test('one comment trigger delegates to a self-hosted central workflow', () => {
   const caller = fs.readFileSync(path.join(__dirname, 'auto-staging-caller.yml'), 'utf8');
   const reusable = fs.readFileSync(path.join(__dirname, '../.github/workflows/reusable-staging-deploy.yml'), 'utf8');
-  assert.match(caller, /on:\\n  issue_comment:\\n    types: \\[created\\]/);
+  assert(caller.includes('on:\n  issue_comment:\n    types: [created]'));
   assert.match(reusable, /runs-on: self-hosted/);
-  assert.match(reusable, /ref: \\$\\{\\{ github.sha \\$\\}\\}/);
+  assert(reusable.includes('ref: ${{ github.sha }}'));
   assert(reusable.includes('cancel-in-progress: false'));
 });
 
