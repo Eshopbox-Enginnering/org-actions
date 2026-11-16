@@ -16,11 +16,7 @@ import time
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_FILES = {
-    "staging-deploy/auto-staging-deploy.cjs": ".github/scripts/auto-staging-deploy.cjs",
-    "staging-deploy/auto-staging-pr.cjs": ".github/scripts/auto-staging-pr.cjs",
-    "staging-deploy/auto-staging-deploy.test.cjs": ".github/scripts/auto-staging-deploy.test.cjs",
-    "staging-deploy/auto-staging-pr.test.cjs": ".github/scripts/auto-staging-pr.test.cjs",
-    "staging-deploy/auto-staging-deploy.yml": ".github/workflows/auto-staging-deploy.yml",
+    "staging-deploy/auto-staging-caller.yml": ".github/workflows/auto-staging-deploy.yml",
 }
 TOKEN_LAST_REFRESH = 0
 TOKEN_REFRESHING = False
