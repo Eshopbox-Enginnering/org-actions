@@ -70,8 +70,6 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
     if (run.workflow_sha) {
       if (run.workflow_sha !== source.sha) return false;
     } else {
-      const match = /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/actions\/required_workflows\/(\d+)$/.exec(url);
-      const id = match?.[1];
       // A ruleset's workflows[] entry contains repository_id, path and ref,
       // but no installation ID. GitHub assigns each repository-local
       // required-workflow run an ID different from the source workflow ID.
