@@ -70,7 +70,7 @@ class RolloutSafetyTests(unittest.TestCase):
         self.assertLess(source.index('"staging", "APPLY"'),
                         source.index('"production", "APPLY"'))
         self.assertIn("merge_guideline_pr", source)
-        self.assertIn("rollout_family=rollout_family", source)
+        self.assertIn("**family_kwargs", source)
 
     def test_shared_merge_uses_authorized_app_and_sha_guards(self):
         source = inspect.getsource(shared.merge_guideline_pr)
