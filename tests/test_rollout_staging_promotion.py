@@ -96,23 +96,103 @@ class RolloutSafetyTests(unittest.TestCase):
                 "mergedAt": None, "url": "https://github.com/org/api/pull/2"
             }, "staging")
 
-    def test_merge_uses_normal_method_only(self):
-        calls = []
-        views = [
-            '{"headRefOid":"abc123","baseRefName":"staging","state":"OPEN","mergeStateStatus":"CLEAN","mergedAt":null}',
-            '{"headRefOid":"abc123","baseRefName":"staging","state":"MERGED","mergeStateStatus":"UNKNOWN","mergedAt":"2026-11-13T12:00:00Z"}',
-        ]
-        def cmd(*args, **kwargs):
-            calls.append(args)
-            if args[:3] == ("gh", "pr", "view"):
-                return views.pop(0)
+    def test_app_merge_accepts_blocked_ui_state_without_polling(self):
+        pr = {"head": {"sha": "abc123"}, "base": {"ref": "staging"},
+              "state": "open", "draft": False, "mergeable": True,
+              "mergeable_state": "blocked", "merged": False}
+        with mock.patch.object(mod, "gh_api", side_effect=[
+                {"allow_merge_commit": True}, pr]):
+            with mock.patch.object(mod, "gh_api_merge", return_value={"merged": True}) as merge:
+                with mock.patch.object(mod.time, "sleep") as sleep:
+                    result = mod.merge_regular_pr("org/api", 1, "staging", "abc123")
+        self.assertEqual(result, "merged")
+        merge.assert_called_once_with("org/api", 1, "abc123")
+        sleep.assert_not_called()
+
+    def test_mergeability_null_retries_only_until_computed(self):
+        base = {"head": {"sha": "abc123"}, "base": {"ref": "staging"},
+                "state": "open", "draft": False, "merged": False}
+        unknown = {**base, "mergeable": None}
+        ready = {**base, "mergeable": True, "mergeable_state": "blocked"}
+        with mock.patch.object(mod, "gh_api", side_effect=[
+                {"allow_merge_commit": True}, unknown, unknown, ready]) as api:
+            with mock.patch.object(mod, "gh_api_merge", return_value={"merged": True}) as merge:
+                with mock.patch.object(mod.time, "sleep") as sleep:
+                    self.assertEqual(mod.merge_regular_pr("org/api", 1, "staging", "abc123"), "merged")
+        self.assertEqual(api.call_count, 4)
+        self.assertEqual(sleep.call_count, 2)
+        merge.assert_called_once()
+
+    def test_mergeability_never_resolving_fails_without_merging(self):
+        unknown = {"head": {"sha": "abc123"}, "base": {"ref": "staging"},
+                   "state": "open", "draft": False, "mergeable": None, "merged": False}
+        with mock.patch.object(mod, "gh_api", side_effect=[
+                {"allow_merge_commit": True}] + [unknown] * 6):
+            with mock.patch.object(mod, "gh_api_merge") as merge:
+                with mock.patch.object(mod.time, "sleep") as sleep:
+                    with self.assertRaisesRegex(RuntimeError, "still unknown"):
+                        mod.merge_regular_pr("org/api", 1, "staging", "abc123")
+        self.assertEqual(sleep.call_count, 5)
+        merge.assert_not_called()
+
+    def test_staging_ancestry_required_before_main_merge(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        self.assertIn('if target == "main":\n                verify_staging_ancestry(root, feature_sha)', source)
+        self.assertIn('if target == "main":\n                    verify_staging_ancestry(root, feature_sha)', source)
+        commands = []
+        def fake_cmd(*args, **kwargs):
+            commands.append(args)
+            if args[:3] == ("git", "merge-base", "--is-ancestor"):
+                return mock.Mock(returncode=1)
             return ""
-        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": True}):
-            with mock.patch.object(mod.time, "sleep"):
-                with mock.patch.object(mod, "cmd", side_effect=cmd):
+        with mock.patch.object(mod, "cmd", side_effect=fake_cmd):
+            with self.assertRaisesRegex(RuntimeError, "not in remote staging"):
+                mod.verify_staging_ancestry(Path("/tmp/rollout-test"), "abc123")
+        self.assertEqual(commands[1][:4], ("git", "merge-base", "--is-ancestor", "abc123"))
+        self.assertIn("refs/remotes/origin/staging", commands[1])
+
+    def test_staging_ancestry_accepts_exact_commit(self):
+        with mock.patch.object(mod, "cmd", side_effect=[
+                "", mock.Mock(returncode=0)]) as cmd:
+            mod.verify_staging_ancestry(Path("/tmp/rollout-test"), "abc123")
+        self.assertEqual(cmd.call_count, 2)
+
+    def test_app_merge_uses_expected_sha_without_admin_override(self):
+        with mock.patch.object(mod, "cmd", return_value='{"merged":true}') as cmd:
+            self.assertTrue(mod.gh_api_merge("org/api", 8, "abc123")["merged"])
+        cmd.assert_called_once_with("gh", "api", "--method", "PUT",
+                                    "repos/org/api/pulls/8/merge",
+                                    "-f", "merge_method=merge", "-f", "sha=abc123")
+        self.assertNotIn("--admin", cmd.call_args.args)
+
+    def test_merge_refuses_mismatched_head_base_draft_and_conflicts(self):
+        original = {"head": {"sha": "abc123"}, "base": {"ref": "staging"},
+                    "state": "open", "draft": False, "mergeable": True,
+                    "merged": False}
+        variations = [({"head": {"sha": "wrong"}}, "changed"),
+                      ({"base": {"ref": "main"}}, "changed"),
+                      ({"draft": True}, "draft"),
+                      ({"mergeable": False}, "conflicts")]
+        for patch, reason in variations:
+            with self.subTest(reason=reason):
+                pr = {**original, **patch}
+                with mock.patch.object(mod, "gh_api", side_effect=[
+                        {"allow_merge_commit": True}, pr]):
+                    with mock.patch.object(mod, "gh_api_merge") as merge:
+                        with self.assertRaisesRegex(RuntimeError, reason):
+                            mod.merge_regular_pr("org/api", 1, "staging", "abc123")
+                        merge.assert_not_called()
+
+    def test_merge_denied_by_github_fails_without_retry(self):
+        pr = {"head": {"sha": "abc123"}, "base": {"ref": "staging"},
+              "state": "open", "draft": False, "mergeable": True, "merged": False}
+        with mock.patch.object(mod, "gh_api", side_effect=[
+                {"allow_merge_commit": True}, pr]):
+            with mock.patch.object(mod, "gh_api_merge", side_effect=RuntimeError("403 forbidden")) as merge:
+                with self.assertRaisesRegex(RuntimeError, "403 forbidden"):
                     mod.merge_regular_pr("org/api", 1, "staging", "abc123")
-        self.assertTrue(any(x[:3] == ("gh", "pr", "merge") for x in calls))
-        self.assertFalse(any("--admin" in x or "--force" in x for x in calls))
+                merge.assert_called_once()
 
     def test_dry_run_does_not_install(self):
         env = {"OPERATION": "DRY_RUN", "CONFIRMATION": "", "ORG": "org",
@@ -145,26 +225,6 @@ class RolloutSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "merge commits disabled"):
                 mod.merge_regular_pr("org/api", 1, "staging", "abc")
 
-    def test_merge_queue_polling(self):
-        states = [
-            {"headRefOid":"abc","baseRefName":"staging","state":"OPEN",
-             "mergeStateStatus":"CLEAN","mergedAt":None},
-            {"headRefOid":"abc","baseRefName":"staging","state":"OPEN",
-             "mergeStateStatus":"BLOCKED","mergedAt":None},
-            {"headRefOid":"abc","baseRefName":"staging","state":"MERGED",
-             "mergeStateStatus":"UNKNOWN","mergedAt":"2026-11-13T12:00:00Z"},
-        ]
-        calls = []
-        def fake_cmd(*args, **kwargs):
-            calls.append(args)
-            if args[:3] == ("gh", "pr", "view"):
-                return __import__("json").dumps(states.pop(0))
-            return ""
-        with mock.patch.object(mod, "gh_api", return_value={"allow_merge_commit": True}):
-            with mock.patch.object(mod.time, "sleep"):
-                with mock.patch.object(mod, "cmd", side_effect=fake_cmd):
-                    self.assertEqual(mod.merge_regular_pr("org/api", 1, "staging", "abc"), "already merged")
-        self.assertEqual(sum(args[:3] == ("gh", "pr", "merge") for args in calls), 1)
 
 
 if __name__ == "__main__":
