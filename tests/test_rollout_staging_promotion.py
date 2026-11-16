@@ -109,6 +109,55 @@ class RolloutSafetyTests(unittest.TestCase):
         merge.assert_called_once_with("org/api", 1, "abc123")
         sleep.assert_not_called()
 
+    def test_mergeability_null_retries_only_until_computed(self):
+        base = {"head": {"sha": "abc123"}, "base": {"ref": "staging"},
+                "state": "open", "draft": False, "merged": False}
+        unknown = {**base, "mergeable": None}
+        ready = {**base, "mergeable": True, "mergeable_state": "blocked"}
+        with mock.patch.object(mod, "gh_api", side_effect=[
+                {"allow_merge_commit": True}, unknown, unknown, ready]) as api:
+            with mock.patch.object(mod, "gh_api_merge", return_value={"merged": True}) as merge:
+                with mock.patch.object(mod.time, "sleep") as sleep:
+                    self.assertEqual(mod.merge_regular_pr("org/api", 1, "staging", "abc123"), "merged")
+        self.assertEqual(api.call_count, 4)
+        self.assertEqual(sleep.call_count, 2)
+        merge.assert_called_once()
+
+    def test_mergeability_never_resolving_fails_without_merging(self):
+        unknown = {"head": {"sha": "abc123"}, "base": {"ref": "staging"},
+                   "state": "open", "draft": False, "mergeable": None, "merged": False}
+        with mock.patch.object(mod, "gh_api", side_effect=[
+                {"allow_merge_commit": True}] + [unknown] * 6):
+            with mock.patch.object(mod, "gh_api_merge") as merge:
+                with mock.patch.object(mod.time, "sleep") as sleep:
+                    with self.assertRaisesRegex(RuntimeError, "still unknown"):
+                        mod.merge_regular_pr("org/api", 1, "staging", "abc123")
+        self.assertEqual(sleep.call_count, 5)
+        merge.assert_not_called()
+
+    def test_staging_ancestry_required_before_main_merge(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        self.assertIn('if target == "main":\n                verify_staging_ancestry(root, feature_sha)', source)
+        self.assertIn('if target == "main":\n                    verify_staging_ancestry(root, feature_sha)', source)
+        commands = []
+        def fake_cmd(*args, **kwargs):
+            commands.append(args)
+            if args[:3] == ("git", "merge-base", "--is-ancestor"):
+                return mock.Mock(returncode=1)
+            return ""
+        with mock.patch.object(mod, "cmd", side_effect=fake_cmd):
+            with self.assertRaisesRegex(RuntimeError, "not in remote staging"):
+                mod.verify_staging_ancestry(Path("/tmp/rollout-test"), "abc123")
+        self.assertEqual(commands[1][:4], ("git", "merge-base", "--is-ancestor", "abc123"))
+        self.assertIn("refs/remotes/origin/staging", commands[1])
+
+    def test_staging_ancestry_accepts_exact_commit(self):
+        with mock.patch.object(mod, "cmd", side_effect=[
+                "", mock.Mock(returncode=0)]) as cmd:
+            mod.verify_staging_ancestry(Path("/tmp/rollout-test"), "abc123")
+        self.assertEqual(cmd.call_count, 2)
+
     def test_app_merge_uses_expected_sha_without_admin_override(self):
         with mock.patch.object(mod, "cmd", return_value='{"merged":true}') as cmd:
             self.assertTrue(mod.gh_api_merge("org/api", 8, "abc123")["merged"])
