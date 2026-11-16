@@ -70,16 +70,17 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
     if (run.workflow_sha) {
       if (run.workflow_sha !== source.sha) return false;
     } else {
-      const match = /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/actions\/required_workflows\/(\d+)$/.exec(url);
-      const id = match?.[1];
-      // Check the ID against the live source workflow, resolved from the
-      // rule's repository_id + workflow path. This works for all backends
-      // and refuses unknown/lookalike IDs rather than trusting the pilot.
-      if (!id || !Number.isSafeInteger(source.workflowId) ||
-          Number(id) !== source.workflowId ||
-          Number(run.workflow_id) !== source.workflowId ||
-          // A workflow ID by itself cannot prove the configured ref. This
-          // binding came from the current rule's source repository/ref/path.
+      // Ruleset entries do not expose an installation ID. GitHub assigns a
+      // repository-local required-workflow ID distinct from the source ID.
+      // Match the server-issued required-workflow URL to the run workflow ID,
+      // while retaining source repo/ref/path and SHA-bound validation.
+      const match = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/actions\/required_workflows\/(\d+)$/.exec(url);
+      const installedId = Number(match?.[3]);
+      const targetRepo = run.repository?.full_name;
+      if (!match || !Number.isSafeInteger(installedId) || installedId <= 0 ||
+          Number(run.workflow_id) !== installedId ||
+          (expected.id != null && Number(expected.id) !== installedId) ||
+          (targetRepo && `${match[1]}/${match[2]}`.toLowerCase() !== targetRepo.toLowerCase()) ||
           canonicalWorkflowRef(source.ref) !== canonicalWorkflowRef(requiredRef) ||
           source.path !== expectedLocation.file) return false;
     }
