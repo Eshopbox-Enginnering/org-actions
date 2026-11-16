@@ -195,12 +195,15 @@ test('force prefix lookalikes, edited comments, and non-PR comments cannot deplo
   }
 });
 
-test('workflow uses only explicit staging command and validates both test suites', () => {
-  const text = fs.readFileSync(path.join(__dirname, '../workflows/auto-staging-deploy.yml'), 'utf8');
-  assert(!text.includes('FORCE_DEPLOY_USERS:'));
-  assert(text.includes("github.event.comment.body == '/deploy-staging'"));
-  assert(text.includes('auto-staging-deploy.test.cjs'));
-  assert(text.includes('auto-staging-pr.test.cjs'));
+test('one-file caller limits deployment to exact PR comment and central workflow runs test suites', () => {
+  const caller = fs.readFileSync(path.join(__dirname, 'auto-staging-caller.yml'), 'utf8');
+  const reusable = fs.readFileSync(path.join(__dirname, '../.github/workflows/reusable-staging-deploy.yml'), 'utf8');
+  assert(!caller.includes('FORCE_DEPLOY_USERS:'));
+  assert.match(caller, /issue_comment:/);
+  assert(caller.includes("github.event.comment.body == '/deploy-staging'"));
+  assert(caller.includes('uses: Eshopbox-Enginnering/org-actions/.github/workflows/reusable-staging-deploy.yml@main'));
+  assert(reusable.includes('auto-staging-deploy.test.cjs'));
+  assert(reusable.includes('auto-staging-pr.test.cjs'));
 });
 
 test('only a newly created exact command on a PR can trigger deployment', async () => {
@@ -210,7 +213,7 @@ test('only a newly created exact command on a PR can trigger deployment', async 
 });
 
 test('existing organization GitHub App credentials are used for staging promotion', () => {
-  const yaml = fs.readFileSync(path.join(__dirname, '../workflows/auto-staging-deploy.yml'), 'utf8');
+  const yaml = fs.readFileSync(path.join(__dirname, '../.github/workflows/reusable-staging-deploy.yml'), 'utf8');
   assert.match(yaml, /app-id: \$\{\{ vars\.ORG_AGENTS_APP_ID \}\}/);
   assert.match(yaml, /private-key: \$\{\{ secrets\.ORG_AGENTS_APP_PRIVATE_KEY \}\}/);
   assert.match(yaml, /permission-contents: write/);
@@ -226,12 +229,13 @@ test('staging PR creation uses App-authenticated Octokit instead of runner CLI',
   assert.doesNotMatch(source, /command\('gh'/);
 });
 
-test('workflow has exactly one comment trigger and uses the self-hosted runner', () => {
-  const text = fs.readFileSync(path.join(__dirname, '../workflows/auto-staging-deploy.yml'), 'utf8');
-  assert.match(text, /on:\n  issue_comment:\n    types: \[created\]\n\npermissions:/);
-  assert.match(text, /runs-on: self-hosted/);
-  assert.match(text, /ref: \$\{\{ github.sha \}\}/);
-  assert.match(text, /group: auto-staging-deploy\n      cancel-in-progress: false/);
+test('one comment trigger delegates to a self-hosted central workflow', () => {
+  const caller = fs.readFileSync(path.join(__dirname, 'auto-staging-caller.yml'), 'utf8');
+  const reusable = fs.readFileSync(path.join(__dirname, '../.github/workflows/reusable-staging-deploy.yml'), 'utf8');
+  assert.match(caller, /on:\\n  issue_comment:\\n    types: \\[created\\]/);
+  assert.match(reusable, /runs-on: self-hosted/);
+  assert.match(reusable, /ref: \\$\\{\\{ github.sha \\$\\}\\}/);
+  assert(reusable.includes('cancel-in-progress: false'));
 });
 
 test('read access, closed PRs, and PRs targeting another branch are rejected with reasons', async () => {
