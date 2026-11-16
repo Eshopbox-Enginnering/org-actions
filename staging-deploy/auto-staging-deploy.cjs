@@ -75,9 +75,12 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
       // Check the ID against the live source workflow, resolved from the
       // rule's repository_id + workflow path. This works for all backends
       // and refuses unknown/lookalike IDs rather than trusting the pilot.
-      if (!id || !Number.isSafeInteger(source.workflowId) ||
-          Number(id) !== source.workflowId ||
-          Number(run.workflow_id) !== source.workflowId ||
+      // GitHub gives an organization-required workflow installation its own ID,
+      // distinct from the source workflow's ID in org-actions.
+      const installedId = expected.id == null ? source.workflowId : Number(expected.id);
+      if (!id || !Number.isSafeInteger(installedId) || installedId <= 0 ||
+          Number(id) !== installedId ||
+          Number(run.workflow_id) !== installedId ||
           // A workflow ID by itself cannot prove the configured ref. This
           // binding came from the current rule's source repository/ref/path.
           canonicalWorkflowRef(source.ref) !== canonicalWorkflowRef(requiredRef) ||
