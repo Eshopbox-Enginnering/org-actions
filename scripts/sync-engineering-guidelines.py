@@ -58,6 +58,9 @@ def rollout_workspace(prefix='guidelines-'):
 
 
 def validate_destination(dest):
+    # Permit only the exact centrally managed workflow caller, not arbitrary workflows.
+    if dest == '.github/workflows/auto-staging-deploy.yml':
+        return dest
     p = PurePosixPath(dest)
     if (not dest.startswith('docs/engineering-guidelines/') or p.is_absolute()
             or '..' in p.parts or not dest.endswith('.md')
@@ -241,7 +244,13 @@ def find_existing_production_guideline_pr(full, production, kind, digest):
 def process(repo, org, selected, contents, phase, operation, issue,
             promotion_pr=None, allow_open_staging=False,
             stage_pr_holder=None, require_production=False,
-            allow_synced_staging=False):
+            allow_synced_staging=False, rollout_family='guidelines'):
+    if rollout_family not in ('guidelines', 'staging-deployment'):
+        raise ValueError('Unsupported managed rollout family')
+    if rollout_family == 'staging-deployment' and (
+            len(selected.get('backend', [])) != 1 or
+            selected['backend'][0]['destination'] != '.github/workflows/auto-staging-deploy.yml'):
+        raise ValueError('Staging rollout may manage only the exact workflow caller')
     name = repo['name']
     production = (repo.get('defaultBranchRef') or {}).get('name', '')
     if production not in ALLOWED_BRANCHES:
@@ -294,7 +303,9 @@ def process(repo, org, selected, contents, phase, operation, issue,
             e['destination'].encode() + b'\0' + contents[e['source_url']]
             for e in sorted(entries, key=lambda x: x['destination'])
         )).hexdigest()[:12]
-        branch_prefix = f'org-action/guidelines-{kind}-{digest}-'
+        family_prefix = ('staging-deployment' if rollout_family == 'staging-deployment'
+                         else 'guidelines')
+        branch_prefix = f'org-action/{family_prefix}-{kind}-{digest}-'
         target_base = staging if phase == 'staging' else production
         base_sha = cmd('git', 'rev-parse', 'HEAD', cwd=root)[:10]
         if phase == 'staging':
@@ -405,9 +416,9 @@ def process(repo, org, selected, contents, phase, operation, issue,
             # The production base can drift after a completed rollout.
             # A base-specific catch-up branch is safe to retry, while a
             # new base SHA yields a fresh PR for later reconciliation.
-            branch = (f'org-action/guidelines-prod-{kind}-{digest}-synced-{base_sha}'
+            branch = (f'org-action/{family_prefix}-prod-{kind}-{digest}-synced-{base_sha}'
                       if allow_synced_staging else
-                      f'org-action/guidelines-prod-{kind}-{digest}-pr{staging_pr["number"]}')
+                      f'org-action/{family_prefix}-prod-{kind}-{digest}-pr{staging_pr["number"]}')
             # Idempotency across changes to the main branch: lookup by merged
             # staging PR identity rather than the moving production SHA.
         existing_pr = find_pr(full, target_base, branch)
@@ -479,9 +490,11 @@ def process(repo, org, selected, contents, phase, operation, issue,
         else:
             body += (f'\n\nStaging PR: {staging_pr["url"]}' if staging_pr
                      else '\n\nStaging already contains all selected canonical guidelines.')
+        title = (f'feature to {target_base}: Install staging promotion workflow (#{issue})'
+                 if rollout_family == 'staging-deployment' else
+                 f'feature to {target_base}: Sync engineering guidelines (#{issue})')
         url = cmd('gh', 'pr', 'create', '--repo', full, '--base', target_base,
-                  '--head', branch, '--title', f'feature to {target_base}: Sync engineering guidelines (#{issue})',
-                  '--body', body)
+                  '--head', branch, '--title', title, '--body', body)
         print(f'{name}: CREATED PR {url}')
         if stage_pr_holder is not None:
             stage_pr_holder['number'] = int(url.rstrip('/').rsplit('/', 1)[-1])
