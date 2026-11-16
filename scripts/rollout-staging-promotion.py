@@ -274,127 +274,31 @@ def verify_staging_ancestry(root, feature_sha):
 
 
 def install(full, name, issue):
-    # One shared feature commit from main is proposed to staging, then main.
-    # GitHub's main-branch required check can therefore prove that the exact
-    # non-merge feature commit already exists in staging. No exemptions needed.
-    with tempfile.TemporaryDirectory(prefix="staging-rollout-") as directory:
-        cmd("gh", "repo", "clone", full, directory, "--", "--depth=1",
-            "--branch", "main")
-        root = Path(directory)
-        changed = stage_payload(root)
-        # The full staging PR diff must contain ONLY managed files, not unrelated
-        # commits present on main but missing from staging. Fail closed before
-        # any branch push or PR creation. This also preserves main's exact
-        # feature commit for the required staging-presence check.
-        # A depth-1 main clone cannot calculate the staging...main merge base.
-        # Recover complete history before inspecting the full effective PR diff.
-        # Never interpret missing history as an empty or safe staging diff.
-        cmd("git", "fetch", "--unshallow", "origin", cwd=root)
-        cmd("git", "fetch", "origin",
-            "+refs/heads/staging:refs/remotes/origin/staging", cwd=root)
-        merge_base = cmd("git", "merge-base", "origin/staging", "HEAD",
-                         cwd=root, check=False)
-        if merge_base.returncode or not merge_base.stdout.strip():
-            raise RuntimeError(f"{name}: staging and main have no verified merge base")
-        pending_main = set(cmd("git", "diff", "--name-only",
-                               "origin/staging...HEAD", cwd=root).splitlines())
-        if pending_main - set(SOURCE_FILES.values()):
-            raise RuntimeError(
-                f"{name}: staging is missing unrelated main changes; "
-                f"refusing polluted staging PR: {sorted(pending_main - set(SOURCE_FILES.values()))}")
-        if not changed:
-            print(f"{name}: NO_CHANGE already installed on main", flush=True)
-            return "current"
-        base_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
-        payload_hash = hashlib.sha256(b"".join(
-            (ROOT / src).read_bytes() for src in SOURCE_FILES)).hexdigest()[:10]
-        branch = f"org-action/staging-promotion-{issue}-{base_sha[:10]}-{payload_hash}"
-        active = managed_open_prs(full, issue)
-        foreign = [pr for pr in active if pr["headRefName"] != branch]
-        if foreign:
-            raise RuntimeError(f"{name}: older rollout PR still open; reconcile: " +
-                               ", ".join(pr["url"] for pr in foreign))
-        if len(active) > 1:
-            raise RuntimeError(f"{name}: multiple open rollout PRs need reconciliation")
-        existing = {target: pr_for_branch(full, branch, target)
-                    for target in ("staging", "main")}
-        if existing["main"] and not (existing["staging"] and existing["staging"].get("mergedAt")):
-            raise RuntimeError(f"{name}: main PR exists before staging was merged")
-        remote = cmd("git", "ls-remote", "--heads", "origin", branch, cwd=root)
-        if remote:
-            if not any(existing.values()):
-                raise RuntimeError(f"{name}: orphaned rollout branch {branch}")
-            # Discard only the temporary clone's uncommitted staging bytes.
-            # Git will then safely check out the previously reviewed branch.
-            cmd("git", "reset", "--hard", "HEAD", cwd=root)
-            # reset --hard preserves untracked files. stage_payload may have
-            # created a managed file absent on main; remove only those exact
-            # managed paths inside this disposable clone before checkout.
-            # Never run an unrestricted git clean or remove user files.
-            cmd("git", "clean", "-f", "--", *changed, cwd=root)
-            cmd("git", "fetch", "origin", branch, cwd=root)
-            cmd("git", "checkout", "-B", branch, "FETCH_HEAD", cwd=root)
-            actual_files = cmd("git", "diff", "--name-only", "origin/main...HEAD", cwd=root).splitlines()
-            if set(actual_files) != set(changed):
-                raise RuntimeError(f"{name}: existing branch payload differs from reviewed rollout")
-            for src, target in SOURCE_FILES.items():
-                actual = cmd("git", "show", f"HEAD:{target}", cwd=root)
-                if actual != (ROOT / src).read_text().strip():
-                    raise RuntimeError(f"{name}: existing branch file differs: {target}")
-        else:
-            cmd("git", "checkout", "-b", branch, cwd=root)
-            cmd("git", "add", "--", *changed, cwd=root)
-            cmd("git", "-c", "user.name=eshopbox-org-actions[bot]",
-                "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-                "commit", "-m", f"feat: enable staging promotion automation (#{issue})", cwd=root)
-            cmd("git", "push", "-u", "origin", branch, cwd=root)
-        feature_sha = cmd("git", "rev-parse", "HEAD", cwd=root)
-        validate_payload(root, branch, feature_sha, base_sha, changed)
-        for target in ("staging", "main"):
-            if target == "main" and not cmd("git", "ls-remote", "--heads",
-                                             "origin", branch, cwd=root):
-                # GitHub may auto-delete the head branch after staging merges.
-                # Re-create only this exact, already-reviewed feature SHA;
-                # do not change its contents or force-push anything.
-                cmd("git", "push", "origin",
-                    f"{feature_sha}:refs/heads/{branch}", cwd=root)
-            if target == "main":
-                verify_staging_ancestry(root, feature_sha)
-            prior = existing[target]
-            if prior:
-                if verify_pr(full, prior, target):
-                    print(f"{name} {target}: ALREADY_MERGED {prior['url']}", flush=True)
-                    continue
-                number = prior["number"]
-                print(f"{name} {target}: RESUME {prior['url']}", flush=True)
-            else:
-                # On main, staged feature commit is now in staging by ancestry.
-                # Do not open the main PR until staging merged successfully.
-                body = (
-                    f"Central Backlog: https://github.com/{full.split('/')[0]}/Central-Backlog/issues/{issue}\\n\\n"
-                    "One atomic rollout: centrally managed staging workflow caller. "
-                    "Exact feature commit goes to staging first, then main; "
-                    "the authorized organization GitHub App performs the merge.\\n\\n"
-                    f"Files: {', '.join(changed)}"
-                )
-                url = cmd("gh", "pr", "create", "--repo", full,
-                          "--base", target, "--head", branch,
-                          "--title", f"Feature to {'Staging' if target == 'staging' else 'Main'}: Add staging promotion automation (#{issue})",
-                          "--body", body, cwd=root)
-                pr = pr_for_branch(full, branch, target)
-                if not pr or pr["url"] != url:
-                    raise RuntimeError(f"{name}: cannot verify created PR {url}")
-                number = pr["number"]
-                print(f"{name} {target}: CREATED {url}", flush=True)
-            def validate_before_merge():
-                validate_payload(root, branch, feature_sha, base_sha, changed)
-                if target == "main":
-                    verify_staging_ancestry(root, feature_sha)
-            merge_regular_pr(full, number, target, feature_sha,
-                             validate=validate_before_merge)
-            print(f"{name} {target}: MERGED PR #{number}", flush=True)
-        return "merged"
+    """Delegate PR creation and App-authorized merges to working Guidelines rollout.
 
+    Staging and main get independent, target-based commits. There is no custom
+    checkout/merge lifecycle and only the one allowlisted workflow can change.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "shared_guideline_merger", ROOT / "scripts/sync-guidelines-auto-merge.py")
+    shared = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shared)
+    entry = {
+        "id": "staging-deployment",
+        "source_url": "staging-deploy/auto-staging-caller.yml",
+        "destination": ".github/workflows/auto-staging-deploy.yml",
+    }
+    source = ROOT / entry["source_url"]
+    selected = {"backend": [entry]}
+    contents = {entry["source_url"]: source.read_bytes()}
+    repository = {"name": name, "defaultBranchRef": {"name": "main"}}
+    outcome = shared.rollout(
+        repository, full.split("/")[0], selected, contents, issue,
+        single=True, rollout_family="staging-deployment")
+    if outcome not in ("merged", "synced"):
+        raise RuntimeError(f"{name}: Guidelines rollout lifecycle returned {outcome}")
+    return outcome
 
 def main():
     operation = os.environ.get("OPERATION", "DRY_RUN")
