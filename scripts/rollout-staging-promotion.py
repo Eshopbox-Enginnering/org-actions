@@ -214,31 +214,43 @@ def validate_payload(root, branch, feature_sha, base_sha, changed):
 
 
 def merge_regular_pr(full, number, target, sha, validate=None):
+    """Merge an installer-owned PR with the configured GitHub App token.
+
+    The App is an explicitly configured organization ruleset bypass actor.
+    A BLOCKED mergeStateStatus can indicate requirements intentionally bypassed
+    for this App, so do not wait for CLEAN or request admin mode. GitHub remains
+    authoritative: an unauthorized merge or real conflict fails immediately.
+    """
     repo = gh_api(f"repos/{full}")
     if not repo.get("allow_merge_commit"):
-        # Rebase/squash could rewrite the staged feature SHA and fail the main gate.
         raise RuntimeError(f"{full}: merge commits disabled; cannot preserve staged feature SHA")
-    deadline = time.monotonic() + 40 * 60
-    submitted = False
-    while time.monotonic() < deadline:
-        pr = json.loads(cmd("gh", "pr", "view", str(number), "--repo", full,
-                            "--json", "headRefOid,baseRefName,state,mergeStateStatus,mergedAt"))
-        if pr.get("mergedAt"):
-            return "already merged"
-        if pr["headRefOid"] != sha or pr["baseRefName"] != target or pr["state"] != "OPEN":
-            raise RuntimeError(f"{full}: {target} PR changed during validation")
-        if pr["mergeStateStatus"] == "DIRTY":
-            raise RuntimeError(f"{full}: {target} PR has conflicts")
-        if not submitted and pr["mergeStateStatus"] == "CLEAN":
-            if validate:
-                validate()
-            cmd("gh", "pr", "merge", str(number), "--repo", full, "--merge",
-                "--match-head-commit", sha)
-            submitted = True
-        # A merge queue may accept a PR before mergedAt is set.
-        time.sleep(10)
-    raise RuntimeError(f"{full}: {target} PR not merged within 40 minutes; left open")
+    pr = gh_api(f"repos/{full}/pulls/{number}")
+    if pr.get("merged"):
+        if pr.get("head", {}).get("sha") != sha or pr.get("base", {}).get("ref") != target:
+            raise RuntimeError(f"{full}: merged {target} PR differs from expected commit or base")
+        return "already merged"
+    if (pr.get("head", {}).get("sha") != sha or
+            pr.get("base", {}).get("ref") != target or pr.get("state") != "open"):
+        raise RuntimeError(f"{full}: {target} PR changed during validation")
+    if pr.get("draft"):
+        raise RuntimeError(f"{full}: {target} rollout PR is a draft")
+    if pr.get("mergeable") is False:
+        raise RuntimeError(f"{full}: {target} PR has merge conflicts")
+    if validate:
+        validate()
+    # REST merge API enforces the exact expected head commit and authenticates
+    # with the same installation token used to create the PR. No --admin, no
+    # force-push, no bypass changes to organization rulesets.
+    response = gh_api_merge(full, number, sha)
+    if not response.get("merged"):
+        raise RuntimeError(f"{full}: GitHub declined {target} PR merge: {response}")
+    return "merged"
 
+
+def gh_api_merge(full, number, sha):
+    return json.loads(cmd("gh", "api", "--method", "PUT",
+                          f"repos/{full}/pulls/{number}/merge",
+                          "-f", "merge_method=merge", "-f", f"sha={sha}"))
 
 
 def install(full, name, issue):
@@ -333,9 +345,9 @@ def install(full, name, issue):
                 # Do not open the main PR until staging merged successfully.
                 body = (
                     f"Central Backlog: https://github.com/{full.split('/')[0]}/Central-Backlog/issues/{issue}\\n\\n"
-                    "One atomic rollout: workflow plus four scripts/tests. "
+                    "One atomic rollout: centrally managed staging workflow caller. "
                     "Exact feature commit goes to staging first, then main; "
-                    "normal GitHub checks and branch protection apply.\\n\\n"
+                    "the authorized organization GitHub App performs the merge.\\n\\n"
                     f"Files: {', '.join(changed)}"
                 )
                 url = cmd("gh", "pr", "create", "--repo", full,
