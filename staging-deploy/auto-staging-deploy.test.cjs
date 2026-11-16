@@ -88,7 +88,7 @@ function forceFixture(overrides = {}, reason = 'Verify urgent staging fix') {
   return f;
 }
 
-test('temporary exemption ignores validate-tests and its required workflow in normal and force mode', async () => {
+test('required validate-tests check and workflow cannot be exempted in any mode', async () => {
   for (const make of [fixture, forceFixture]) {
     const f = make();
     f.data.rules.push(
@@ -99,19 +99,18 @@ test('temporary exemption ignores validate-tests and its required workflow in no
     f.data.checks.push({ ...validationCheck, id: 50, name: 'validate-tests', check_suite: { id: 50 }, conclusion: 'failure' });
     f.data.statuses.push({ id: 50, context: 'validate-tests', state: 'failure' });
     await deploy(f);
-    assert(!f.calls.some(c => c.route === 'failed'), JSON.stringify(f.calls));
-    assert(f.calls.some(c => c.route === 'gh'));
+    assert(!f.calls.some(c => c.route === 'gh'), JSON.stringify(f.calls));
   }
 });
 
-test('temporary test-validation exemption does not exempt other required checks or workflows', () => {
+test('required staging test-validation workflows must have successful check runs', () => {
   const f = fixture();
   const rules = [...f.data.rules,
     { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'validate-tests' }] } },
     { type: 'workflows', parameters: { workflows: [{ path: '.github/workflows/pr-test-validation.yml' }] } },
   ];
   const args = { head: HEAD, number: 42, protection: null, rules, checks: f.data.checks, statuses: [], runs: f.data.runs };
-  assert.doesNotThrow(() => verifyChecks(args));
+  assert.throws(() => verifyChecks(args), /validate-tests|pr-test-validation/);
   assert.throws(() => verifyChecks({ ...args, checks: [stagingCheck, { ...validationCheck, conclusion: 'failure' }] }), /unit-tests/);
   assert.throws(() => verifyChecks({ ...args, runs: [stagingRun] }), /unit-tests.yml/);
 });
