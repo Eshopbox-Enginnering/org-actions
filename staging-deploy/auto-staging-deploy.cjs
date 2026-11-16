@@ -77,7 +77,7 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
       // required-workflow run an ID different from the source workflow ID.
       // Verify the server-issued required-workflow URL and its run ID agree.
       // The source repo/ref/path is independently bound to the active rule.
-      const match = /^https:\/\/api\\.github\\.com\/repos\/([^/]+)\/([^/]+)\/actions\/required_workflows\/(\\d+)$/.exec(url);
+      const match = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/actions\/required_workflows\/(\d+)$/.exec(url);
       const installedId = Number(match?.[3]);
       const targetRepo = run.repository?.full_name;
       if (!match || !Number.isSafeInteger(installedId) || installedId <= 0 ||
