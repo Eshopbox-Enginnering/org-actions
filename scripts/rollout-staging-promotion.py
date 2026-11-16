@@ -224,7 +224,16 @@ def merge_regular_pr(full, number, target, sha, validate=None):
     repo = gh_api(f"repos/{full}")
     if not repo.get("allow_merge_commit"):
         raise RuntimeError(f"{full}: merge commits disabled; cannot preserve staged feature SHA")
-    pr = gh_api(f"repos/{full}/pulls/{number}")
+    # GitHub may need a few seconds to calculate mergeability after PR creation.
+    # Only retry unknown (null) mergeability, never check/approval BLOCKED states.
+    for attempt in range(6):
+        pr = gh_api(f"repos/{full}/pulls/{number}")
+        if pr.get("merged") or pr.get("mergeable") is not None:
+            break
+        if attempt < 5:
+            time.sleep(2)
+    if not pr.get("merged") and pr.get("mergeable") is None:
+        raise RuntimeError(f"{full}: {target} PR mergeability is still unknown; retry later")
     if pr.get("merged"):
         if pr.get("head", {}).get("sha") != sha or pr.get("base", {}).get("ref") != target:
             raise RuntimeError(f"{full}: merged {target} PR differs from expected commit or base")
@@ -251,6 +260,17 @@ def gh_api_merge(full, number, sha):
     return json.loads(cmd("gh", "api", "--method", "PUT",
                           f"repos/{full}/pulls/{number}/merge",
                           "-f", "merge_method=merge", "-f", f"sha={sha}"))
+
+
+def verify_staging_ancestry(root, feature_sha):
+    """Require the exact rollout commit in current remote staging before main."""
+    cmd("git", "fetch", "origin",
+        "+refs/heads/staging:refs/remotes/origin/staging", cwd=root)
+    result = cmd("git", "merge-base", "--is-ancestor", feature_sha,
+                 "refs/remotes/origin/staging", cwd=root, check=False)
+    if result.returncode:
+        raise RuntimeError("Refusing main merge: rollout feature commit is not in remote staging")
+
 
 
 def install(full, name, issue):
@@ -333,6 +353,8 @@ def install(full, name, issue):
                 # do not change its contents or force-push anything.
                 cmd("git", "push", "origin",
                     f"{feature_sha}:refs/heads/{branch}", cwd=root)
+            if target == "main":
+                verify_staging_ancestry(root, feature_sha)
             prior = existing[target]
             if prior:
                 if verify_pr(full, prior, target):
@@ -359,9 +381,12 @@ def install(full, name, issue):
                     raise RuntimeError(f"{name}: cannot verify created PR {url}")
                 number = pr["number"]
                 print(f"{name} {target}: CREATED {url}", flush=True)
+            def validate_before_merge():
+                validate_payload(root, branch, feature_sha, base_sha, changed)
+                if target == "main":
+                    verify_staging_ancestry(root, feature_sha)
             merge_regular_pr(full, number, target, feature_sha,
-                             validate=lambda: validate_payload(
-                                 root, branch, feature_sha, base_sha, changed))
+                             validate=validate_before_merge)
             print(f"{name} {target}: MERGED PR #{number}", flush=True)
         return "merged"
 
