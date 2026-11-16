@@ -70,20 +70,12 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
     if (run.workflow_sha) {
       if (run.workflow_sha !== source.sha) return false;
     } else {
-      // A ruleset's workflows[] entry contains repository_id, path and ref,
-      // but no installation ID. GitHub assigns each repository-local
-      // required-workflow run an ID different from the source workflow ID.
-      // Verify the server-issued required-workflow URL and its run ID agree.
-      // The source repo/ref/path is independently bound to the active rule.
-      const match = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/actions\/required_workflows\/(\d+)$/.exec(url);
-      const installedId = Number(match?.[3]);
-      const targetRepo = run.repository?.full_name;
-      if (!match || !Number.isSafeInteger(installedId) || installedId <= 0 ||
-          Number(run.workflow_id) !== installedId ||
-          (expected.id != null && Number(expected.id) !== installedId) ||
-          (targetRepo && `${match[1]}/${match[2]}`.toLowerCase() !== targetRepo.toLowerCase()) ||
-          canonicalWorkflowRef(source.ref) !== canonicalWorkflowRef(requiredRef) ||
-          source.path !== expectedLocation.file) return false;
+      // GitHub rulesets do not expose an installation ID. A required-workflow
+      // URL and run.workflow_id agreeing with each other is NOT proof that
+      // the run originated from the configured source repository and ref.
+      // Until authoritative source identity is available, fail closed.
+      // Do not accept a same-name/foreign workflow as a required check.
+      return false;
     }
   } else if (expectedLocation.source || requiredRef) return false;
   // A SHA-pinned rule must be backed by a verified revision, even when the
