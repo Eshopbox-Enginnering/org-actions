@@ -89,6 +89,17 @@ class RolloutSafetyTests(unittest.TestCase):
                 "mergedAt": None, "url": "https://github.com/org/api/pull/1"
             }, "staging")
 
+    def test_existing_rollout_cleans_only_managed_paths_before_checkout(self):
+        import inspect
+        source = inspect.getsource(mod.install)
+        reset = source.index('cmd("git", "reset", "--hard", "HEAD", cwd=root)')
+        clean = source.index('cmd("git", "clean", "-f", "--", *changed, cwd=root)')
+        checkout = source.index('cmd("git", "checkout", "-B", branch, "FETCH_HEAD", cwd=root)')
+        self.assertLess(reset, clean)
+        self.assertLess(clean, checkout)
+        self.assertNotIn('cmd("git", "clean", "-fd"', source)
+        self.assertNotIn('cmd("git", "clean", "-fdx"', source)
+
     def test_existing_pr_cannot_change_target(self):
         with self.assertRaisesRegex(RuntimeError, "targets main"):
             mod.verify_pr("org/api", {
