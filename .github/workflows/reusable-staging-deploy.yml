@@ -40,12 +40,22 @@ jobs:
           permission-pull-requests: write
           permission-workflows: write
 
+      - name: Mint central repository read token
+        id: central-app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: org-actions
+          permission-contents: read
+
       - name: Checkout centrally maintained and protected scripts
         uses: actions/checkout@v4
         with:
           repository: Eshopbox-Enginnering/org-actions
           ref: main
-          token: ${{ steps.staging-app.outputs.token }}
+          token: ${{ steps.central-app.outputs.token }}
           persist-credentials: false
           path: .central-staging-${{ github.run_id }}-${{ github.run_attempt }}
 
