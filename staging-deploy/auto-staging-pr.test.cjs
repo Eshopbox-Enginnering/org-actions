@@ -842,7 +842,7 @@ test('unknown required workflow ID is rejected even with a matching workflow pat
   const sources = { '1041381819@main@.github/workflows/java-test-coverage.yml':
     { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40), workflowId: 400272849, ref: 'refs/heads/main', path: '.github/workflows/java-test-coverage.yml' } };
   const run = { workflow_id: 999000001, path: expected.path,
-    workflow_url: 'https://api.github.com/repos/Eshopbox-Enginnering/service/actions/required_workflows/999000001' };
+    workflow_url: 'https://api.github.com/repos/Eshopbox-Enginnering/esb-product-engine-jobs/actions/required_workflows/999000001' };
   assert.equal(requiredWorkflowMatches({ run, expected, sources }), false);
   assert.equal(requiredWorkflowMatches({ run: { ...run, workflow_id: 400272849,
     workflow_url: run.workflow_url.replace('999000001', '400272849') }, expected, sources }), true);
