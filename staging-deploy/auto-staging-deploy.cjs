@@ -72,17 +72,18 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
     } else {
       const match = /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/actions\/required_workflows\/(\d+)$/.exec(url);
       const id = match?.[1];
-      // Check the ID against the live source workflow, resolved from the
-      // rule's repository_id + workflow path. This works for all backends
-      // and refuses unknown/lookalike IDs rather than trusting the pilot.
-      // GitHub gives an organization-required workflow installation its own ID,
-      // distinct from the source workflow's ID in org-actions.
-      const installedId = expected.id == null ? source.workflowId : Number(expected.id);
-      if (!id || !Number.isSafeInteger(installedId) || installedId <= 0 ||
-          Number(id) !== installedId ||
+      // A ruleset's workflows[] entry contains repository_id, path and ref,
+      // but no installation ID. GitHub assigns each repository-local
+      // required-workflow run an ID different from the source workflow ID.
+      // Verify the server-issued required-workflow URL and its run ID agree.
+      // The source repo/ref/path is independently bound to the active rule.
+      const match = /^https:\/\/api\\.github\\.com\/repos\/([^/]+)\/([^/]+)\/actions\/required_workflows\/(\\d+)$/.exec(url);
+      const installedId = Number(match?.[3]);
+      const targetRepo = run.repository?.full_name;
+      if (!match || !Number.isSafeInteger(installedId) || installedId <= 0 ||
           Number(run.workflow_id) !== installedId ||
-          // A workflow ID by itself cannot prove the configured ref. This
-          // binding came from the current rule's source repository/ref/path.
+          (expected.id != null && Number(expected.id) !== installedId) ||
+          (targetRepo && `${match[1]}/${match[2]}`.toLowerCase() !== targetRepo.toLowerCase()) ||
           canonicalWorkflowRef(source.ref) !== canonicalWorkflowRef(requiredRef) ||
           source.path !== expectedLocation.file) return false;
     }
