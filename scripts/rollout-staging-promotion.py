@@ -327,6 +327,11 @@ def install(full, name, issue):
             # Discard only the temporary clone's uncommitted staging bytes.
             # Git will then safely check out the previously reviewed branch.
             cmd("git", "reset", "--hard", "HEAD", cwd=root)
+            # reset --hard preserves untracked files. stage_payload may have
+            # created a managed file absent on main; remove only those exact
+            # managed paths inside this disposable clone before checkout.
+            # Never run an unrestricted git clean or remove user files.
+            cmd("git", "clean", "-f", "--", *changed, cwd=root)
             cmd("git", "fetch", "origin", branch, cwd=root)
             cmd("git", "checkout", "-B", branch, "FETCH_HEAD", cwd=root)
             actual_files = cmd("git", "diff", "--name-only", "origin/main...HEAD", cwd=root).splitlines()
