@@ -480,6 +480,20 @@ test('trusted workflow binding preserves heads versus tags namespaces', () => {
   assert.equal(requiredWorkflowMatches({ run, expected: { ...expected, ref: 'refs/heads/main' }, sources }), true);
 });
 
+test('org-required workflow installation ID can differ from source workflow ID', () => {
+  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40),
+    workflowId: 9001, ref: 'refs/heads/main', path: '.github/workflows/java-test-coverage.yml' };
+  const sources = { '1041381819': source };
+  const expected = { path: source.path, repository_id: 1041381819, ref: 'refs/heads/main',
+    id: 407005269 };
+  const run = { path: source.path, workflow_id: 407005269,
+    workflow_url: 'https://api.github.com/repos/Eshopbox-Enginnering/esbproductengine/actions/required_workflows/407005269' };
+  assert.equal(requiredWorkflowMatches({ run, expected, sources }), true);
+  assert.equal(requiredWorkflowMatches({ run: { ...run, workflow_id: 999 }, expected, sources }), false);
+  assert.equal(requiredWorkflowMatches({ run: { ...run, workflow_url: run.workflow_url.replace('407005269', '999') }, expected, sources }), false);
+  assert.equal(requiredWorkflowMatches({ run: { ...run, path: '.github/workflows/other.yml' }, expected, sources }), false);
+});
+
 test('SHA-pinned qualified run requires matching source revision proof', () => {
   const sha = 'a'.repeat(40);
   const expected = { path: '.github/workflows/validate.yml', repository_id: 123, sha };
