@@ -5,11 +5,6 @@ const { promisify } = require('node:util');
 const execute = promisify(execFile);
 const STAGING_CHECK = 'Check PR commits exist in staging';
 const STAGING_WORKFLOW = '.github/workflows/check-commits-in-staging.yml';
-// Temporary user-requested staging-only exemption while the checks runner
-// lacks GitHub CLI. Remove this exemption when test validation is restored.
-const TEMPORARY_TEST_VALIDATION_EXEMPTION = {
-  context: 'validate-tests', workflow: '.github/workflows/pr-test-validation.yml',
-};
 const CODEX_AUTHORS = new Set(['chatgpt-codex-connector[bot]', 'codex[agent]']);
 const WORKFLOW = 'cicd.yml';
 const time = value => Date.parse(value || '') || 0;
@@ -271,7 +266,7 @@ async function resolveWorkflowSources({ rules, request }) {
   return sources;
 }
 
-function verifyChecks({ head, number, protection, rules, checks, statuses, runs, strictTestValidation = false, workflowSources = {}, workflowRunSha = head }) {
+function verifyChecks({ head, number, protection, rules, checks, statuses, runs, strictTestValidation = true, workflowSources = {}, workflowRunSha = head }) {
   const applicable = runs.filter(r => r.head_sha === workflowRunSha && r.event === 'pull_request' &&
     (r.pull_requests || []).some(pr => pr.number === number));
   const required = [
@@ -282,7 +277,7 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs,
   const problems = [];
   const stagingSuites = new Set(applicable.filter(stagingWorkflow).map(r => r.check_suite_id));
   for (const expected of required) {
-    if (expected.context === STAGING_CHECK || (!strictTestValidation && expected.context === TEMPORARY_TEST_VALIDATION_EXEMPTION.context)) continue;
+    if (expected.context === STAGING_CHECK) continue;
     const matching = checks.filter(c => c.name === expected.context &&
       (expected.integration_id == null || expected.integration_id < 0 || c.app?.id === expected.integration_id));
     // The org staging-presence workflow calls its job "check-commits".
@@ -299,7 +294,7 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs,
     if (expected.integration_id > 0 && !currentChecks.length) problems.push(`${expected.context}: missing result from required app ${expected.integration_id}`);
   }
   for (const expected of requiredWorkflows) {
-    if (expected.path === STAGING_WORKFLOW || (!strictTestValidation && expected.path === TEMPORARY_TEST_VALIDATION_EXEMPTION.workflow)) continue;
+    if (expected.path === STAGING_WORKFLOW) continue;
     const run = newest(applicable.filter(r => requiredWorkflowMatches({ run: r, expected, sources: workflowSources })));
     if (strictTestValidation && expected.repository_id != null && !workflowSources[String(expected.repository_id)]) {
       problems.push(`${expected.path}: cannot verify required workflow source repository ${expected.repository_id}`);

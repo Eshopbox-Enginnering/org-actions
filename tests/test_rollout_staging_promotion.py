@@ -29,13 +29,9 @@ class RolloutSafetyTests(unittest.TestCase):
         with mock.patch.object(mod, "gh_api", return_value=[{"name": "README.md"}]):
             self.assertFalse(mod.detect_backend("org", "unknown"))
 
-    def test_payload_is_single_atomic_rollout(self):
-        self.assertEqual(set(mod.SOURCE_FILES.values()), {
-            ".github/scripts/auto-staging-deploy.cjs",
-            ".github/scripts/auto-staging-pr.cjs",
-            ".github/scripts/auto-staging-deploy.test.cjs",
-            ".github/scripts/auto-staging-pr.test.cjs",
-            ".github/workflows/auto-staging-deploy.yml",
+    def test_payload_is_single_reusable_workflow_caller(self):
+        self.assertEqual(mod.SOURCE_FILES, {
+            "staging-deploy/auto-staging-caller.yml": ".github/workflows/auto-staging-deploy.yml",
         })
         self.assertFalse(hasattr(mod, "MANIFEST"))
 
