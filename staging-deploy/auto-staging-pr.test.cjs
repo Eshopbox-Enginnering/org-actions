@@ -494,6 +494,31 @@ test('org-required workflow installation ID can differ from source workflow ID',
   assert.equal(requiredWorkflowMatches({ run: { ...run, path: '.github/workflows/other.yml' }, expected, sources }), false);
 });
 
+test('PR 587 required-workflow runs match source rules without installation IDs', () => {
+  const sha = 'd413ce147a278d1d17186a97a48a790dc185cd69';
+  const source = { name: 'Eshopbox-Enginnering/org-actions', sha: 'a'.repeat(40),
+    workflowId: 9001, ref: 'refs/heads/main', path: '.github/workflows/java-test-coverage.yml' };
+  const make = (path, installationId) => ({
+    id: installationId, path, workflow_id: installationId,
+    workflow_url: `https://api.github.com/repos/Eshopbox-Enginnering/esbproductengine/actions/required_workflows/${installationId}`,
+    head_sha: sha, event: 'pull_request', status: 'completed', conclusion: 'success',
+    pull_requests: [{ number: 587 }],
+  });
+  const expected = { repository_id: 1041381819, path: source.path, ref: 'refs/heads/main' };
+  const sources = { '1041381819': source };
+  const run = make(source.path, 407005269);
+  assert.equal(requiredWorkflowMatches({ run, expected, sources }), true);
+  assert.equal(requiredWorkflowMatches({ run: { ...run, workflow_id: 9001 }, expected, sources }), false);
+  assert.equal(requiredWorkflowMatches({ run: { ...run, workflow_url: run.workflow_url.replace('/required_workflows/', '/workflows/') }, expected, sources }), false);
+  assert.equal(requiredWorkflowMatches({ run: { ...run, path: '.github/workflows/other.yml' }, expected, sources }), false);
+  assert.equal(requiredWorkflowMatches({ run, expected: { ...expected, ref: 'refs/heads/staging' }, sources }), false);
+  const titleSource = { ...source, path: '.github/workflows/pr-ticket-validation.yml' };
+  const titleRun = make(titleSource.path, 251085817);
+  assert.equal(requiredWorkflowMatches({ run: titleRun,
+    expected: { ...expected, path: titleSource.path },
+    sources: { '1041381819': titleSource } }), true);
+});
+
 test('SHA-pinned qualified run requires matching source revision proof', () => {
   const sha = 'a'.repeat(40);
   const expected = { path: '.github/workflows/validate.yml', repository_id: 123, sha };
