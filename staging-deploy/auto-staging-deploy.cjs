@@ -7,6 +7,19 @@ const STAGING_CHECK = 'Check PR commits exist in staging';
 const STAGING_WORKFLOW = '.github/workflows/check-commits-in-staging.yml';
 const CODEX_AUTHORS = new Set(['chatgpt-codex-connector[bot]', 'codex[agent]']);
 const WORKFLOW = 'cicd.yml';
+// Reviewed GitHub required-workflow installations: target repo -> id -> configured source.
+// Unknown installations fail closed; do not trust a filename or matching URL alone.
+const TRUSTED_REQUIRED_WORKFLOW_INSTALLATIONS = Object.freeze({
+  'Eshopbox-Enginnering/esb-product-engine-jobs': Object.freeze({
+    '400272849': { repository_id: 1041381819, path: '.github/workflows/java-test-coverage.yml', ref: 'refs/heads/main' },
+    '251714341': { repository_id: 1041381819, path: '.github/workflows/pr-ticket-validation.yml', ref: 'refs/heads/main' },
+  }),
+  'Eshopbox-Enginnering/esbproductengine': Object.freeze({
+    '407005269': { repository_id: 1041381819, path: '.github/workflows/java-test-coverage.yml', ref: 'refs/heads/main' },
+    '251085817': { repository_id: 1041381819, path: '.github/workflows/pr-ticket-validation.yml', ref: 'refs/heads/main' },
+  }),
+});
+
 const time = value => Date.parse(value || '') || 0;
 // GitHub supplies the authenticated login. Codex agent identities need not have
 // the same REST user.type as the connector bot.
@@ -70,21 +83,17 @@ function requiredWorkflowMatches({ run, expected, sources = {} }) {
     if (run.workflow_sha) {
       if (run.workflow_sha !== source.sha) return false;
     } else {
-      const match = /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/actions\/required_workflows\/(\d+)$/.exec(url);
-      const id = match?.[1];
-      // Check the ID against the live source workflow, resolved from the
-      // rule's repository_id + workflow path. This works for all backends
-      // and refuses unknown/lookalike IDs rather than trusting the pilot.
-      // GitHub gives an organization-required workflow installation its own ID,
-      // distinct from the source workflow's ID in org-actions.
-      const installedId = expected.id == null ? source.workflowId : Number(expected.id);
-      if (!id || !Number.isSafeInteger(installedId) || installedId <= 0 ||
-          Number(id) !== installedId ||
-          Number(run.workflow_id) !== installedId ||
-          // A workflow ID by itself cannot prove the configured ref. This
-          // binding came from the current rule's source repository/ref/path.
-          canonicalWorkflowRef(source.ref) !== canonicalWorkflowRef(requiredRef) ||
-          source.path !== expectedLocation.file) return false;
+      const match = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/actions\/required_workflows\/(\d+)$/.exec(url);
+      const destination = match && match[1] + '/' + match[2];
+      const installationId = match?.[3];
+      const trusted = destination && TRUSTED_REQUIRED_WORKFLOW_INSTALLATIONS[destination]?.[installationId];
+      if (!trusted || String(run.workflow_id) !== installationId ||
+          (run.repository?.full_name && run.repository.full_name.toLowerCase() !== destination.toLowerCase()) ||
+          trusted.path !== expectedLocation.file ||
+          Number(trusted.repository_id) !== Number(expected.repository_id) ||
+          canonicalWorkflowRef(trusted.ref) !== canonicalWorkflowRef(requiredRef) ||
+          (expected.id != null && String(expected.id) !== installationId) ||
+          (expected.sha && trusted.sha !== expected.sha)) return false;
     }
   } else if (expectedLocation.source || requiredRef) return false;
   // A SHA-pinned rule must be backed by a verified revision, even when the
