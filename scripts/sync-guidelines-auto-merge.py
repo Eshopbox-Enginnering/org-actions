@@ -180,10 +180,14 @@ def merge_guideline_pr(full, number, target, entries, contents,
 def rollout(repo, org, selected, contents, issue, single=False, rollout_family='guidelines'):
     name = repo["name"]
     full = f"{org}/{name}"
+    # Preserve the existing Guidelines call signatures (and test doubles).
+    # Only staging-deployment needs the explicit family argument.
+    family_kwargs = ({"rollout_family": rollout_family}
+                     if rollout_family != "guidelines" else {})
     holder = {}
     first = sync.process(repo, org, selected, contents, "staging", "APPLY",
                          issue, stage_pr_holder=holder,
-                         require_production=single, rollout_family=rollout_family)
+                         require_production=single, **family_kwargs)
     if first == "blocked":
         return "blocked"
     if holder.get("number"):
@@ -197,7 +201,7 @@ def rollout(repo, org, selected, contents, issue, single=False, rollout_family='
         # The rollout PR has already been restricted to this catalog by process().
         entries = selected.get(kind, []) if kind else []
         merge_guideline_pr(full, holder["number"], staging_target,
-                           entries, contents, rollout_family=rollout_family)
+                           entries, contents, **family_kwargs)
     elif not holder.get("staging_current"):
         return first
     else:
@@ -209,7 +213,7 @@ def rollout(repo, org, selected, contents, issue, single=False, rollout_family='
     second = sync.process(
         repo, org, selected, contents, "production", "APPLY",
         issue, allow_synced_staging=True, stage_pr_holder=prod_holder,
-        require_production=True, rollout_family=rollout_family)
+        require_production=True, **family_kwargs)
     if second == "already_synced":
         return "synced"
     if second not in ("created", "skipped_open_pr") or not prod_holder.get("number"):
@@ -219,7 +223,7 @@ def rollout(repo, org, selected, contents, issue, single=False, rollout_family='
     if not entries:
         return "blocked"
     merge_guideline_pr(full, prod_holder["number"], prod_pr["baseRefName"],
-                       entries, contents, rollout_family=rollout_family)
+                       entries, contents, **family_kwargs)
     return "merged"
 
 
