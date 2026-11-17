@@ -18,7 +18,10 @@ jobs:
   detect-java:
     if: ${{ (github.repository != 'Eshopbox-Enginnering/org-actions') && !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
     name: Detect supported Java repository
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     outputs:
       supported: ${{ steps.detect.outputs.supported }}
       relevant: ${{ steps.changes.outputs.relevant }}
@@ -70,7 +73,10 @@ jobs:
     name: Coverage not applicable
     needs: detect-java
     if: ${{ (always() && needs.detect-java.result == 'success' && (needs.detect-java.outputs.supported == 'false' || needs.detect-java.outputs.relevant == 'false')) && !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     steps:
       - name: Post not-applicable coverage result
         uses: actions/github-script@v8
