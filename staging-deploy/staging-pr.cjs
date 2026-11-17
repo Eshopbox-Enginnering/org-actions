@@ -74,8 +74,8 @@ class StagingPR extends StagingGit {
       const response = await this.app.rest.pulls.create({
         ...this.repo, base:'staging', head:branch,
         title: 'Patch to Staging: Promote reviewed main PR #' + number,
-        body: 'Central-Backlog: https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/' + (issue || '7319') +
-          '\n\nAutomated deployment staging PR. Source: #' + number +
+        body: (issue ? 'Central-Backlog: https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/' + issue + '\n\n' : '') +
+          'Automated deployment staging PR. Source: #' + number +
           '\nReviewed head: ' + head + '\n\nAll standard staging checks and approvals must pass. No administrative bypass.'
       });
       pr = response.data;
