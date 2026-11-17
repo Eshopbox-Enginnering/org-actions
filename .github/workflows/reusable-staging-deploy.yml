@@ -32,12 +32,22 @@ jobs:
           fetch-depth: 0
           path: .central-deploy-target
 
+      - name: Mint read-only central source token
+        id: source-reader
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: org-actions
+          permission-contents: read
+
       - name: Checkout reviewed common automation
         uses: actions/checkout@v4
         with:
           repository: Eshopbox-Enginnering/org-actions
           ref: feature/7319-central-reusable-staging-pilot
-          token: ${{ github.token }}
+          token: ${{ steps.source-reader.outputs.token }}
           persist-credentials: false
           path: .central-deploy-code
 
