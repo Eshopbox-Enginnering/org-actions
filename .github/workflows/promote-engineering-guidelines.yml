@@ -15,7 +15,10 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     steps:
       - uses: actions/checkout@v4
       - name: Compile and run guideline tests
@@ -26,7 +29,10 @@ jobs:
   promote:
     if: github.event_name != 'pull_request'
     needs: test
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     environment: agents-org-production
     permissions:
       contents: read

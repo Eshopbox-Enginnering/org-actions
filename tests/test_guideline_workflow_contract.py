@@ -37,7 +37,7 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         self.assertIn("TRUSTED_LEGACY", source)
         self.assertIn('result.returncode not in (0, 2)', source)
 
-    def test_lightweight_checks_do_not_use_checks_runner(self):
+    def test_lightweight_checks_use_checks_runner(self):
         for name in (
             "pr-test-validation.yml",
             "pr-ticket-validation.yml",
@@ -46,17 +46,16 @@ class GuidelineWorkflowContractTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 content = self.contents(".github/workflows/" + name)
-                self.assertIn("runs-on: ubuntu-", content)
-                self.assertNotIn("group: checks-runners", content.replace(
-                    "#  group: checks-runners", ""))
+                self.assertIn("runs-on:\n      group: checks-runners\n      labels: checks-runner", content)
+                self.assertIn("# runs-on: ubuntu-latest", content)
 
-    def test_java_coverage_reserves_checks_runner_for_heavy_job(self):
+    def test_java_coverage_uses_checks_runner_for_all_jobs(self):
         workflow = self.contents(".github/workflows/java-test-coverage.yml")
         detect = workflow.split("\n  detect-java:", 1)[1].split("\n  not-applicable:", 1)[0]
         not_applicable = workflow.split("\n  not-applicable:", 1)[1].split("\n  coverage:", 1)[0]
         heavy = workflow.split("\n  coverage:", 1)[1]
-        self.assertIn("runs-on: ubuntu-latest", detect)
-        self.assertIn("runs-on: ubuntu-latest", not_applicable)
+        self.assertIn("group: checks-runners", detect)
+        self.assertIn("group: checks-runners", not_applicable)
         self.assertIn("group: checks-runners", heavy)
 
     def test_commit_gate_requires_exact_staging_document_bytes(self):

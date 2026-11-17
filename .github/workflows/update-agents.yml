@@ -52,7 +52,10 @@ jobs:
 
   validate:
     name: Validate request
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
 
     steps:
       - name: Checkout org-actions
@@ -107,7 +110,13 @@ jobs:
     name: Update AGENTS.md
     needs: validate
 
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+
+    runs-on:
+
+      group: checks-runners
+
+      labels: checks-runner
 
     environment:
       name: agents-org-production

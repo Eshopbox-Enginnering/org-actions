@@ -14,7 +14,10 @@ permissions:
 jobs:
   validate-pr-title-and-ticket:
     if: ${{ (github.repository != 'Eshopbox-Enginnering/org-actions') && !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     # runs-on: ubuntu-24.04
     timeout-minutes: 5
 
