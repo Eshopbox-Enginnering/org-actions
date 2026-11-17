@@ -65,7 +65,7 @@ def verify_merged_document_commit(root, merge_sha, verified_base,
 
 
 def merge_guideline_pr(full, number, target, entries, contents,
-                       agents_expected=None, rollout_family='guidelines'):
+                       agents_expected=None):
     """Verify the PR's effective patch, its base, and canonical bytes before merge."""
     pr = sync.gh_json("pr", "view", str(number), "--repo", full,
                       "--json", "number,baseRefName,headRefName,state,mergedAt,url")
@@ -76,9 +76,7 @@ def merge_guideline_pr(full, number, target, entries, contents,
     if pr["state"] != "OPEN":
         raise ValueError(f"{full} PR #{number}: not open")
     head = pr["headRefName"]
-    expected_prefix = ('org-action/staging-deployment-' if rollout_family == 'staging-deployment'
-                       else 'org-action/guidelines-')
-    if not head.startswith(expected_prefix):
+    if not head.startswith("org-action/guidelines-"):
         raise ValueError(f"{full} PR #{number}: not a managed rollout")
     with tempfile.TemporaryDirectory(prefix="guideline-verify-") as tmp:
         root = Path(tmp)
@@ -105,10 +103,7 @@ def merge_guideline_pr(full, number, target, entries, contents,
                 f"{full} PR #{number}: rollout branch must be one commit "
                 f"directly on {target}; never merge staging into main")
         if target in ("main", "master", "aws-velocis-main") and (
-                head.startswith("conflict/") or
-                (rollout_family == 'guidelines' and "staging" in head) or
-                (rollout_family == 'staging-deployment' and
-                 not head.startswith('org-action/staging-deployment-prod-'))):
+                head.startswith("conflict/") or "staging" in head):
             raise ValueError(f"{full} PR #{number}: staging-derived main PR is forbidden")
         changes = set(sync.cmd(
             "git", "diff", "--name-only", f"origin/{target}..origin/{head}",
@@ -177,17 +172,13 @@ def merge_guideline_pr(full, number, target, entries, contents,
     return "merged"
 
 
-def rollout(repo, org, selected, contents, issue, single=False, rollout_family='guidelines'):
+def rollout(repo, org, selected, contents, issue, single=False):
     name = repo["name"]
     full = f"{org}/{name}"
-    # Preserve the existing Guidelines call signatures (and test doubles).
-    # Only staging-deployment needs the explicit family argument.
-    family_kwargs = ({"rollout_family": rollout_family}
-                     if rollout_family != "guidelines" else {})
     holder = {}
     first = sync.process(repo, org, selected, contents, "staging", "APPLY",
                          issue, stage_pr_holder=holder,
-                         require_production=single, **family_kwargs)
+                         require_production=single)
     if first == "blocked":
         return "blocked"
     if holder.get("number"):
@@ -201,7 +192,7 @@ def rollout(repo, org, selected, contents, issue, single=False, rollout_family='
         # The rollout PR has already been restricted to this catalog by process().
         entries = selected.get(kind, []) if kind else []
         merge_guideline_pr(full, holder["number"], staging_target,
-                           entries, contents, **family_kwargs)
+                           entries, contents)
     elif not holder.get("staging_current"):
         return first
     else:
@@ -213,7 +204,7 @@ def rollout(repo, org, selected, contents, issue, single=False, rollout_family='
     second = sync.process(
         repo, org, selected, contents, "production", "APPLY",
         issue, allow_synced_staging=True, stage_pr_holder=prod_holder,
-        require_production=True, **family_kwargs)
+        require_production=True)
     if second == "already_synced":
         return "synced"
     if second not in ("created", "skipped_open_pr") or not prod_holder.get("number"):
@@ -223,7 +214,7 @@ def rollout(repo, org, selected, contents, issue, single=False, rollout_family='
     if not entries:
         return "blocked"
     merge_guideline_pr(full, prod_holder["number"], prod_pr["baseRefName"],
-                       entries, contents, **family_kwargs)
+                       entries, contents)
     return "merged"
 
 
