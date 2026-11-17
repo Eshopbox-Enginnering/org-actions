@@ -25,7 +25,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     steps:
       - uses: actions/checkout@v4
       - name: Validate script and regression tests
