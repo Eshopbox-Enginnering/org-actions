@@ -26,7 +26,7 @@ class StagingPR extends StagingGit {
 
     // The merge commit has staging first and the reviewed main PR head second.
     // The main PR head therefore remains an ancestor of the eventual staging result.
-    let commit = (await this.git('-c', 'user.name=github-actions[bot]'
+    let commit = (await this.git('-c', 'user.name=github-actions[bot]',
       '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
       'commit-tree', tree, '-p', this.staging, '-p', head,
       '-m', 'Promote reviewed PR #' + number + ' into staging')).trim();
