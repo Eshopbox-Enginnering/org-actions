@@ -65,8 +65,7 @@ class StagingPR extends StagingGit {
         throw new Error('Existing staging promotion branch differs from reviewed tree or parents: ' + branch);
       commit = oldSha;
     }
-    if (!existing) await this.run('git', ['-c', 'core.hooksPath=/dev/null', 'push', 'origin',
-      commit + ':refs/heads/' + branch], {stagingAuth:true});
+    if (!existing) await this.git('push', 'origin', commit + ':refs/heads/' + branch);
 
     let prs = await this.app.rest.pulls.list({...this.repo, state:'open', head:this.repo.owner + ':' + branch, base:'staging'});
     let pr = prs.data[0];
