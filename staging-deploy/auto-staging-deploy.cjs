@@ -232,7 +232,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
 
 **Main PR:** [#${number}](${statusUrl}/pull/${number})
 **Workflow run:** [View execution](${statusUrl}/actions/runs/${context.runId})
-${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/releases/tag/${process.env.STAGING_TAG})\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\n` : ''}
+${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/tree/${process.env.STAGING_TAG})\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\n` : ''}
 ${message.startsWith('❌') ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
     if (!statusId) {
       const existing = await pages('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', { issue_number: number });
@@ -276,7 +276,7 @@ ${message.startsWith('❌') ? '**Action required:** Review the failure and retry
             time(c.created_at) >= time(latestRequest?.created_at) && time(c.created_at) >= time(pr.created_at));
         if (!quotaEvidence) throw codexError;
         const human = [...reviews].filter(r => r.state === 'APPROVED' && r.commit_id === head &&
-          r.user?.login !== pr.user.login && time(r.submitted_at) >= time(pr.head?.repo?.pushed_at || pr.created_at))
+          r.user?.login !== pr.user.login && time(r.submitted_at) >= time(pr.created_at))
           .sort((a,b) => time(b.submitted_at) - time(a.submitted_at));
         const latestHuman = human[0];
         if (!latestHuman) throw new Error('Codex quota exhausted: an authorized human approval on the current head is required.');
@@ -363,7 +363,7 @@ ${message.startsWith('❌') ? '**Action required:** Review the failure and retry
       await git.assertStaging(commit);
       if (!deployment || deployment.status === 'completed') {
         const previous = deployment?.id || 0;
-        await run('gh', ['workflow', 'run', WORKFLOW, '--ref', tag, '--repo', `${repo.owner}/${repo.repo}`]);
+        await request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', { workflow_id: WORKFLOW, ref: tag });
         deployment = undefined;
         const deadline = now() + 120000;
         do {
@@ -371,6 +371,8 @@ ${message.startsWith('❌') ? '**Action required:** Review the failure and retry
           if (!deployment) await sleep(5000);
         } while (!deployment && now() < deadline);
         if (!deployment) throw new Error(`Dispatched ${tag}, but could not locate its deployment run. Retry /deploy-staging to resume.`);
+        process.env.STAGING_RUN_URL = deployment.html_url;
+        await status('⏳ CI/CD dispatched; waiting for staging deployment');
       }
       const deadline = now() + 70 * 60 * 1000;
       while (deployment.status !== 'completed') {
