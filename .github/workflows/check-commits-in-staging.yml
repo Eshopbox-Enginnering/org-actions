@@ -23,7 +23,10 @@ on:
 jobs:
   check-commits:
     if: ${{ (github.repository != 'Eshopbox-Enginnering/org-actions') && !(startsWith(github.head_ref, 'org-action/agents-') || startsWith(github.head_ref, 'org-action/guidelines-')) }}
-    runs-on: ubuntu-latest
+    # runs-on: ubuntu-latest
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
 
     timeout-minutes: 10
 
