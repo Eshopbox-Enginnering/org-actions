@@ -25,10 +25,10 @@ test('old-head Codex review is rejected', () => {
 test('staging-presence check is exempt but other missing checks block', () => {
   assert.doesNotThrow(() => verifyChecks({head:SHA,number:1,
     protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits'}]},
-    rules:[],checks:[],statuses:[],runs:[]}));
+    rules:[{type:'workflows',parameters:{workflows:[{path:'.github/workflows/check-commits-in-staging.yml'}]}}],checks:[],statuses:[],runs:[]}));
   assert.throws(() => verifyChecks({head:SHA,number:1,
     protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits'},{context:'java-tests'}]},
-    rules:[],checks:[],statuses:[],runs:[]}),/java-tests: missing/);
+    rules:[{type:'workflows',parameters:{workflows:[{path:'.github/workflows/check-commits-in-staging.yml'}]}}],checks:[],statuses:[],runs:[]}),/java-tests: missing/);
 });
 test('versioning retains numeric patch ordering', () => {
   assert.equal(nextTag(['dev-v1.1.9','dev-v1.1.10','dev-v1.2.0']), 'dev-v1.2.1');
