@@ -26,7 +26,7 @@ class StagingPR extends StagingGit {
 
     // The merge commit has staging first and the reviewed main PR head second.
     // The main PR head therefore remains an ancestor of the eventual staging result.
-    const commit = (await this.git('-c', 'user.name=github-actions[bot]',
+    let commit = (await this.git('-c', 'user.name=github-actions[bot]'
       '-c', 'user.email=41898282+github-actions[bot]@users.noreply.github.com',
       'commit-tree', tree, '-p', this.staging, '-p', head,
       '-m', 'Promote reviewed PR #' + number + ' into staging')).trim();
@@ -39,8 +39,15 @@ class StagingPR extends StagingGit {
       if (e.status === 404) return null;
       throw e;
     });
-    if (existing && existing.data.object.sha !== commit)
-      throw new Error('Staging promotion branch exists with a different SHA: ' + branch + '. Needs manual inspection.');
+    if (existing && existing.data.object.sha !== commit) {
+      // commit-tree timestamps differ between attempts. Reuse an existing
+      // trusted promotion commit only when the exact tree and both parents match.
+      const oldSha = existing.data.object.sha;
+      const meta = await this.git('cat-file', '-p', oldSha).catch(() => '');
+      if (!meta.startsWith('tree ' + tree + '\\nparent ' + this.staging + '\\nparent ' + head + '\\n'))
+        throw new Error('Existing staging promotion branch differs from reviewed tree or parents: ' + branch);
+      commit = oldSha;
+    }
     if (!existing) await this.run('git', ['-c', 'core.hooksPath=/dev/null', 'push', 'origin',
       commit + ':refs/heads/' + branch], {stagingAuth:true});
 
@@ -93,6 +100,8 @@ class StagingPR extends StagingGit {
     await this.git('fetch', '--no-recurse-submodules', 'origin',
       '+refs/heads/staging:refs/remotes/origin/staging', '+refs/tags/*:refs/tags/*');
     this.staging = (await this.git('rev-parse','refs/remotes/origin/staging')).trim();
+    if (finalPR.merge_commit_sha && this.staging !== finalPR.merge_commit_sha)
+      throw new Error('Staging advanced after merging the promotion PR; refuse to tag an unreviewed snapshot.');
     await this.git('merge-base', '--is-ancestor', head, this.staging).catch(() => {
       throw new Error('Merged staging does not contain reviewed main PR head. Refusing to deploy.');
     });
