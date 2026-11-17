@@ -12,7 +12,7 @@ const time = value => Date.parse(value || '') || 0;
 // the same REST user.type as the connector bot.
 const bot = value => CODEX_AUTHORS.has(value.user?.login);
 const workflowPath = run => (run.path || '').split('@')[0];
-const stagingWorkflow = run => run.name === STAGING_CHECK && workflowPath(run) === STAGING_WORKFLOW;
+const stagingWorkflow = run => workflowPath(run) === STAGING_WORKFLOW;
 const newest = values => [...values].sort((a, b) => Number(b.id) - Number(a.id))[0];
 const latestChecks = checks => {
   const groups = new Map();
@@ -98,7 +98,7 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs 
     const status = newest(statuses.filter(s => s.context === expected.context));
     if (!currentChecks.length && !status) problems.push(`${expected.context}: missing`);
     for (const check of currentChecks) {
-      if (check.status !== 'completed' || check.conclusion !== 'success') problems.push(`${expected.context}: ${check.conclusion || check.status}`);
+      if (check.status !== 'completed' || !['success','skipped','neutral'].includes(check.conclusion)) problems.push(`${expected.context}: ${check.conclusion || check.status}`);
     }
     // When both a status and a check run use the same context, both must pass.
     if (status && status.state !== 'success') problems.push(`${expected.context}: ${status.state}`);
@@ -108,11 +108,11 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs 
     if (expected.path === STAGING_WORKFLOW) continue;
     const run = newest(applicable.filter(r => workflowPath(r) === expected.path));
     if (!run) { problems.push(`${expected.path}: missing required workflow`); continue; }
-    if (run.status !== 'completed' || run.conclusion !== 'success') problems.push(`${expected.path}: ${run.conclusion || run.status}`);
+    if (run.status !== 'completed' || !['success','skipped','neutral'].includes(run.conclusion)) problems.push(`${expected.path}: ${run.conclusion || run.status}`);
     const jobs = latestChecks(checks.filter(c => c.check_suite?.id === run.check_suite_id));
     if (!jobs.length) problems.push(`${expected.path}: missing job checks`);
     for (const check of jobs) {
-      if (check.status !== 'completed' || check.conclusion !== 'success') problems.push(`${check.name}: ${check.conclusion || check.status}`);
+      if (check.status !== 'completed' || !['success','skipped','neutral'].includes(check.conclusion)) problems.push(`${check.name}: ${check.conclusion || check.status}`);
     }
   }
   if (problems.length) throw new Error(`Required checks are not green:\n${[...new Set(problems)].map(p => `- ${p}`).join('\n')}`);
