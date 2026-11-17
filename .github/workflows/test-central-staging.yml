@@ -1,0 +1,28 @@
+name: Test central staging promotion
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/reusable-staging-deploy.yml'
+      - '.github/workflows/test-central-staging.yml'
+      - 'staging-deploy/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check JavaScript syntax
+        run: |
+          node --check staging-deploy/auto-staging-deploy.cjs
+          node --check staging-deploy/staging-pr.cjs
+          node --check staging-deploy/staging-deploy.test.cjs
+      - name: Run staging automation tests
+        run: node --test staging-deploy/staging-deploy.test.cjs
