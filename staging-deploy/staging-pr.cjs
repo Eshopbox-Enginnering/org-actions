@@ -44,7 +44,7 @@ class StagingPR extends StagingGit {
       // trusted promotion commit only when the exact tree and both parents match.
       const oldSha = existing.data.object.sha;
       const meta = await this.git('cat-file', '-p', oldSha).catch(() => '');
-      if (!meta.startsWith('tree ' + tree + '\\nparent ' + this.staging + '\\nparent ' + head + '\\n'))
+      if (!meta.startsWith('tree ' + tree + '\nparent ' + this.staging + '\nparent ' + head + '\\n'))
         throw new Error('Existing staging promotion branch differs from reviewed tree or parents: ' + branch);
       commit = oldSha;
     }
