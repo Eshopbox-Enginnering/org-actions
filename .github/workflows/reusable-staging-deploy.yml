@@ -20,7 +20,7 @@ jobs:
       (github.event.comment.body == '/deploy-staging' ||
        startsWith(github.event.comment.body, '/force-deploy-staging'))
     runs-on: self-hosted
-    timeout-minutes: 90
+    timeout-minutes: 120
     concurrency:
       group: central-staging-${{ github.repository }}
       cancel-in-progress: false
@@ -46,7 +46,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Eshopbox-Enginnering/org-actions
-          ref: feature/7319-central-reusable-staging-pilot
+          ref: c295e5c552a1c5873d52e6ce670efd37921c3d34
           token: ${{ steps.source-reader.outputs.token }}
           persist-credentials: false
           path: .central-deploy-code
