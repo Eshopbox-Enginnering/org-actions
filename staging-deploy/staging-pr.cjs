@@ -12,6 +12,21 @@ class StagingPR extends StagingGit {
   }
 
   async publish({number, head, issue, assertCurrent, status}) {
+    // If this exact reviewed head is already in staging (e.g. prior promotion
+    // merged, but tag or dispatch failed), resume at tagging instead of
+    // creating another PR.
+    let headAlreadyMerged = false;
+    try { await this.git('merge-base', '--is-ancestor', head, this.staging); headAlreadyMerged = true; }
+    catch {}
+    if (headAlreadyMerged) {
+      await assertCurrent();
+      const tag = nextTag((await this.git('tag', '--list', 'dev-v*')).trim().split('\n'));
+      await this.git('-c','user.name=github-actions[bot]',
+        '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
+        'tag','-a',tag,this.staging,'-m','auto-staging-deploy:v1 ' + JSON.stringify({pr:number,head}));
+      await this.git('push','origin','refs/tags/' + tag + ':refs/tags/' + tag);
+      return {tag,commit:this.staging};
+    }
     let tree;
     try {
       tree = (await this.git('merge-tree', '--write-tree', this.staging, head)).trim().split(/\s+/)[0];
@@ -40,6 +55,8 @@ class StagingPR extends StagingGit {
       throw e;
     });
     if (existing && existing.data.object.sha !== commit) {
+      await this.git('fetch', '--no-recurse-submodules', 'origin',
+        '+refs/heads/' + branch + ':refs/remotes/origin/' + branch);
       // commit-tree timestamps differ between attempts. Reuse an existing
       // trusted promotion commit only when the exact tree and both parents match.
       const oldSha = existing.data.object.sha;
