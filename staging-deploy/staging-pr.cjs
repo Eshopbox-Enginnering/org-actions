@@ -24,7 +24,9 @@ class StagingPR extends StagingGit {
       await this.git('-c','user.name=github-actions[bot]',
         '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
         'tag','-a',tag,this.staging,'-m','auto-staging-deploy:v1 ' + JSON.stringify({pr:number,head}));
-      await this.git('push','origin','refs/tags/' + tag + ':refs/tags/' + tag);
+      await this.git('push','--atomic','origin',
+        this.staging + ':refs/heads/staging',
+        'refs/tags/' + tag + ':refs/tags/' + tag);
       return {tag,commit:this.staging};
     }
     let tree;
@@ -86,6 +88,13 @@ class StagingPR extends StagingGit {
     // Fail closed: never use a protected-branch bypass. "clean" is GitHub's
     // mergeability verdict after branch rules, review requirements and checks.
     // A pending PR remains visible for authorized human review.
+    const settings = (await this.app.rest.repos.get(this.repo)).data;
+    if (!settings.allow_merge_commit)
+      throw new Error('Staging repository disallows merge commits. This pilot requires an ancestry-preserving promotion; squash/rebase are unsupported: ' + pr.html_url);
+    const activeRules = await this.api.paginate(this.api.rest.repos.getBranchRules, {...this.repo, branch:'staging', per_page:100})
+      .catch(error => { throw new Error('Could not read staging branch rules: ' + error.message); });
+    if (activeRules.some(rule => rule.type === 'merge_queue'))
+      throw new Error('Staging requires a merge queue. Direct PR merge is unsupported; queue support is needed before rollout: ' + pr.html_url);
     const deadline = Date.now() + 20 * 60 * 1000;
     while (Date.now() < deadline) {
       await assertCurrent();
@@ -127,7 +136,9 @@ class StagingPR extends StagingGit {
       '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
       'tag','-a',tag,this.staging,'-m','auto-staging-deploy:v1 ' + JSON.stringify({pr:number,head}));
     // GITHUB_TOKEN is deliberately used for the tag to avoid duplicate tag-push deploys.
-    await this.git('push','origin','refs/tags/' + tag + ':refs/tags/' + tag);
+    await this.git('push','--atomic','origin',
+        this.staging + ':refs/heads/staging',
+        'refs/tags/' + tag + ':refs/tags/' + tag);
     return {tag,commit:this.staging};
   }
 }
