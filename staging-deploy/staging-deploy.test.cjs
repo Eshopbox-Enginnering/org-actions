@@ -48,3 +48,36 @@ test('structured single-comment reporting and quota fallback are present', () =>
   assert.match(source,/Codex quota exhausted/);
   assert.match(source,/STAGING_RUN_URL/);
 });
+
+test('real staging caller check is exempt only when linked to staging workflow run', () => {
+  const run = {id:4,event:'pull_request',head_sha:SHA,pull_requests:[{number:1}],
+    path:'.github/workflows/check-commits-in-staging.yml@main',check_suite_id:42};
+  const stagingCheck = {name:'check-commits-in-staging',app:{id:15368},check_suite:{id:42},
+    status:'completed',conclusion:'failure'};
+  const otherFail = {name:'java-tests',app:{id:15368},check_suite:{id:43},
+    status:'completed',conclusion:'failure'};
+  const base = {head:SHA,number:1,protection:{requiresStatusChecks:true,requiredStatusChecks:[
+    {context:'check-commits-in-staging'},{context:'java-tests'}]}, rules:[],statuses:[],runs:[run]};
+  assert.throws(() => verifyChecks({...base,checks:[stagingCheck,otherFail]}),/java-tests: failure/);
+  assert.doesNotThrow(() => verifyChecks({...base,checks:[stagingCheck],
+    protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-in-staging'}]}}));
+  assert.throws(() => verifyChecks({...base,checks:[{...stagingCheck,check_suite:{id:99}}],
+    protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-in-staging'}]}}),/check-commits-in-staging: failure/);
+});
+test('staging PR promotion fails closed without merge support or queue support', () => {
+  const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.match(s,/allow_merge_commit/);
+  assert.match(s,/merge_queue/);
+  assert.match(s,/--atomic/);
+  assert.match(s,/refs\/heads\/staging/);
+});
+test('quota fallback has a head-bound structured proof, not prose substring matching', () => {
+  const s = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.match(s,/codex-review-unavailable:v1/);
+  assert.match(s,/receipt\.status === 'rate_limited' && receipt\.commit_sha === head/);
+  assert.doesNotMatch(s,/some\(c => \/\(\?:rate limit\|usage limit/);
+});
+test('fork pull requests are blocked before staging promotion', () => {
+  const s = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.match(s,/pr\.head\.repo\?\.id !== pr\.base\.repo\?\.id/);
+});
