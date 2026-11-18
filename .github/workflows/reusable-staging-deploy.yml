@@ -46,7 +46,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Eshopbox-Enginnering/org-actions
-          ref: c295e5c552a1c5873d52e6ce670efd37921c3d34
+          ref: 219088b7d0daca3d89248476bccd1c46007fb70e
           token: ${{ steps.source-reader.outputs.token }}
           persist-credentials: false
           path: .central-deploy-code
