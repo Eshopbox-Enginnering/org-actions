@@ -88,12 +88,15 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs 
   const problems = [];
   const stagingSuites = new Set(applicable.filter(stagingWorkflow).map(r => r.check_suite_id));
   for (const expected of required) {
-    if (expected.context === STAGING_CHECK) continue;
     const matching = checks.filter(c => c.name === expected.context &&
       (expected.integration_id == null || expected.integration_id < 0 || c.app?.id === expected.integration_id));
-    // The org staging-presence workflow calls its job "check-commits".
-    if (expected.context === 'check-commits' && matching.length && matching.every(c => stagingSuites.has(c.check_suite?.id))) continue;
-    if (expected.context === 'check-commits' && !matching.length && requiredWorkflows.some(w => w.path === STAGING_WORKFLOW)) continue;
+    // Exempt only staging-presence contexts, never unrelated failing checks.
+    // Reusable workflow callers may publish a caller/callee check name instead
+    // of the literal check-commits job name.
+    const presenceName = /^(?:check-commits|check-commits-in-staging|Check PR commits exist in staging)(?: \/ .+)?$/i.test(expected.context);
+    const belongsToPresenceRun = matching.length > 0 && matching.every(c => stagingSuites.has(c.check_suite?.id));
+    const presenceWorkflowConfigured = requiredWorkflows.some(w => w.path === STAGING_WORKFLOW);
+    if (presenceName && (belongsToPresenceRun || (!matching.length && presenceWorkflowConfigured))) continue;
     const currentChecks = latestChecks(matching);
     const status = newest(statuses.filter(s => s.context === expected.context));
     if (!currentChecks.length && !status) problems.push(`${expected.context}: missing`);
@@ -257,6 +260,10 @@ ${message.startsWith('❌') ? '**Action required:** Review the failure and retry
     }
     const pr = await getPR();
     if (pr.state !== 'open' || pr.base.ref !== 'main') throw new Error('Only open PRs targeting main can deploy to staging.');
+    // Re-publishing fork code as a same-repository branch would grant its
+    // staging pull_request checks higher privileges than the original fork PR.
+    if (pr.head.repo?.id !== pr.base.repo?.id)
+      throw new Error('Fork pull requests cannot be promoted automatically: the staging PR would lose fork security restrictions. Use a trusted in-repository feature branch after review.');
     const head = pr.head.sha;
     const assertCurrent = async () => {
       const current = await getPR();
@@ -271,9 +278,18 @@ ${message.startsWith('❌') ? '**Action required:** Review the failure and retry
       try {
         verifyCodex({ head, comments, reviews, reactions, requestId: latestRequest?.id });
       } catch (codexError) {
+        // Only an authenticated Codex bot's structured, head-bound unavailable
+        // receipt permits a human-review fallback. Ordinary prose (including
+        // review findings mentioning "rate limit") is never quota evidence.
         const quotaEvidence = comments.filter(c => ['chatgpt-codex-connector[bot]', 'codex[agent]'].includes(c.user?.login))
-          .some(c => /(?:rate limit|usage limit|quota exceeded|review limit reached)/i.test(c.body || '') &&
-            time(c.created_at) >= time(latestRequest?.created_at) && time(c.created_at) >= time(pr.created_at));
+          .some(c => {
+            const match = (c.body || '').match(/<!-- codex-review-unavailable:v1 (\{[^\n]*\}) -->/);
+            if (!match || time(c.created_at) < time(latestRequest?.created_at)) return false;
+            try {
+              const receipt = JSON.parse(match[1]);
+              return receipt.status === 'rate_limited' && receipt.commit_sha === head;
+            } catch { return false; }
+          });
         if (!quotaEvidence) throw codexError;
         const human = [...reviews].filter(r => r.state === 'APPROVED' && r.commit_id === head &&
           r.user?.login !== pr.user.login && time(r.submitted_at) >= time(pr.created_at))
