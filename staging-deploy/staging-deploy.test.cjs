@@ -81,3 +81,30 @@ test('fork pull requests are blocked before staging promotion', () => {
   const s = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
   assert.match(s,/pr\.head\.repo\?\.id !== pr\.base\.repo\?\.id/);
 });
+
+test('current-head completed clean Codex review summary clears without explicit request', () => {
+  const state = {code_review: {commit_sha: SHA, status: 'completed', has_any_findings: false,
+    has_unresolved_findings: false}};
+  const summary = {id:2, ...bot, created_at:'2026-11-18T09:01:48Z',
+    body:'<!-- codex-review-state:v1 ' + JSON.stringify(state) + ' -->'};
+  assert.doesNotThrow(() => verifyCodex({head:SHA,comments:[summary],reviews:[],reactions:[]}));
+});
+test('Codex summary fails closed for stale SHA, findings and pending status', () => {
+  const cases = [
+    {commit_sha:'b'.repeat(40),status:'completed',has_any_findings:false,has_unresolved_findings:false},
+    {commit_sha:SHA,status:'completed',has_any_findings:true,has_unresolved_findings:true},
+    {commit_sha:SHA,status:'pending',has_any_findings:false,has_unresolved_findings:false},
+  ];
+  for (const code_review of cases) {
+    const comment = {id:2,...bot,created_at:'2026-11-18T09:01:48Z',
+      body:'<!-- codex-review-state:v1 ' + JSON.stringify({code_review}) + ' -->'};
+    assert.throws(() => verifyCodex({head:SHA,comments:[comment],reviews:[],reactions:[]}),/has not cleared/);
+  }
+});
+test('newer Codex review request invalidates an earlier clean summary', () => {
+  const code_review = {commit_sha:SHA,status:'completed',has_any_findings:false,has_unresolved_findings:false};
+  const comments = [{id:2,...bot,created_at:'2026-11-18T09:01:48Z',
+    body:'<!-- codex-review-state:v1 ' + JSON.stringify({code_review}) + ' -->'},
+    {id:3,body:'@codex review',created_at:'2026-11-18T10:00:00Z'}];
+  assert.throws(() => verifyCodex({head:SHA,comments,reviews:[],reactions:[],requestId:3}),/has not cleared/);
+});
