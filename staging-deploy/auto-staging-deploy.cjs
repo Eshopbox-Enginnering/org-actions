@@ -72,7 +72,12 @@ function verifyCodex({ head, comments, reviews, reactions, requestId }) {
   const bound = summary?.state?.commit_sha === head && summary.state.status === 'completed' &&
     summary.state.has_any_findings === false && summary.state.has_unresolved_findings === false &&
     time(summary.date) >= time(latestRequest?.created_at);
-  if (latestRequest && latestRequest.id === requestId && approval && (bound || explicitHead) &&
+  // Current Codex emits a trusted machine-readable review summary after
+  // automatic PR review, even when no explicit @codex request or bot reaction
+  // exists. A completed, finding-free summary for this exact head is clearance.
+  // Still reject older summaries when a newer review was requested.
+  if (bound) return;
+  if (latestRequest && latestRequest.id === requestId && approval && explicitHead &&
       (!latest || time(latest.date) <= time(approval.created_at))) return;
   throw new Error(`Codex has not cleared PR head ${head}. The latest Codex review must say "Didn't find any major issues" for this SHA, or Codex must react 👍 to the latest @codex review request with a summary bound to this SHA. Request a fresh @codex review if the head changed.`);
 }
