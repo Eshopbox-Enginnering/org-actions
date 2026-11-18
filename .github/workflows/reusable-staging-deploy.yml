@@ -51,12 +51,14 @@ jobs:
           persist-credentials: false
           path: .central-deploy-code
 
+      # Reuse the App already proven to work for organization-wide PR operations.
+      # Scope this token to the caller repository; no new credentials needed.
       - name: Mint target-repository App token
         uses: actions/create-github-app-token@v2
         id: app
         with:
-          app-id: ${{ vars.STAGING_DEPLOY_APP_ID }}
-          private-key: ${{ secrets.STAGING_DEPLOY_APP_PRIVATE_KEY }}
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
