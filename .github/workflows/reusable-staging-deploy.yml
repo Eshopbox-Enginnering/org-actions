@@ -81,8 +81,9 @@ jobs:
             const root = process.env.GITHUB_WORKSPACE;
             const {deploy, command} = require(path.join(root, '.central-deploy-code/staging-deploy/auto-staging-deploy.cjs'));
             const {StagingPR} = require(path.join(root, '.central-deploy-code/staging-deploy/staging-pr.cjs'));
-            const {getOctokit} = require('@actions/github');
-            const app = getOctokit(process.env.STAGING_DEPLOY_APP_TOKEN);
+            // actions/github-script supplies an authenticated Octokit instance;
+            // reuse its constructor instead of importing an unavailable module.
+            const app = new github.constructor({auth: process.env.STAGING_DEPLOY_APP_TOKEN});
             const caller = github;
             const cwd = path.join(root, process.env.DEPLOY_DIRECTORY);
             const run = (file, args, options) => command(file, args, cwd, options);
