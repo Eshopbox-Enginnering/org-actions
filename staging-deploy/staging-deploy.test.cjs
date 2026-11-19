@@ -3,7 +3,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {verifyCodex, verifyChecks, nextTag, StagingGit} = require('./auto-staging-deploy.cjs');
+const {verifyCodex, verifyChecks, nextTag, StagingGit, hasCodexQuotaEvidence} = require('./auto-staging-deploy.cjs');
 const {StagingPR,promotionReadiness} = require('./staging-pr.cjs');
 
 const SHA = 'a'.repeat(40);
@@ -210,4 +210,27 @@ test('staging status distinguishes a replay from a new promotion', () => {
   assert.match(source,/Existing staging promotion verified \(no new PR or merge\)/);
   assert.match(source,/no new tag or deployment/);
   assert.match(source,/Staging PR auto-merged by authorized GitHub App/);
+});
+
+test('exact authenticated Codex quota response plus failed current-head summary enables human fallback', () => {
+  const head = SHA;
+  const summary = {id:2,...bot,created_at:'2026-11-19T12:04:28Z',
+    body:'<!-- codex-review-state:v1 ' + JSON.stringify({code_review:{
+      commit_sha:head,status:'failed',has_any_findings:true,has_unresolved_findings:true
+    }}) + ' -->'};
+  const quota = {id:3,...bot,created_at:'2026-11-19T12:04:30Z',
+    body:'You have reached your Codex usage limits for code reviews. You can see your limits in the [Codex usage dashboard](https://chatgpt.com/codex/cloud/settings/usage).'};
+  const base = {comments:[summary,quota],head,prCreatedAt:Date.parse('2026-11-19T12:03:00Z')};
+  assert.equal(hasCodexQuotaEvidence(base),true);
+  assert.equal(hasCodexQuotaEvidence({...base,head:'b'.repeat(40)}),false);
+  assert.equal(hasCodexQuotaEvidence({...base,latestRequestAt:Date.parse('2026-11-19T12:05:00Z')}),false);
+  assert.equal(hasCodexQuotaEvidence({...base,comments:[quota]}),false);
+  assert.equal(hasCodexQuotaEvidence({...base,comments:[{...quota,user:{login:'someone-else'}} ,summary]}),false);
+  assert.equal(hasCodexQuotaEvidence({...base,comments:[{...summary,body:summary.body.replace('failed','completed')},quota]}),false);
+});
+test('structured current-head Codex rate-limit receipt remains supported', () => {
+  const evidence = {id:4,...bot,created_at:'2026-11-19T12:04:30Z',
+    body:'<!-- codex-review-unavailable:v1 ' + JSON.stringify({status:'rate_limited',commit_sha:SHA}) + ' -->'};
+  assert.equal(hasCodexQuotaEvidence({comments:[evidence],head:SHA}),true);
+  assert.equal(hasCodexQuotaEvidence({comments:[evidence],head:'b'.repeat(40)}),false);
 });
