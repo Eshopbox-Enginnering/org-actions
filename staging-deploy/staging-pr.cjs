@@ -30,6 +30,8 @@ function promotionReadiness({checks, statuses, rules, protection, runs, sha, hea
       if (check.status !== 'completed') pending.push(req.context);
       else if (!['success','neutral','skipped'].includes(check.conclusion))
         errors.push(req.context + ': ' + check.conclusion);
+    } else if (req.app_id && req.app_id !== -1) {
+      pending.push(req.context + ': required app check missing');
     } else if (!status) pending.push(req.context + ': missing');
     if (status?.state === 'pending') pending.push(req.context + ': status pending');
     else if (status && status.state !== 'success') errors.push(req.context + ': ' + status.state);
