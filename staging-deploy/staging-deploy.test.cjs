@@ -36,7 +36,10 @@ test('versioning retains numeric patch ordering', () => {
 test('staging PR implementation replaces direct promotion', () => {
   assert.ok(StagingPR.prototype instanceof StagingGit);
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(s,/mergeable_state === 'clean'/);
+  assert.match(s,/--admin/);
+  assert.match(s,/--match-head-commit/);
+  assert.match(s,/appAuth:true/);
+  assert.doesNotMatch(s,/mergeable_state === 'clean'/);
   assert.match(s,/merge_method:'merge'/);
   assert.match(s,/commit-tree/);
   assert.doesNotMatch(s,/refs\/heads\/staging'\]/);
@@ -129,4 +132,16 @@ test('deployment status does not repeat PR number and marks failed stages accura
   assert.doesNotMatch(source,/Staging deployment · PR #|Main PR:/);
   assert.ok(source.includes("if (failed && failedStep === key) return '❌ Failed'"));
   assert.ok(source.includes("failed ? '⏭️ Not started'"));
+});
+
+test('auto staging merge uses approved App token and refuses missing credentials', () => {
+  const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  const staging = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.match(source,/env\.GH_TOKEN = env\.STAGING_DEPLOY_APP_TOKEN/);
+  assert.match(source,/Organization App token is missing/);
+  assert.match(staging,/--match-head-commit/);
+  assert.match(staging,/if \(bad\.length/);
+  assert.match(staging,/if \(!pending && checks\.length\)/);
+  assert.match(staging,/current\.base\.sha !== this\.staging/);
+  assert.doesNotMatch(staging,/refs\/heads\/staging'\]/);
 });
