@@ -5,7 +5,7 @@ const {StagingGit, nextTag} = require('./auto-staging-deploy.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Fail closed on an absent required check; --admin intentionally bypasses
 // GitHub's review rules so CI readiness must be checked explicitly.
-function promotionReadiness({checks, statuses, rules, protection, runs, sha}) {
+function promotionReadiness({checks, statuses, rules, protection, runs, sha, head, number}) {
   const byName = new Map();
   for (const check of checks) {
     const key = check.name;
@@ -17,7 +17,8 @@ function promotionReadiness({checks, statuses, rules, protection, runs, sha}) {
     ...(protection?.required_status_checks?.contexts || []).map(context => ({context})),
     ...(protection?.required_status_checks?.checks || []).map(check => ({context:check.context,app_id:check.app_id})),
     ...rules.filter(rule => rule.type === 'required_status_checks')
-      .flatMap(rule => rule.parameters?.required_status_checks || []),
+      .flatMap(rule => rule.parameters?.required_status_checks || [])
+      .map(check => ({context:check.context,app_id:check.integration_id ?? check.app_id})),
   ];
   const errors = [];
   const pending = [];
@@ -36,15 +37,21 @@ function promotionReadiness({checks, statuses, rules, protection, runs, sha}) {
   const requiredWorkflows = rules.filter(rule => rule.type === 'workflows')
     .flatMap(rule => rule.parameters?.workflows || []);
   for (const wf of requiredWorkflows) {
-    const run = runs.find(run => run.head_sha === sha &&
+    const run = runs.find(run => run.head_sha === head && run.event === 'pull_request' &&
+      (run.pull_requests || []).some(pr => pr.number === number) &&
       (run.path || '').split('@')[0] === wf.path &&
-      (!wf.repository_id || run.repository?.id === wf.repository_id));
+      (!wf.repository_id || run.repository?.id === wf.repository_id) &&
+      checks.some(c => c.check_suite?.id === run.check_suite_id));
     if (!run) { pending.push(wf.path + ': missing required workflow'); continue; }
     if (run.status !== 'completed') pending.push(wf.path + ': running');
     else if (!['success','neutral','skipped'].includes(run.conclusion))
       errors.push(wf.path + ': ' + run.conclusion);
-    if (!checks.some(c => c.check_suite?.id === run.check_suite_id))
-      pending.push(wf.path + ': check suite not available');
+    const workflowJobs = checks.filter(c => c.check_suite?.id === run.check_suite_id);
+    for (const job of workflowJobs) {
+      if (job.status !== 'completed') pending.push(wf.path + ': job running');
+      else if (!['success','neutral','skipped'].includes(job.conclusion))
+        errors.push(wf.path + ': ' + job.name + ': ' + job.conclusion);
+    }
   }
   const eligibleChecks = checks.filter(check => check.name !== 'deploy / deploy');
   for (const check of eligibleChecks) {
@@ -179,10 +186,10 @@ class StagingPR extends StagingGit {
       const statuses = (await this.api.rest.repos.getCombinedStatusForRef(
         {...this.repo,ref:checkedSha})).data;
       const runs = await this.api.paginate(this.api.rest.actions.listWorkflowRunsForRepo,
-        {...this.repo,head_sha:checkedSha,event:'pull_request',per_page:100});
+        {...this.repo,head_sha:head,event:'pull_request',per_page:100});
       const readiness = promotionReadiness({
         checks:observed,statuses,rules:activeRules,protection:branchProtection,
-        runs,sha:checkedSha
+        runs,sha:checkedSha,head,number:pr.number
       });
       if (readiness.errors.length)
         throw new Error('Staging PR has failed checks: ' + readiness.errors.join(', ') + '. ' + pr.html_url);
