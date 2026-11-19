@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {verifyCodex, verifyChecks, nextTag, StagingGit} = require('./auto-staging-deploy.cjs');
-const {StagingPR} = require('./staging-pr.cjs');
+const {StagingPR,promotionReadiness} = require('./staging-pr.cjs');
 
 const SHA = 'a'.repeat(40);
 const bot = { user: {login:'chatgpt-codex-connector[bot]'} };
@@ -139,8 +139,48 @@ test('auto staging merge uses approved App token and refuses missing credentials
   assert.match(source,/env\.GH_TOKEN = env\.STAGING_DEPLOY_APP_TOKEN/);
   assert.match(source,/Organization App token is missing/);
   assert.match(staging,/--match-head-commit/);
-  assert.match(staging,/if \(bad\.length/);
-  assert.match(staging,/if \(!pending && checks\.length\)/);
+  assert.match(staging,/readiness\.errors\.length/);
+  assert.match(staging,/!readiness\.pending\.length/);
   assert.match(staging,/current\.base\.sha !== this\.staging/);
   assert.doesNotMatch(staging,/refs\/heads\/staging'\]/);
+});
+
+test('staging auto-merge waits until every named required check exists', () => {
+  const required = {type:'required_status_checks',parameters:{required_status_checks:[
+    {context:'fast-check'},{context:'slow-check'}]}};
+  const green = {name:'fast-check',status:'completed',conclusion:'success',app:{id:1}};
+  const inputs = {checks:[green],statuses:{state:'pending',total_count:0,statuses:[]},
+    rules:[required],protection:null,runs:[],sha:SHA,head:SHA,number:601};
+  assert.deepEqual(promotionReadiness(inputs).errors,[]);
+  assert.match(promotionReadiness(inputs).pending.join(' '),/slow-check: missing/);
+  const complete = promotionReadiness({...inputs,checks:[green,{...green,name:'slow-check'}]});
+  assert.deepEqual(complete.pending,[]);
+  assert.deepEqual(complete.errors,[]);
+});
+test('staging auto-merge uses aggregate statuses beyond first page', () => {
+  const inputs = {checks:[{name:'compile',status:'completed',conclusion:'success'}],
+    statuses:{total_count:31,state:'failure',statuses:[{context:'compile',state:'success'}]},
+    rules:[],protection:null,runs:[],sha:SHA,head:SHA,number:601};
+  assert.match(promotionReadiness(inputs).errors.join(' '),/combined status: failure/);
+  assert.match(promotionReadiness({...inputs,statuses:{...inputs.statuses,state:'pending'}}).pending.join(' '),/combined status pending/);
+});
+test('staging auto-merge waits for the configured required workflow tied to PR and check suite', () => {
+  const path = '.github/workflows/pr-ticket-validation.yml';
+  const required = {type:'workflows',parameters:{workflows:[{path,repository_id:123}]}};
+  const green = {name:'ticket',status:'completed',conclusion:'success',check_suite:{id:42}};
+  const run = {event:'pull_request',head_sha:SHA,pull_requests:[{number:601}],
+    path:path+'@main',repository:{id:123},check_suite_id:42,status:'completed',conclusion:'success'};
+  const base = {checks:[green],statuses:{state:'pending',total_count:0,statuses:[]},
+    rules:[required],protection:null,runs:[],sha:'b'.repeat(40),head:SHA,number:601};
+  assert.match(promotionReadiness(base).pending.join(' '),/missing required workflow/);
+  assert.deepEqual(promotionReadiness({...base,runs:[run]}).pending,[]);
+  assert.match(promotionReadiness({...base,runs:[{...run,repository:{id:999}}]}).pending.join(' '),/missing required workflow/);
+});
+test('staging admin-merge verifies exact base tree and handles gh failures by stderr', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.match(source,/--match-head-commit/);
+  assert.match(source,/expectedStagingBase/);
+  assert.match(source,/mergedMeta\.startsWith/);
+  assert.match(source,/error\.stderr \|\| error\.stdout/);
+  assert.doesNotMatch(source,/lastMergeError\)\)/);
 });
