@@ -23,8 +23,12 @@ const latestChecks = checks => {
   return [...groups.values()];
 };
 
-async function command(file, args, cwd, { stagingAuth = false } = {}) {
+async function command(file, args, cwd, { stagingAuth = false, appAuth = false } = {}) {
   const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_ATTR_NOSYSTEM: '1' };
+  if (appAuth) {
+    if (!env.STAGING_DEPLOY_APP_TOKEN) throw new Error('Organization App token is missing for staging PR merge.');
+    env.GH_TOKEN = env.STAGING_DEPLOY_APP_TOKEN;
+  }
   if (stagingAuth) {
     if (!env.STAGING_PUSH_TOKEN) throw new Error('Staging branch writer token is missing.');
     const key = `http.${new URL(process.env.GITHUB_SERVER_URL || 'https://github.com').origin}/.extraheader`;
@@ -382,7 +386,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       published = await git.publish({ number, head, issue, assertCurrent: async () => { await gates(); await assertCurrent(); }, status });
     }
     const { tag, commit } = published;
-    process.env.STAGE_PR = '✅ Merged with required GitHub protections';
+    process.env.STAGE_PR = '✅ Organization App admin-merged after explicit source and staging CI validation (review approval bypassed)';
     process.env.STAGING_TAG = tag;
     process.env.STAGE_DEPLOY = '⏳ Deployment running';
     await status('⏳ Staging merged; dispatching CI/CD');
