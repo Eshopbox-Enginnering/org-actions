@@ -45,7 +45,7 @@ jobs:
               '| Tag & CI/CD | ⏳ Waiting |',
               '',
               `**Workflow run:** [View execution](${url})`
-            ].join('\\n');
+            ].join('\n');
             const response = await github.rest.issues.createComment({
               ...context.repo, issue_number: context.issue.number, body
             });
@@ -134,14 +134,24 @@ jobs:
       - name: Report workflow initialization failure
         if: failure() && steps.deploy.outputs.reported != 'true'
         uses: actions/github-script@v7
+        env:
+          STAGING_ACK_COMMENT_ID: ${{ needs.acknowledge.outputs.comment_id }}
         with:
           script: |
-            if (!context.issue.number) return;
-            await github.rest.issues.createComment({
-              ...context.repo, issue_number: context.issue.number,
-              body: '❌ **Staging deployment could not initialize.** Check the GitHub Actions run and App credentials: ' +
-                context.serverUrl + '/' + context.repo.owner + '/' + context.repo.repo +
-                '/actions/runs/' + context.runId
+            const commentId = Number(process.env.STAGING_ACK_COMMENT_ID);
+            if (!Number.isSafeInteger(commentId) || commentId <= 0) return;
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.updateComment({
+              ...context.repo, comment_id: commentId,
+              body: [
+                '<!-- central-staging-deploy:v1 -->',
+                `<!-- central-staging-run:${context.runId} -->`,
+                '## 🚀 Staging deployment',
+                '**Status:** ❌ Deployment workflow failed before status reporting initialized',
+                '',
+                '**Action required:** Inspect the GitHub Actions run for the failing setup or credential step.',
+                `**Workflow run:** [View execution](${url})`
+              ].join('\n')
             });
 
       - name: Remove isolated checkouts
