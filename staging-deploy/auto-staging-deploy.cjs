@@ -212,6 +212,38 @@ class StagingGit {
   }
 }
 
+// Codex sometimes reports exhausted review quota using a plain bot comment
+// instead of the structured unavailable receipt. Bind this exact bot signal
+// to the current PR head via its authenticated, failed review summary.
+function hasCodexQuotaEvidence({comments, head, latestRequestAt = 0, prCreatedAt = 0}) {
+  const trusted = comments.filter(c =>
+    ['chatgpt-codex-connector[bot]', 'codex[agent]'].includes(c.user?.login));
+  const floor = Math.max(latestRequestAt, prCreatedAt);
+  return trusted.some(c => {
+    const created = time(c.created_at);
+    if (created < floor) return false;
+    const body = (c.body || '').trim();
+    const structured = body.match(/<!-- codex-review-unavailable:v1 (\{[^\n]*\}) -->/);
+    if (structured) {
+      try {
+        const receipt = JSON.parse(structured[1]);
+        if (receipt.status === 'rate_limited' && receipt.commit_sha === head) return true;
+      } catch {}
+    }
+    if (!/^You have reached your Codex usage limits for code reviews\. You can see your limits in the \[Codex usage dashboard\]\(https:\/\/chatgpt\.com\/codex\/cloud\/settings\/usage\)\.$/.test(body))
+      return false;
+    return trusted.some(summary => {
+      if (time(summary.created_at) < floor || time(summary.created_at) > created) return false;
+      const match = (summary.body || '').match(/<!-- codex-review-state:v1 (\{[^\n]*\}) -->/);
+      if (!match) return false;
+      try {
+        const state = JSON.parse(match[1]).code_review;
+        return state?.commit_sha === head && state.status === 'failed';
+      } catch { return false; }
+    });
+  });
+}
+
 async function deploy({ github, context, core, git, command: run, forceDeployUsers = process.env.FORCE_DEPLOY_USERS || '', sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now }) {
   const event = context.payload;
   if (context.eventName !== 'issue_comment' || event.action !== 'created' || !event.issue?.pull_request) return;
@@ -298,18 +330,14 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       try {
         verifyCodex({ head, comments, reviews, reactions, requestId: latestRequest?.id });
       } catch (codexError) {
-        // Only an authenticated Codex bot's structured, head-bound unavailable
-        // receipt permits a human-review fallback. Ordinary prose (including
-        // review findings mentioning "rate limit") is never quota evidence.
-        const quotaEvidence = comments.filter(c => ['chatgpt-codex-connector[bot]', 'codex[agent]'].includes(c.user?.login))
-          .some(c => {
-            const match = (c.body || '').match(/<!-- codex-review-unavailable:v1 (\{[^\n]*\}) -->/);
-            if (!match || time(c.created_at) < time(latestRequest?.created_at)) return false;
-            try {
-              const receipt = JSON.parse(match[1]);
-              return receipt.status === 'rate_limited' && receipt.commit_sha === head;
-            } catch { return false; }
-          });
+        // Only verified quota exhaustion from the Codex bot, on the current
+        // commit, can enable the human-review fallback. Generic error prose,
+        // ordinary review findings and unrelated historical quotas cannot.
+        const quotaEvidence = hasCodexQuotaEvidence({
+          comments, head,
+          latestRequestAt: time(latestRequest?.created_at),
+          prCreatedAt: time(pr.created_at)
+        });
         if (!quotaEvidence) throw codexError;
         const human = [...reviews].filter(r => r.state === 'APPROVED' && r.commit_id === head &&
           r.user?.login !== pr.user.login && time(r.submitted_at) >= time(pr.created_at))
@@ -464,4 +492,4 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
   }
 }
 
-module.exports = { deploy, command, StagingGit, verifyCodex, verifyChecks, nextTag };
+module.exports = { deploy, command, StagingGit, verifyCodex, verifyChecks, nextTag, hasCodexQuotaEvidence };
