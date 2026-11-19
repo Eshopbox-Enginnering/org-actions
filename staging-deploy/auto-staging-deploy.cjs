@@ -386,7 +386,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       published = await git.publish({ number, head, issue, assertCurrent: async () => { await gates(); await assertCurrent(); }, status });
     }
     const { tag, commit } = published;
-    process.env.STAGE_PR = '✅ Merged with required GitHub protections';
+    process.env.STAGE_PR = '✅ Organization App admin-merged after explicit source and staging CI validation (review approval bypassed)';
     process.env.STAGING_TAG = tag;
     process.env.STAGE_DEPLOY = '⏳ Deployment running';
     await status('⏳ Staging merged; dispatching CI/CD');
