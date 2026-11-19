@@ -77,7 +77,7 @@ class StagingPR extends StagingGit {
         title: 'Patch to Staging: Promote reviewed main PR #' + number,
         body: (issue ? 'Central-Backlog: https://github.com/Eshopbox-Enginnering/Central-Backlog/issues/' + issue + '\n\n' : '') +
           'Automated deployment staging PR. Source: #' + number +
-          '\nReviewed head: ' + head + '\n\nAll standard staging checks and approvals must pass. No administrative bypass.'
+          '\nReviewed head: ' + head + '\n\nAutomated promotion uses the organization-approved App after required source checks and staging check verification.'
       });
       pr = response.data;
     }
