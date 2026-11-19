@@ -95,21 +95,12 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs 
   for (const expected of required) {
     const matching = checks.filter(c => c.name === expected.context &&
       (expected.integration_id == null || expected.integration_id < 0 || c.app?.id === expected.integration_id));
-    // Exempt only staging-presence contexts, never unrelated failing checks.
-    // Reusable workflow callers may publish a caller/callee check name instead
-    // of the literal check-commits job name.
-    const presenceName = /^(?:check-commits|check-commits-in-staging|Check PR commits exist in staging)(?: \/ .+)?$/i.test(expected.context);
-    const belongsToPresenceRun = matching.length > 0 && matching.every(c => stagingSuites.has(c.check_suite?.id));
-    const presenceWorkflowConfigured = requiredWorkflows.some(w => w.path === STAGING_WORKFLOW);
-    // GitHub can return check runs from the synthetic PR test-merge commit,
-    // whose suite IDs differ from the PR-head workflow run. Recognize the
-    // named staging-presence gate when its workflow is required or ran for
-    // this PR, even if the check suite IDs no longer match.
-    // A required workflow declaration alone does not prove that a failed check
-    // came from that workflow. Only bypass check suites actually identified as
-    // staging-presence; an unrelated same-named result must still fail.
-    if (presenceName && (belongsToPresenceRun ||
-      (!matching.length && presenceWorkflowConfigured))) continue;
+    // check-commits is the staging-presence gate: it must fail until this
+    // deployment promotes the reviewed PR commit to staging. Exempt only
+    // these known contexts from the *pre-promotion* gate, not from branch
+    // protection or post-deployment verification.
+    const stagingPresenceContext = /^(?:check-commits|check-commits-in-staging|Check PR commits exist in staging)(?: \/ .+)?$/i.test(expected.context);
+    if (stagingPresenceContext) continue;
     const currentChecks = latestChecks(matching);
     const status = newest(statuses.filter(s => s.context === expected.context));
     if (!currentChecks.length && !status) problems.push(`${expected.context}: missing`);
