@@ -226,7 +226,11 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
   const pages = (route, args = {}) => github.paginate(route, { ...repo, per_page: 100, ...args });
   const statusMarker = '<!-- central-staging-deploy:v1 -->';
   const statusUrl = `${context.serverUrl}/${repo.owner}/${repo.repo}`;
-  let statusId;
+  // Acknowledgment runs before checkout, token minting and queued deployment.
+  // Every invocation owns its own comment; never edit an earlier run's status.
+  const statusId = Number(process.env.STAGING_ACK_COMMENT_ID);
+  if (!Number.isSafeInteger(statusId) || statusId <= 0)
+    throw new Error('Missing staging deployment acknowledgment comment ID.');
   let stage = '⏳ Initializing';
   const status = async (message) => {
     const previousStage = stage;
@@ -245,6 +249,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
       return failed ? '⏭️ Not started' : '⏳ Waiting';
     };
     const body = `${statusMarker}
+<!-- central-staging-run:${context.runId} -->
 ## 🚀 Staging deployment
 **Status:** ${stage}
 
@@ -258,13 +263,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
 **Workflow run:** [View execution](${statusUrl}/actions/runs/${context.runId})
 ${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/tree/${process.env.STAGING_TAG})\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\n` : ''}
 ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
-    if (!statusId) {
-      const existing = await pages('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', { issue_number: number });
-      const mine = [...existing].reverse().find(c => c.user?.login === 'github-actions[bot]' && c.body?.includes(statusMarker));
-      statusId = mine?.id;
-    }
-    if (statusId) await request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', { comment_id: statusId, body });
-    else statusId = (await request('POST /repos/{owner}/{repo}/issues/{issue_number}/comments', { issue_number: number, body })).data.id;
+    await request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', { comment_id: statusId, body });
   };
   const comment = body => status(body.startsWith('Staging deployment stopped:') ? `❌ ${body.replace('Staging deployment stopped:', '').trim()}` : body);
 
