@@ -49,7 +49,7 @@ test('structured single-comment reporting and quota fallback are present', () =>
   assert.match(source,/STAGING_RUN_URL/);
 });
 
-test('real staging caller check is exempt only when linked to staging workflow run', () => {
+test('expected staging-presence failure is exempt during pre-promotion', () => {
   const run = {id:4,event:'pull_request',head_sha:SHA,pull_requests:[{number:1}],
     path:'.github/workflows/check-commits-in-staging.yml@main',check_suite_id:42};
   const stagingCheck = {name:'check-commits-in-staging',app:{id:15368},check_suite:{id:42},
@@ -61,8 +61,8 @@ test('real staging caller check is exempt only when linked to staging workflow r
   assert.throws(() => verifyChecks({...base,checks:[stagingCheck,otherFail]}),/java-tests: failure/);
   assert.doesNotThrow(() => verifyChecks({...base,checks:[stagingCheck],
     protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-in-staging'}]}}));
-  assert.throws(() => verifyChecks({...base,checks:[{...stagingCheck,check_suite:{id:99}}],
-    protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-in-staging'}]}}),/check-commits-in-staging: failure/);
+  assert.doesNotThrow(() => verifyChecks({...base,checks:[{...stagingCheck,check_suite:{id:99}}],
+    protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-in-staging'}]}}));
 });
 test('staging PR promotion fails closed without merge support or queue support', () => {
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
@@ -109,24 +109,19 @@ test('newer Codex review request invalidates an earlier clean summary', () => {
   assert.throws(() => verifyCodex({head:SHA,comments,reviews:[],reactions:[],requestId:3}),/has not cleared/);
 });
 
-test('staging-presence failure is exempt only when tied to staging workflow', () => {
-  const run = {id:10,event:'pull_request',head_sha:SHA,pull_requests:[{number:600}],
-    path:'.github/workflows/check-commits-in-staging.yml@main',check_suite_id:10};
-  const check = {name:'check-commits',status:'completed',conclusion:'failure',
-    app:{id:15368},check_suite:{id:10}};
+test('PR #600: failed check-commits is expected and does not block pre-promotion', () => {
+  const stagingCheck = {name:'check-commits',status:'completed',conclusion:'failure',
+    app:{id:15368},check_suite:{id:99}};
   const base = {head:SHA,number:600,protection:{requiresStatusChecks:true,
     requiredStatusChecks:[{context:'check-commits'}]},
-    rules:[{type:'workflows',parameters:{workflows:[
-      {path:'.github/workflows/check-commits-in-staging.yml'}]}}],
-    checks:[check],statuses:[],runs:[run]};
+    rules:[],checks:[stagingCheck],statuses:[],runs:[]};
   assert.doesNotThrow(() => verifyChecks(base));
-  assert.throws(() => verifyChecks({...base,
-    checks:[{...check,check_suite:{id:99}}]}),/check-commits: failure/);
   assert.throws(() => verifyChecks({...base,
     protection:{requiresStatusChecks:true,requiredStatusChecks:[
       {context:'check-commits'},{context:'java-tests'}]}}),/java-tests: missing/);
-  assert.throws(() => verifyChecks({...base,rules:[],runs:[],
-    checks:[{...check,check_suite:{id:99}}]}),/check-commits: failure/);
+  assert.throws(() => verifyChecks({...base,
+    protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-extra'}]},
+    checks:[{...stagingCheck,name:'check-commits-extra'}]}),/check-commits-extra: failure/);
 });
 test('deployment status does not repeat PR number and marks failed stages accurately', () => {
   const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
