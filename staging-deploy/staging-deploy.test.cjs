@@ -127,8 +127,8 @@ test('staging presence check on synthetic PR merge commit is exempt when workflo
 });
 test('deployment status does not repeat PR number and marks failed stages accurately', () => {
   const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
-  assert.match(source,/## 🚀 Staging deployment\\n/);
-  assert.doesNotMatch(source,/Staging deployment · PR #|\\*\\*Main PR:\\*\\*/);
-  assert.match(source,/failedStep === key \\? '❌ Failed'/);
-  assert.match(source,/failed \\? '⏭️ Not started'/);
+  assert.match(source,/## 🚀 Staging deployment/);
+  assert.doesNotMatch(source,/Staging deployment · PR #|Main PR:/);
+  assert.ok(source.includes("failedStep === key ? '❌ Failed'"));
+  assert.ok(source.includes("failed ? '⏭️ Not started'"));
 });
