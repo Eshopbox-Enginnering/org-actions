@@ -109,26 +109,29 @@ test('newer Codex review request invalidates an earlier clean summary', () => {
   assert.throws(() => verifyCodex({head:SHA,comments,reviews:[],reactions:[],requestId:3}),/has not cleared/);
 });
 
-test('staging presence check on synthetic PR merge commit is exempt when workflow is required', () => {
+test('staging-presence failure is exempt only when tied to staging workflow', () => {
   const run = {id:10,event:'pull_request',head_sha:SHA,pull_requests:[{number:600}],
     path:'.github/workflows/check-commits-in-staging.yml@main',check_suite_id:10};
-  const mergeCheck = {name:'check-commits',status:'completed',conclusion:'failure',
-    app:{id:15368},check_suite:{id:99}};
+  const check = {name:'check-commits',status:'completed',conclusion:'failure',
+    app:{id:15368},check_suite:{id:10}};
   const base = {head:SHA,number:600,protection:{requiresStatusChecks:true,
     requiredStatusChecks:[{context:'check-commits'}]},
     rules:[{type:'workflows',parameters:{workflows:[
       {path:'.github/workflows/check-commits-in-staging.yml'}]}}],
-    checks:[mergeCheck],statuses:[],runs:[run]};
+    checks:[check],statuses:[],runs:[run]};
   assert.doesNotThrow(() => verifyChecks(base));
+  assert.throws(() => verifyChecks({...base,
+    checks:[{...check,check_suite:{id:99}}]}),/check-commits: failure/);
   assert.throws(() => verifyChecks({...base,
     protection:{requiresStatusChecks:true,requiredStatusChecks:[
       {context:'check-commits'},{context:'java-tests'}]}}),/java-tests: missing/);
-  assert.throws(() => verifyChecks({...base,rules:[],runs:[]}),/check-commits: failure/);
+  assert.throws(() => verifyChecks({...base,rules:[],runs:[],
+    checks:[{...check,check_suite:{id:99}}]}),/check-commits: failure/);
 });
 test('deployment status does not repeat PR number and marks failed stages accurately', () => {
   const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
   assert.match(source,/## 🚀 Staging deployment/);
   assert.doesNotMatch(source,/Staging deployment · PR #|Main PR:/);
-  assert.ok(source.includes("failedStep === key ? '❌ Failed'"));
+  assert.ok(source.includes("if (failed && failedStep === key) return '❌ Failed'"));
   assert.ok(source.includes("failed ? '⏭️ Not started'"));
 });
