@@ -254,7 +254,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
 | Tag & CI/CD | ${stepState(process.env.STAGE_DEPLOY, 'deploy')} |
 
 **Workflow run:** [View execution](${statusUrl}/actions/runs/${context.runId})
-${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/tree/${process.env.STAGING_TAG})\\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\\n` : ''}
+${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/tree/${process.env.STAGING_TAG})\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\n` : ''}
 ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
     if (!statusId) {
       const existing = await pages('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', { issue_number: number });
