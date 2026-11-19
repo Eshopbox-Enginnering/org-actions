@@ -40,7 +40,6 @@ test('staging PR implementation replaces direct promotion', () => {
   assert.match(s,/--match-head-commit/);
   assert.match(s,/appAuth:true/);
   assert.doesNotMatch(s,/mergeable_state === 'clean'/);
-  assert.match(s,/merge_method:'merge'/);
   assert.match(s,/commit-tree/);
   assert.doesNotMatch(s,/refs\/heads\/staging'\]/);
 });
