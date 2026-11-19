@@ -261,7 +261,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
 | Tag & CI/CD | ${stepState(process.env.STAGE_DEPLOY, 'deploy')} |
 
 **Workflow run:** [View execution](${statusUrl}/actions/runs/${context.runId})
-${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/tree/${process.env.STAGING_TAG})\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\n` : ''}
+${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** ${process.env.STAGING_RUN_URL ? `[${process.env.STAGING_TAG} — View deployment](${process.env.STAGING_RUN_URL})` : `\`${process.env.STAGING_TAG}\` (awaiting CI/CD run)`}\n` : ''}${process.env.STAGING_RUN_URL ? `**CI/CD:** [View staging run](${process.env.STAGING_RUN_URL})\n` : ''}
 ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
     await request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', { comment_id: statusId, body });
   };
@@ -380,20 +380,27 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       if (previous && previous.status !== 'completed') throw new Error(`The earlier staging snapshot is still deploying: ${previous.html_url}. Wait for it to finish, then retry /deploy-staging.`);
       if (previous?.conclusion !== 'success') published = undefined;
     }
+    const previouslyTagged = Boolean(published);
     if (!published) {
       const issue = pr.head.ref.match(/^(?:feature|bug|fix)\/(\d+)(?:\D|$)/i)?.[1] || pr.title?.match(/#(\d+)\b/)?.[1];
       published = await git.publish({ number, head, issue, assertCurrent: async () => { await gates(); await assertCurrent(); }, status });
     }
     const { tag, commit } = published;
-    process.env.STAGE_PR = '✅ Organization App admin-merged after explicit source and staging CI validation (review approval bypassed)';
+    process.env.STAGE_PR = previouslyTagged ?
+      '✅ Existing staging promotion verified (no new PR or merge)' :
+      process.env.STAGING_PR_URL ?
+        '✅ Staging PR auto-merged by authorized GitHub App after CI validation' :
+        '✅ Commit already present on staging (no new PR needed)';
     process.env.STAGING_TAG = tag;
-    process.env.STAGE_DEPLOY = '⏳ Deployment running';
-    await status('⏳ Staging merged; dispatching CI/CD');
+    process.env.STAGE_DEPLOY = '⏳ Checking for existing staging CI/CD run';
+    await status(previouslyTagged ? '⏳ Existing staging tag found; checking deployment' : '⏳ Staging ready; preparing CI/CD');
     const deployments = () => pages('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', { workflow_id: WORKFLOW, branch: tag, event: 'workflow_dispatch', head_sha: commit });
     let deployment = newest((await deployments()).filter(r => r.head_sha === commit && r.head_branch === tag && r.event === 'workflow_dispatch'));
     if (deployment?.status === 'completed' && deployment.conclusion === 'success') {
       await assertCurrent();
-      process.env.STAGE_DEPLOY = '✅ Already deployed'; await status('✅ Already deployed ' + tag + ' · ' + commit.slice(0, 10));
+      process.env.STAGING_RUN_URL = deployment.html_url;
+      process.env.STAGE_DEPLOY = '✅ Existing deployment verified — no new CI/CD run';
+      await status('✅ Already deployed ' + tag + ' · ' + commit.slice(0, 10) + ' (no new tag or deployment)');
     } else {
       await assertCurrent();
       await git.assertStaging(commit);
@@ -408,7 +415,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
         } while (!deployment && now() < deadline);
         if (!deployment) throw new Error(`Dispatched ${tag}, but could not locate its deployment run. Retry /deploy-staging to resume.`);
         process.env.STAGING_RUN_URL = deployment.html_url;
-        await status('⏳ CI/CD dispatched; waiting for staging deployment');
+        await status('⏳ CI/CD run started for ' + tag + '; waiting for staging deployment');
       }
       const deadline = now() + 70 * 60 * 1000;
       while (deployment.status !== 'completed') {
@@ -420,7 +427,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       await assertCurrent();
       process.env.STAGING_RUN_URL = deployment.html_url;
       process.env.STAGE_DEPLOY = '✅ Deployment succeeded';
-      await status('✅ Successfully deployed ' + tag + ' · ' + commit.slice(0, 10) + ' — please verify on staging');
+      await status('✅ Staging deployment succeeded for ' + tag + ' · ' + commit.slice(0, 10) + ' — verify application on staging');
     }
     if (force) {
       // Label creation is only attempted after confirmed deployment success.
