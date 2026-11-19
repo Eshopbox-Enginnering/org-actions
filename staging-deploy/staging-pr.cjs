@@ -3,6 +3,63 @@
 // Extends Shivani's validated read/review/check logic. Never directly pushes staging.
 const {StagingGit, nextTag} = require('./auto-staging-deploy.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Fail closed on an absent required check; --admin intentionally bypasses
+// GitHub's review rules so CI readiness must be checked explicitly.
+function promotionReadiness({checks, statuses, rules, protection, runs, sha}) {
+  const byName = new Map();
+  for (const check of checks) {
+    const key = check.name;
+    const existing = byName.get(key);
+    if (!existing || (Date.parse(check.started_at || '') || 0) > (Date.parse(existing.started_at || '') || 0))
+      byName.set(key, check);
+  }
+  const required = [
+    ...(protection?.required_status_checks?.contexts || []).map(context => ({context})),
+    ...(protection?.required_status_checks?.checks || []).map(check => ({context:check.context,app_id:check.app_id})),
+    ...rules.filter(rule => rule.type === 'required_status_checks')
+      .flatMap(rule => rule.parameters?.required_status_checks || []),
+  ];
+  const errors = [];
+  const pending = [];
+  for (const req of required) {
+    const check = byName.get(req.context);
+    const status = (statuses.statuses || []).find(item => item.context === req.context);
+    const appMatches = !req.app_id || req.app_id === -1 || check?.app?.id === req.app_id;
+    if (check && appMatches) {
+      if (check.status !== 'completed') pending.push(req.context);
+      else if (!['success','neutral','skipped'].includes(check.conclusion))
+        errors.push(req.context + ': ' + check.conclusion);
+    } else if (!status) pending.push(req.context + ': missing');
+    if (status?.state === 'pending') pending.push(req.context + ': status pending');
+    else if (status && status.state !== 'success') errors.push(req.context + ': ' + status.state);
+  }
+  const requiredWorkflows = rules.filter(rule => rule.type === 'workflows')
+    .flatMap(rule => rule.parameters?.workflows || []);
+  for (const wf of requiredWorkflows) {
+    const run = runs.find(run => run.head_sha === sha &&
+      (run.path || '').split('@')[0] === wf.path &&
+      (!wf.repository_id || run.repository?.id === wf.repository_id));
+    if (!run) { pending.push(wf.path + ': missing required workflow'); continue; }
+    if (run.status !== 'completed') pending.push(wf.path + ': running');
+    else if (!['success','neutral','skipped'].includes(run.conclusion))
+      errors.push(wf.path + ': ' + run.conclusion);
+    if (!checks.some(c => c.check_suite?.id === run.check_suite_id))
+      pending.push(wf.path + ': check suite not available');
+  }
+  const eligibleChecks = checks.filter(check => check.name !== 'deploy / deploy');
+  for (const check of eligibleChecks) {
+    if (check.status !== 'completed') pending.push(check.name + ': running');
+    else if (!['success','neutral','skipped'].includes(check.conclusion))
+      errors.push(check.name + ': ' + check.conclusion);
+  }
+  // Aggregate state includes contexts beyond the first REST response page.
+  if (statuses.total_count > 0 && statuses.state === 'pending') pending.push('combined status pending');
+  if (statuses.total_count > 0 && ['failure','error'].includes(statuses.state))
+    errors.push('combined status: ' + statuses.state);
+  if (!eligibleChecks.length && !(statuses.total_count > 0)) pending.push('no checks started');
+  return {errors:[...new Set(errors)],pending:[...new Set(pending)]};
+}
+
 class StagingPR extends StagingGit {
   constructor(run, appGithub, callerGithub, repository) {
     super(run, {useStagingApp: true});
@@ -95,6 +152,8 @@ class StagingPR extends StagingGit {
       throw new Error('Staging repository disallows ancestry-preserving merge commits: ' + pr.html_url);
     const activeRules = await this.api.paginate(this.api.rest.repos.getBranchRules, {...this.repo, branch:'staging', per_page:100})
       .catch(error => { throw new Error('Could not read staging branch rules: ' + error.message); });
+    const branchProtection = await this.api.rest.repos.getBranchProtection({...this.repo,branch:'staging'})
+      .then(result => result.data).catch(error => { if (error.status === 404) return null; throw error; });
     if (activeRules.some(rule => rule.type === 'merge_queue'))
       throw new Error('Staging requires a merge queue. Automated admin merge is not supported: ' + pr.html_url);
 
@@ -112,41 +171,39 @@ class StagingPR extends StagingGit {
       if (current.base.sha !== this.staging)
         throw new Error('Staging advanced after promotion PR creation; stop instead of merging stale base: ' + pr.html_url);
 
-      // Read GitHub check runs and commit statuses on the exact promotion SHA.
-      // A mandatory check which fails must not be overridden by the App.
+      // pull_request jobs normally run on the synthetic test-merge SHA.
+      // Never silently fall back to head checks if a merge SHA exists.
+      const checkedSha = current.merge_commit_sha || commit;
       const observed = await this.api.paginate(this.api.rest.checks.listForRef,
-        {...this.repo, ref: commit, per_page:100});
-      const newestChecks = new Map();
-      for (const check of observed) {
-        const key = check.name + ':' + (check.app?.id ?? '');
-        if (!newestChecks.has(key) || new Date(newestChecks.get(key).started_at || 0) < new Date(check.started_at || 0))
-          newestChecks.set(key,check);
-      }
-      const statuses = (await this.api.rest.repos.getCombinedStatusForRef({...this.repo,ref:commit})).data;
-      const checks = [...newestChecks.values()].filter(c => c.name !== 'deploy / deploy');
-      const bad = checks.filter(c => c.status === 'completed' && !['success','skipped','neutral'].includes(c.conclusion));
-      if (bad.length || statuses.statuses?.some(x => x.state === 'failure' || x.state === 'error'))
-        throw new Error('Staging PR has failed checks: ' + bad.map(c => c.name + ': ' + c.conclusion).join(', ') + '. ' + pr.html_url);
-      const pending = checks.some(c => c.status !== 'completed') ||
-        statuses.statuses?.some(x => x.state === 'pending');
-      if (!pending && checks.length) {
+        {...this.repo, ref:checkedSha, per_page:100});
+      const statuses = (await this.api.rest.repos.getCombinedStatusForRef(
+        {...this.repo,ref:checkedSha})).data;
+      const runs = await this.api.paginate(this.api.rest.actions.listWorkflowRunsForRepo,
+        {...this.repo,head_sha:checkedSha,event:'pull_request',per_page:100});
+      const readiness = promotionReadiness({
+        checks:observed,statuses,rules:activeRules,protection:branchProtection,
+        runs,sha:checkedSha
+      });
+      if (readiness.errors.length)
+        throw new Error('Staging PR has failed checks: ' + readiness.errors.join(', ') + '. ' + pr.html_url);
+      if (!readiness.pending.length) {
         await assertCurrent();
+        const beforeMerge = (await this.app.rest.pulls.get({...this.repo,pull_number:pr.number})).data;
+        if (beforeMerge.head.sha !== commit || beforeMerge.base.sha !== this.staging ||
+            beforeMerge.merge_commit_sha !== checkedSha)
+          throw new Error('Staging PR SHA, base, or test-merge commit changed before administrative merge.');
         try {
-          // The App is the same organization-approved administrative merge
-          // identity used by Update AGENTS.md and Sync Engineering Guidelines.
-          // GitHub still validates its bypass entitlement. The reviewed SHA
-          // and target branch are rechecked before merging.
-          // Match the audited org-actions updater path: an App-authenticated
-          // administrator merge, pinned to the reviewed staging PR SHA.
-          // No direct push to the protected staging branch.
           await this.run('gh', ['pr','merge',String(pr.number),'--repo',
             this.repo.owner + '/' + this.repo.repo,'--merge','--admin',
             '--match-head-commit',commit], {appAuth:true});
           break;
         } catch (error) {
-          lastMergeError = error.message;
-          if (!/review|checks|merge|protected|requirements|not mergeable|permission|ruleset/i.test(lastMergeError))
+          // execFile error.message includes the gh command itself; inspect
+          // stderr only to distinguish a transient PR readiness failure.
+          const detail = String(error.stderr || error.stdout || '').trim();
+          if (!/required checks|review required|is not mergeable|merge conflict|branch protection|ruleset/i.test(detail))
             throw error;
+          lastMergeError = detail;
         }
       }
       await pause(15000);
@@ -160,6 +217,10 @@ class StagingPR extends StagingGit {
     this.staging = (await this.git('rev-parse','refs/remotes/origin/staging')).trim();
     if (finalPR.merge_commit_sha && this.staging !== finalPR.merge_commit_sha)
       throw new Error('Staging advanced after merging the promotion PR; refuse to tag an unreviewed snapshot.');
+    const mergedMeta = await this.git('cat-file','-p',this.staging);
+    if (!mergedMeta.includes('parent ' + commit + '\\n') ||
+        !mergedMeta.includes('parent ' + finalPR.base.sha + '\\n'))
+      throw new Error('Staging merge parents do not match verified promotion head and base. Refusing deployment.');
     await this.git('merge-base', '--is-ancestor', head, this.staging).catch(() => {
       throw new Error('Merged staging does not contain reviewed main PR head. Refusing to deploy.');
     });
@@ -175,4 +236,4 @@ class StagingPR extends StagingGit {
     return {tag,commit:this.staging};
   }
 }
-module.exports = {StagingPR};
+module.exports = {StagingPR,promotionReadiness};
