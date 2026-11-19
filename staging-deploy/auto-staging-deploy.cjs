@@ -105,7 +105,11 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs 
     // whose suite IDs differ from the PR-head workflow run. Recognize the
     // named staging-presence gate when its workflow is required or ran for
     // this PR, even if the check suite IDs no longer match.
-    if (presenceName && (belongsToPresenceRun || presenceWorkflowConfigured || stagingSuites.size > 0)) continue;
+    // A required workflow declaration alone does not prove that a failed check
+    // came from that workflow. Only bypass check suites actually identified as
+    // staging-presence; an unrelated same-named result must still fail.
+    if (presenceName && (belongsToPresenceRun ||
+      (!matching.length && presenceWorkflowConfigured))) continue;
     const currentChecks = latestChecks(matching);
     const status = newest(statuses.filter(s => s.context === expected.context));
     if (!currentChecks.length && !status) problems.push(`${expected.context}: missing`);
@@ -240,8 +244,11 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
       /preparing protected staging/i.test(previousStage) ? 'staging' :
       /dispatching CI\/CD|deployment/i.test(previousStage) ? 'deploy' :
       /validating requester|review/i.test(previousStage) ? 'review' : 'checks';
-    const stepState = (value, key) => value || (failed && failedStep === key ? '❌ Failed' :
-      failed ? '⏭️ Not started' : '⏳ Waiting');
+    const stepState = (value, key) => {
+      if (failed && failedStep === key) return '❌ Failed';
+      if (value) return value;
+      return failed ? '⏭️ Not started' : '⏳ Waiting';
+    };
     const body = `${statusMarker}
 ## 🚀 Staging deployment
 **Status:** ${stage}
