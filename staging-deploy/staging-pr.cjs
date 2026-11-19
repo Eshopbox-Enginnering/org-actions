@@ -164,6 +164,7 @@ class StagingPR extends StagingGit {
     if (activeRules.some(rule => rule.type === 'merge_queue'))
       throw new Error('Staging requires a merge queue. Automated admin merge is not supported: ' + pr.html_url);
 
+    const expectedStagingBase = this.staging;
     const deadline = Date.now() + 20 * 60 * 1000;
     let lastMergeError;
     while (Date.now() < deadline) {
@@ -225,8 +226,7 @@ class StagingPR extends StagingGit {
     if (finalPR.merge_commit_sha && this.staging !== finalPR.merge_commit_sha)
       throw new Error('Staging advanced after merging the promotion PR; refuse to tag an unreviewed snapshot.');
     const mergedMeta = await this.git('cat-file','-p',this.staging);
-    if (!mergedMeta.includes('parent ' + commit + '\n') ||
-        !mergedMeta.includes('parent ' + finalPR.base.sha + '\n'))
+    if (!mergedMeta.startsWith('tree ' + tree + '\nparent ' + expectedStagingBase + '\nparent ' + commit + '\n'))
       throw new Error('Staging merge parents do not match verified promotion head and base. Refusing deployment.');
     await this.git('merge-base', '--is-ancestor', head, this.staging).catch(() => {
       throw new Error('Merged staging does not contain reviewed main PR head. Refusing to deploy.');
