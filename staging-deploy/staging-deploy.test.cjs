@@ -108,3 +108,27 @@ test('newer Codex review request invalidates an earlier clean summary', () => {
     {id:3,body:'@codex review',created_at:'2026-11-18T10:00:00Z'}];
   assert.throws(() => verifyCodex({head:SHA,comments,reviews:[],reactions:[],requestId:3}),/has not cleared/);
 });
+
+test('staging presence check on synthetic PR merge commit is exempt when workflow is required', () => {
+  const run = {id:10,event:'pull_request',head_sha:SHA,pull_requests:[{number:600}],
+    path:'.github/workflows/check-commits-in-staging.yml@main',check_suite_id:10};
+  const mergeCheck = {name:'check-commits',status:'completed',conclusion:'failure',
+    app:{id:15368},check_suite:{id:99}};
+  const base = {head:SHA,number:600,protection:{requiresStatusChecks:true,
+    requiredStatusChecks:[{context:'check-commits'}]},
+    rules:[{type:'workflows',parameters:{workflows:[
+      {path:'.github/workflows/check-commits-in-staging.yml'}]}}],
+    checks:[mergeCheck],statuses:[],runs:[run]};
+  assert.doesNotThrow(() => verifyChecks(base));
+  assert.throws(() => verifyChecks({...base,
+    protection:{requiresStatusChecks:true,requiredStatusChecks:[
+      {context:'check-commits'},{context:'java-tests'}]}}),/java-tests: missing/);
+  assert.throws(() => verifyChecks({...base,rules:[],runs:[]}),/check-commits: failure/);
+});
+test('deployment status does not repeat PR number and marks failed stages accurately', () => {
+  const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.match(source,/## 🚀 Staging deployment\\n/);
+  assert.doesNotMatch(source,/Staging deployment · PR #|\\*\\*Main PR:\\*\\*/);
+  assert.match(source,/failedStep === key \\? '❌ Failed'/);
+  assert.match(source,/failed \\? '⏭️ Not started'/);
+});
