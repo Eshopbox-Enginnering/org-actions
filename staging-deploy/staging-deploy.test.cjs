@@ -197,3 +197,17 @@ test('each deploy-staging invocation acknowledges and edits only its own status 
   assert.match(source,/PATCH \/repos\/\{owner\}\/\{repo\}\/issues\/comments\/\{comment_id\}/);
   assert.doesNotMatch(source,/const mine = \[\.\.\.existing\]\.reverse\(\)/);
 });
+
+test('staging status links tag to CI/CD run, not Git tree', () => {
+  const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.match(source,/STAGING_RUN_URL \? \x60\[\$\{process\.env\.STAGING_TAG\} — View deployment\]/);
+  assert.doesNotMatch(source,/\/tree\/\$\{process\.env\.STAGING_TAG\}/);
+  assert.match(source,/process\.env\.STAGING_RUN_URL = deployment\.html_url/);
+});
+test('staging status distinguishes a replay from a new promotion', () => {
+  const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.match(source,/const previouslyTagged = Boolean\(published\)/);
+  assert.match(source,/Existing staging promotion verified \(no new PR or merge\)/);
+  assert.match(source,/no new tag or deployment/);
+  assert.match(source,/Staging PR auto-merged by authorized GitHub App/);
+});
