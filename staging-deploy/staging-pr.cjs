@@ -187,10 +187,10 @@ class StagingPR extends StagingGit {
       const statuses = (await this.api.rest.repos.getCombinedStatusForRef(
         {...this.repo,ref:checkedSha})).data;
       const runs = await this.api.paginate(this.api.rest.actions.listWorkflowRunsForRepo,
-        {...this.repo,head_sha:head,event:'pull_request',per_page:100});
+        {...this.repo,head_sha:commit,event:'pull_request',per_page:100});
       const readiness = promotionReadiness({
         checks:observed,statuses,rules:activeRules,protection:branchProtection,
-        runs,sha:checkedSha,head,number:pr.number
+        runs,sha:checkedSha,head:commit,number:pr.number
       });
       if (readiness.errors.length)
         throw new Error('Staging PR has failed checks: ' + readiness.errors.join(', ') + '. ' + pr.html_url);
