@@ -184,3 +184,16 @@ test('staging admin-merge verifies exact base tree and handles gh failures by st
   assert.match(source,/error\.stderr \|\| error\.stdout/);
   assert.doesNotMatch(source,/lastMergeError\)\)/);
 });
+
+test('each deploy-staging invocation acknowledges and edits only its own status comment', () => {
+  const workflow = fs.readFileSync(path.join(__dirname,'../.github/workflows/reusable-staging-deploy.yml'),'utf8');
+  const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.match(workflow,/  acknowledge:/);
+  assert.match(workflow,/    needs: acknowledge/);
+  assert.match(workflow,/github\.rest\.issues\.createComment/);
+  assert.match(workflow,/STAGING_ACK_COMMENT_ID: \$\{\{ needs\.acknowledge\.outputs\.comment_id \}\}/);
+  assert.match(workflow,/github\.rest\.issues\.updateComment/);
+  assert.match(source,/Number\(process\.env\.STAGING_ACK_COMMENT_ID\)/);
+  assert.match(source,/PATCH \/repos\/\{owner\}\/\{repo\}\/issues\/comments\/\{comment_id\}/);
+  assert.doesNotMatch(source,/const mine = \[\.\.\.existing\]\.reverse\(\)/);
+});
