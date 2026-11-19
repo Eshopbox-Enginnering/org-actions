@@ -101,7 +101,11 @@ function verifyChecks({ head, number, protection, rules, checks, statuses, runs 
     const presenceName = /^(?:check-commits|check-commits-in-staging|Check PR commits exist in staging)(?: \/ .+)?$/i.test(expected.context);
     const belongsToPresenceRun = matching.length > 0 && matching.every(c => stagingSuites.has(c.check_suite?.id));
     const presenceWorkflowConfigured = requiredWorkflows.some(w => w.path === STAGING_WORKFLOW);
-    if (presenceName && (belongsToPresenceRun || (!matching.length && presenceWorkflowConfigured))) continue;
+    // GitHub can return check runs from the synthetic PR test-merge commit,
+    // whose suite IDs differ from the PR-head workflow run. Recognize the
+    // named staging-presence gate when its workflow is required or ran for
+    // this PR, even if the check suite IDs no longer match.
+    if (presenceName && (belongsToPresenceRun || presenceWorkflowConfigured || stagingSuites.size > 0)) continue;
     const currentChecks = latestChecks(matching);
     const status = newest(statuses.filter(s => s.context === expected.context));
     if (!currentChecks.length && !status) problems.push(`${expected.context}: missing`);
@@ -226,22 +230,32 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
   let statusId;
   let stage = '⏳ Initializing';
   const status = async (message) => {
+    const previousStage = stage;
     stage = message;
+    const failed = message.startsWith('❌');
+    const failedStep = !failed ? '' :
+      /required checks/i.test(message) ? 'checks' :
+      /staging PR|staging branch|merge|conflict/i.test(message) ? 'staging' :
+      /deploy|CI\/CD|tag/i.test(message) ? 'deploy' :
+      /preparing protected staging/i.test(previousStage) ? 'staging' :
+      /dispatching CI\/CD|deployment/i.test(previousStage) ? 'deploy' :
+      /validating requester|review/i.test(previousStage) ? 'review' : 'checks';
+    const stepState = (value, key) => value || (failed && failedStep === key ? '❌ Failed' :
+      failed ? '⏭️ Not started' : '⏳ Waiting');
     const body = `${statusMarker}
-## 🚀 Staging deployment · PR #${number}
+## 🚀 Staging deployment
 **Status:** ${stage}
 
 | Step | Result |
 |---|---|
-| Authorization & review | ${process.env.STAGE_REVIEW || '⏳ Waiting'} |
-| Required checks | ${process.env.STAGE_CHECKS || '⏳ Waiting'} |
-| Staging PR | ${process.env.STAGE_PR || '⏳ Waiting'} |
-| Tag & CI/CD | ${process.env.STAGE_DEPLOY || '⏳ Waiting'} |
+| Authorization & review | ${stepState(process.env.STAGE_REVIEW, 'review')} |
+| Required checks | ${stepState(process.env.STAGE_CHECKS, 'checks')} |
+| Staging PR | ${stepState(process.env.STAGE_PR, 'staging')} |
+| Tag & CI/CD | ${stepState(process.env.STAGE_DEPLOY, 'deploy')} |
 
-**Main PR:** [#${number}](${statusUrl}/pull/${number})
 **Workflow run:** [View execution](${statusUrl}/actions/runs/${context.runId})
-${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/tree/${process.env.STAGING_TAG})\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\n` : ''}
-${message.startsWith('❌') ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
+${process.env.STAGING_PR_URL ? `**Staging PR:** [Open staging PR](${process.env.STAGING_PR_URL})\\n` : ''}${process.env.STAGING_TAG ? `**Tag:** [${process.env.STAGING_TAG}](${statusUrl}/tree/${process.env.STAGING_TAG})\\n` : ''}${process.env.STAGING_RUN_URL ? `**Deployment run:** [View CI/CD](${process.env.STAGING_RUN_URL})\\n` : ''}
+${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
     if (!statusId) {
       const existing = await pages('GET /repos/{owner}/{repo}/issues/{issue_number}/comments', { issue_number: number });
       const mine = [...existing].reverse().find(c => c.user?.login === 'github-actions[bot]' && c.body?.includes(statusMarker));
