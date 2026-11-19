@@ -249,6 +249,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
       return failed ? '⏭️ Not started' : '⏳ Waiting';
     };
     const body = `${statusMarker}
+<!-- central-staging-run:${context.runId} -->
 ## 🚀 Staging deployment
 **Status:** ${stage}
 
