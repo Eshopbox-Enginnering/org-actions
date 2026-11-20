@@ -56,7 +56,7 @@ def names(args):
         selected = [x.strip() for x in args.repositories.split(",") if x.strip()]
         if not selected or len(selected) > MAX_SELECTED:
             raise ValueError("selected requires 1 to 25 comma-separated names")
-        if len(set(selected)) != len(selected) or any(not NAME.fullmatch(x) for x in selected):
+        if len({x.casefold() for x in selected}) != len(selected) or any(not NAME.fullmatch(x) for x in selected):
             raise ValueError("selected contains duplicate or invalid names")
         return selected
     if args.repository.strip() or args.repositories.strip():
@@ -65,7 +65,7 @@ def names(args):
                          "--json", "name,isArchived,isFork,defaultBranchRef"))
     if len(data) == 1000:
         raise ValueError("Repository discovery reached the 1000-repository limit; fail closed")
-    return sorted(x["name"] for x in data if not x.get("isArchived") and not x.get("isFork"))
+    return sorted((x["name"] for x in data), key=str.casefold)
 
 
 def inspect(repo, target):
@@ -85,17 +85,26 @@ def inspect(repo, target):
         file_at(repo, "backend/pom.xml", "main")
     ):
         return "skipped", "not a Maven backend repository"
-    # Installing the caller must not be mistaken for guaranteeing an
-    # operational deployment. Both branches need exactly one compatible
-    # CI/CD workflow; refuse ambiguous or unsupported targets.
+    # Mirror auto-staging-deploy.cjs: count all ACTIVE workflows, not just
+    # workflow files that happen to advertise workflow_dispatch. A disabled
+    # workflow is not usable and two active workflows are ambiguous.
+    active = []
+    for filename in DEPLOY:
+        try:
+            workflow = api_json(f"repos/{ORG}/{repo}/actions/workflows/{filename}")
+        except RuntimeError as exc:
+            if "404" in str(exc) or "Not Found" in str(exc):
+                continue
+            raise
+        if workflow.get("state") == "active":
+            active.append(filename)
+    if len(active) != 1:
+        return "skipped", f"expected exactly one active cicd.yml or ci-cd.yml, found {active}"
+    workflow_file = active[0]
     for ref in ("staging", "main"):
-        compatible = []
-        for filename in DEPLOY:
-            content = file_at(repo, f".github/workflows/{filename}", ref)
-            if content and re.search(rb"(?m)^\s+workflow_dispatch\s*:", content):
-                compatible.append(filename)
-        if len(compatible) != 1:
-            return "skipped", f"{ref}: expected one dispatchable cicd.yml or ci-cd.yml, found {compatible}"
+        content = file_at(repo, f".github/workflows/{workflow_file}", ref)
+        if not content or not re.search(rb"(?m)^\s+workflow_dispatch\s*:", content):
+            return "skipped", f"{ref}: active {workflow_file} lacks workflow_dispatch"
     installed = all(file_at(repo, DEST, ref) == CALLER for ref in ("staging", "main"))
     return ("current", "already installed on staging and main") if installed else ("eligible", "ready for staged rollout")
 
