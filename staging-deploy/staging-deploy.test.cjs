@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {verifyCodex, verifyChecks, nextTag, StagingGit, hasCodexQuotaEvidence} = require('./auto-staging-deploy.cjs');
-const {StagingPR,promotionReadiness} = require('./staging-pr.cjs');
+const {StagingPR} = require('./staging-pr.cjs');
 
 const SHA = 'a'.repeat(40);
 const bot = { user: {login:'chatgpt-codex-connector[bot]'} };
@@ -66,12 +66,15 @@ test('expected staging-presence failure is exempt during pre-promotion', () => {
   assert.doesNotThrow(() => verifyChecks({...base,checks:[{...stagingCheck,check_suite:{id:99}}],
     protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-in-staging'}]}}));
 });
-test('staging PR promotion fails closed without merge support or queue support', () => {
+test('temporary staging promotion uses app merge and verifies resulting merge before tagging', () => {
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(s,/allow_merge_commit/);
-  assert.match(s,/merge_queue/);
+  assert.match(s,/--match-head-commit/);
+  assert.match(s,/--admin/);
+  assert.match(s,/--merge/);
+  assert.match(s,/expectedStagingBase/);
+  assert.match(s,/finalPR\.merged/);
+  assert.match(s,/mergedMeta\.startsWith/);
   assert.match(s,/--atomic/);
-  assert.match(s,/refs\/heads\/staging/);
 });
 test('quota fallback has a head-bound structured proof, not prose substring matching', () => {
   const s = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
@@ -139,50 +142,28 @@ test('auto staging merge uses approved App token and refuses missing credentials
   assert.match(source,/env\.GH_TOKEN = env\.STAGING_DEPLOY_APP_TOKEN/);
   assert.match(source,/Organization App token is missing/);
   assert.match(staging,/--match-head-commit/);
-  assert.match(staging,/readiness\.errors\.length/);
-  assert.match(staging,/!readiness\.pending\.length/);
-  assert.match(staging,/current\.base\.sha !== this\.staging/);
+  assert.doesNotMatch(staging,/promotionReadiness|readiness\.pending/);
+  assert.match(staging,/current\.base\.sha !== expectedStagingBase/);
   assert.doesNotMatch(staging,/refs\/heads\/staging'\]/);
 });
 
-test('staging auto-merge waits until every named required check exists', () => {
-  const required = {type:'required_status_checks',parameters:{required_status_checks:[
-    {context:'fast-check'},{context:'slow-check'}]}};
-  const green = {name:'fast-check',status:'completed',conclusion:'success',app:{id:1}};
-  const inputs = {checks:[green],statuses:{state:'pending',total_count:0,statuses:[]},
-    rules:[required],protection:null,runs:[],sha:SHA,head:SHA,number:601};
-  assert.deepEqual(promotionReadiness(inputs).errors,[]);
-  assert.match(promotionReadiness(inputs).pending.join(' '),/slow-check: missing/);
-  const complete = promotionReadiness({...inputs,checks:[green,{...green,name:'slow-check'}]});
-  assert.deepEqual(complete.pending,[]);
-  assert.deepEqual(complete.errors,[]);
-});
-test('staging auto-merge uses aggregate statuses beyond first page', () => {
-  const inputs = {checks:[{name:'compile',status:'completed',conclusion:'success'}],
-    statuses:{total_count:31,state:'failure',statuses:[{context:'compile',state:'success'}]},
-    rules:[],protection:null,runs:[],sha:SHA,head:SHA,number:601};
-  assert.match(promotionReadiness(inputs).errors.join(' '),/combined status: failure/);
-  assert.match(promotionReadiness({...inputs,statuses:{...inputs.statuses,state:'pending'}}).pending.join(' '),/combined status pending/);
-});
-test('staging auto-merge waits for the configured required workflow tied to PR and check suite', () => {
-  const path = '.github/workflows/pr-ticket-validation.yml';
-  const required = {type:'workflows',parameters:{workflows:[{path,repository_id:123}]}};
-  const green = {name:'ticket',status:'completed',conclusion:'success',check_suite:{id:42}};
-  const run = {event:'pull_request',head_sha:SHA,pull_requests:[{number:601}],
-    path:path+'@main',repository:{id:123},check_suite_id:42,status:'completed',conclusion:'success'};
-  const base = {checks:[green],statuses:{state:'pending',total_count:0,statuses:[]},
-    rules:[required],protection:null,runs:[],sha:'b'.repeat(40),head:SHA,number:601};
-  assert.match(promotionReadiness(base).pending.join(' '),/missing required workflow/);
-  assert.deepEqual(promotionReadiness({...base,runs:[run]}).pending,[]);
-  assert.match(promotionReadiness({...base,runs:[{...run,repository:{id:999}}]}).pending.join(' '),/missing required workflow/);
+test('temporary staging promotion never waits on its own CI checks', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.doesNotMatch(source,/promotionReadiness|getBranchRules|getBranchProtection|listForRef|getCombinedStatusForRef|listWorkflowRunsForRepo/);
+  assert.match(source,/No staging promotion PR CI checks or manual approval are required/);
+  assert.match(source,/await assertCurrent\(\)/);
+  assert.match(source,/current\.head\.sha !== commit/);
+  assert.match(source,/current\.base\.sha !== expectedStagingBase/);
+  assert.match(source,/--match-head-commit/);
+  assert.match(source,/--admin/);
 });
 test('staging admin-merge verifies exact base tree and handles gh failures by stderr', () => {
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   assert.match(source,/--match-head-commit/);
   assert.match(source,/expectedStagingBase/);
   assert.match(source,/mergedMeta\.startsWith/);
-  assert.match(source,/error\.stderr \|\| error\.stdout/);
-  assert.doesNotMatch(source,/lastMergeError\)\)/);
+  assert.match(source,/error\.stderr \|\| error\.stdout \|\| error\.message/);
+  assert.doesNotMatch(source,/lastMergeError/);
 });
 
 test('each deploy-staging invocation acknowledges and edits only its own status comment', () => {
@@ -233,4 +214,17 @@ test('structured current-head Codex rate-limit receipt remains supported', () =>
     body:'<!-- codex-review-unavailable:v1 ' + JSON.stringify({status:'rate_limited',commit_sha:SHA}) + ' -->'};
   assert.equal(hasCodexQuotaEvidence({comments:[evidence],head:SHA}),true);
   assert.equal(hasCodexQuotaEvidence({comments:[evidence],head:'b'.repeat(40)}),false);
+});
+
+
+test('temporary staging PR waits for mergeability calculation, not its checks', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.match(source,/current\.mergeable === true/);
+  assert.match(source,/current\.mergeable === false/);
+  assert.match(source,/current\.mergeable !== true/);
+  assert.match(source,/attempt < 10/);
+  assert.match(source,/await assertCurrent\(\)/);
+  assert.match(source,/beforeMerge\.head\.sha !== commit/);
+  assert.match(source,/beforeMerge\.base\.sha !== expectedStagingBase/);
+  assert.doesNotMatch(source,/promotionReadiness|listForRef|getCombinedStatusForRef/);
 });
