@@ -6,6 +6,7 @@ const execute = promisify(execFile);
 const STAGING_CHECK = 'Check PR commits exist in staging';
 const STAGING_WORKFLOW = '.github/workflows/check-commits-in-staging.yml';
 const CODEX_AUTHORS = new Set(['chatgpt-codex-connector[bot]', 'codex[agent]']);
+const WORKFLOW = 'cicd.yml'; // Legacy StagingGit.publish default.
 const DEPLOY_WORKFLOWS = ['cicd.yml', 'ci-cd.yml'];
 const time = value => Date.parse(value || '') || 0;
 // GitHub supplies the authenticated login. Codex agent identities need not have
