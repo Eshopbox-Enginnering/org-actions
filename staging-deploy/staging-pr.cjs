@@ -90,17 +90,33 @@ class StagingPR extends StagingGit {
     // reviewed head have already passed before this PR is created.
     // No staging promotion PR CI checks or manual approval are required.
     const expectedStagingBase = this.staging;
-    await assertCurrent();
-    const current = (await this.app.rest.pulls.get({...this.repo,pull_number:pr.number})).data;
-    if (current.state === 'closed') {
-      if (!current.merged) throw new Error('Staging PR was closed without merging: ' + pr.html_url);
-    } else {
+    // GitHub may return mergeable:null while calculating the synthetic merge.
+    // Wait only for mergeability, never for staging PR CI or review approval.
+    let current;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await assertCurrent();
+      current = (await this.app.rest.pulls.get({...this.repo,pull_number:pr.number})).data;
       if (current.head.sha !== commit)
         throw new Error('Staging promotion PR head changed unexpectedly: ' + pr.html_url);
       if (current.base.sha !== expectedStagingBase)
         throw new Error('Staging advanced after promotion PR creation; refusing stale merge: ' + pr.html_url);
+      if (current.state === 'closed') {
+        if (!current.merged) throw new Error('Staging PR was closed without merging: ' + pr.html_url);
+        break;
+      }
+      if (current.mergeable === true) break;
       if (current.mergeable === false)
         throw new Error('Staging promotion PR has merge conflicts: ' + pr.html_url);
+      if (attempt < 9) await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    if (current.state !== 'closed') {
+      if (current.mergeable !== true)
+        throw new Error('GitHub has not completed staging PR mergeability calculation: ' + pr.html_url);
+      await assertCurrent();
+      const beforeMerge = (await this.app.rest.pulls.get({...this.repo,pull_number:pr.number})).data;
+      if (beforeMerge.state !== 'open' || beforeMerge.head.sha !== commit ||
+          beforeMerge.base.sha !== expectedStagingBase || beforeMerge.mergeable === false)
+        throw new Error('Staging promotion PR changed before automatic merge: ' + pr.html_url);
       try {
         await this.run('gh', ['pr','merge',String(pr.number),'--repo',
           this.repo.owner + '/' + this.repo.repo,'--merge','--admin',
