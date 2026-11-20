@@ -240,8 +240,8 @@ test('staging merge uses authenticated gh on an isolated self-hosted runner', ()
   assert.ok(!source.includes('this.app.rest.pulls.merge'));
   assert.ok(workflow.includes('runs-on: self-hosted'));
   assert.ok(workflow.includes('Install pinned GitHub CLI for App-admin merge'));
-  assert.ok(workflow.includes('expected_sha256='));
-  assert.ok(workflow.includes('sha256sum --check --status'));
+  assert.ok(workflow.includes('staging-deploy/install-gh.sh'));
+  assert.ok(fs.readFileSync(path.join(__dirname,'install-gh.sh'),'utf8').includes('sha256sum --check --status'));
   assert.ok(workflow.includes('command -v gh'));
   assert.ok(workflow.includes('gh --version'));
 });
@@ -260,4 +260,80 @@ test('PR-controlled workflow code never executes on a persistent checks runner',
   const deploy = fs.readFileSync(path.join(__dirname,'../.github/workflows/reusable-staging-deploy.yml'),'utf8');
   assert.ok(deploy.includes('runs-on: self-hosted'));
   assert.ok(deploy.includes('group: checks-runners')); // acknowledgment only
+});
+
+test('integration: create promotion PR, App-admin merge, verify ancestry, publish tag only', async () => {
+  const base='1'.repeat(40), head='2'.repeat(40), tree='3'.repeat(40);
+  const promotion='4'.repeat(40), mergedSha='5'.repeat(40);
+  const events=[];
+  let merged=false;
+  const app={rest:{
+    git:{getRef:async()=>{const e=new Error('not found');e.status=404;throw e;}},
+    pulls:{
+      list:async()=>({data:[]}),
+      create:async()=>{events.push('PR created');return {data:{number:777,html_url:'https://github.com/test/repo/pull/777'}};},
+      get:async()=>({data:{number:777,head:{sha:promotion},base:{sha:base},
+        state:merged?'closed':'open',merged,mergeable:true,merge_commit_sha:merged?mergedSha:'6'.repeat(40)}})
+    }
+  }};
+  const run=async(file,args,opts)=>{
+    assert.equal(file,'gh');
+    assert.equal(opts?.appAuth,true);
+    assert.ok(args.includes('--admin'));
+    assert.equal(args[args.indexOf('--match-head-commit')+1],promotion);
+    events.push('merged via App');
+    merged=true;
+  };
+  const subject=new StagingPR(run,app,{}, {owner:'test',repo:'repo'});
+  subject.staging=base;
+  subject.assertStaging=async sha=>{assert.equal(sha,mergedSha);events.push('staging verified');};
+  subject.git=async(...args)=>{
+    const cmd=args[0];
+    if(cmd==='merge-base') {
+      if(!merged)throw Error('Not an ancestor yet');
+      return '';
+    }
+    if(cmd==='merge-tree')return tree;
+    if(cmd==='show')return 'on:\\n  workflow_dispatch:\\n';
+    if(cmd==='-c'&&args.includes('commit-tree'))return promotion;
+    if(cmd==='push'){
+      events.push('push '+args.slice(1).join(' '));return '';
+    }
+    if(cmd==='fetch')return '';
+    if(cmd==='rev-parse')return mergedSha;
+    if(cmd==='cat-file')return 'tree '+tree+'\\nparent '+base+'\\nparent '+promotion+'\\n';
+    if(cmd==='tag')return 'dev-v1.0.0';
+    if(cmd==='-c'&&args.includes('tag')){events.push('tag created');return '';}
+    throw Error('Unexpected git command: '+args.join(' '));
+  };
+  let currentCalls=0;
+  const result=await subject.publish({number:466,head,issue:'7064',
+    assertCurrent:async()=>{currentCalls++;},status:async()=>{}});
+  assert.deepEqual(result,{tag:'dev-v1.0.1',commit:mergedSha});
+  assert.ok(currentCalls>=3);
+  assert.deepEqual(events.filter(e=>e==='PR created'||e==='merged via App'||e==='staging verified'||e==='tag created'),
+    ['PR created','merged via App','tag created','staging verified']);
+  assert.ok(events.some(e=>e.startsWith('push ')&&e.includes('refs/heads/auto-staging/')));
+  assert.ok(events.some(e=>e.startsWith('push ')&&e.includes('refs/tags/dev-v1.0.1')));
+  assert.ok(!events.some(e=>e.includes(':refs/heads/staging')));
+});
+
+test('integration: already-merged head publishes only a tag, without another PR',async()=>{
+  const staging='7'.repeat(40),head='8'.repeat(40);
+  const events=[];
+  const subject=new StagingPR(async()=>{throw Error('unexpected CLI')},{},{},{owner:'test',repo:'repo'});
+  subject.staging=staging;
+  subject.assertStaging=async()=>events.push('remote staging verified');
+  subject.git=async(...args)=>{
+    if(args[0]==='merge-base')return '';
+    if(args[0]==='tag')return 'dev-v1.0.1';
+    if(args[0]==='-c'&&args.includes('tag')){events.push('tag created');return '';}
+    if(args[0]==='push'){events.push(args.slice(1).join(' '));return '';}
+    throw Error('Unexpected git command: '+args.join(' '));
+  };
+  const result=await subject.publish({number:466,head,assertCurrent:async()=>{}});
+  assert.deepEqual(result,{tag:'dev-v1.0.2',commit:staging});
+  assert.ok(events.includes('remote staging verified'));
+  assert.ok(events.some(e=>e.includes('refs/tags/dev-v1.0.2')));
+  assert.ok(!events.some(e=>e.includes('refs/heads/staging')));
 });
