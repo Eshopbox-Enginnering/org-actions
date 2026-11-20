@@ -160,31 +160,38 @@ jobs:
         # Keep both results even when Maven fails. The final gate checks exit codes
         # AND test XML; ignoring test failures here lets Maven finish all tests.
         run: |
-          if [[ "$GITHUB_REPOSITORY" == "Eshopbox-Enginnering/building-blocks" && -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
-            # The mocked Cloud Tasks tests still initialize the SDK in both revisions.
-            test_adc=$(mktemp "$RUNNER_TEMP/building-blocks-test-adc.XXXXXXXX")
-            trap 'rm -f -- "$test_adc"' EXIT
-            python3 - "$test_adc" <<'PYTHON'
-          import json
-          import subprocess
-          import sys
-          from pathlib import Path
+          test_options=()
+          if [[ "$GITHUB_REPOSITORY" == "Eshopbox-Enginnering/building-blocks" ]]; then
+            # Both revisions need the mock before Mockito initializes TaskQueueHandler.
+            for revision in base pr; do
+              support="$revision/src/test/java/com/platform/coverage"
+              services="$revision/src/test/resources/META-INF/services"
+              mkdir -p "$support" "$services"
+              cat > "$support/MockCloudTasksExtension.java" <<'JAVA'
+          package com.platform.coverage;
 
-          key = subprocess.check_output(
-              ['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048'],
-              stderr=subprocess.DEVNULL, text=True,
-          )
-          Path(sys.argv[1]).write_text(json.dumps({
-              'type': 'service_account',
-              'project_id': 'local-test',
-              'client_id': '100000000000000000000',
-              'client_email': 'local-test@example.invalid',
-              'private_key_id': 'local-test',
-              'private_key': key,
-              'token_uri': 'http://127.0.0.1:1/token',
-          }))
-          PYTHON
-            export GOOGLE_APPLICATION_CREDENTIALS="$test_adc"
+          import com.google.cloud.tasks.v2.CloudTasksClient;
+          import com.platform.util.TaskQueueHandler;
+          import org.junit.jupiter.api.extension.Extension;
+          import org.mockito.MockedStatic;
+          import org.mockito.Mockito;
+
+          public final class MockCloudTasksExtension implements Extension {
+              public MockCloudTasksExtension() throws ClassNotFoundException {
+                  try (MockedStatic<CloudTasksClient> factory = Mockito.mockStatic(CloudTasksClient.class)) {
+                      CloudTasksClient client = Mockito.mock(CloudTasksClient.class, invocation -> {
+                          throw new AssertionError("Unexpected Cloud Tasks SDK call: " + invocation.getMethod().getName());
+                      });
+                      factory.when(CloudTasksClient::create).thenReturn(client);
+                      Class.forName(TaskQueueHandler.class.getName());
+                  }
+              }
+          }
+          JAVA
+              printf '%s\n' com.platform.coverage.MockCloudTasksExtension \
+                >> "$services/org.junit.jupiter.api.extension.Extension"
+            done
+            test_options+=(-Djunit.jupiter.extensions.autodetection.enabled=true)
           fi
 
           set +e
@@ -194,7 +201,7 @@ jobs:
               mvn --batch-mode --no-transfer-progress \
                 -Dmaven.test.failure.ignore=true \
                 -DskipTests=false -Dmaven.test.skip=false \
-                -DfailIfNoTests=true -DforkCount=1 \
+                -DfailIfNoTests=true -DforkCount=1 "${test_options[@]}" \
                 clean org.jacoco:jacoco-maven-plugin:0.8.14:prepare-agent verify
               test_status=$?
               # Generate partial coverage even after a test/build failure.
