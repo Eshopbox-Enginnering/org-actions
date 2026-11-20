@@ -6,7 +6,7 @@ const execute = promisify(execFile);
 const STAGING_CHECK = 'Check PR commits exist in staging';
 const STAGING_WORKFLOW = '.github/workflows/check-commits-in-staging.yml';
 const CODEX_AUTHORS = new Set(['chatgpt-codex-connector[bot]', 'codex[agent]']);
-const WORKFLOW = 'cicd.yml';
+const DEPLOY_WORKFLOWS = ['cicd.yml', 'ci-cd.yml'];
 const time = value => Date.parse(value || '') || 0;
 // GitHub supplies the authenticated login. Codex agent identities need not have
 // the same REST user.type as the connector bot.
@@ -398,14 +398,26 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
     process.env.STAGE_REVIEW = '✅ Cleared';
     process.env.STAGE_CHECKS = '✅ All required checks passed (staging-presence excluded)';
     await status('⏳ Preparing protected staging PR');
-    const workflow = (await request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}', { workflow_id: WORKFLOW })).data;
-    if (workflow.state !== 'active') throw new Error(`${WORKFLOW} is disabled. Enable it before deploying.`);
+    // Discover the service's existing deployment workflow; do not rename or
+    // replace its live CI/CD. Internal Apps uses ci-cd.yml, Java services may
+    // use cicd.yml. Refuse ambiguous configurations.
+    const available = [];
+    for (const candidate of DEPLOY_WORKFLOWS) {
+      try {
+        const found = (await request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}',
+          {workflow_id:candidate})).data;
+        if (found.state === 'active') available.push(candidate);
+      } catch (error) { if (error.status !== 404) throw error; }
+    }
+    if (available.length !== 1)
+      throw new Error('Expected exactly one active staging CI/CD workflow (cicd.yml or ci-cd.yml); found: ' + available.join(', '));
+    const workflowFile = available[0];
     await git.prepare(number, head);
     await assertCurrent();
     published = await git.existing(number, head);
     if (published && published.commit !== git.staging) {
       const previousRuns = await pages('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
-        workflow_id: WORKFLOW, branch: published.tag, event: 'workflow_dispatch', head_sha: published.commit,
+        workflow_id: workflowFile, branch: published.tag, event: 'workflow_dispatch', head_sha: published.commit,
       });
       const previous = newest(previousRuns.filter(r => r.head_sha === published.commit && r.head_branch === published.tag && r.event === 'workflow_dispatch'));
       if (previous && previous.status !== 'completed') throw new Error(`The earlier staging snapshot is still deploying: ${previous.html_url}. Wait for it to finish, then retry /deploy-staging.`);
@@ -414,7 +426,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
     const previouslyTagged = Boolean(published);
     if (!published) {
       const issue = pr.head.ref.match(/^(?:feature|bug|fix)\/(\d+)(?:\D|$)/i)?.[1] || pr.title?.match(/#(\d+)\b/)?.[1];
-      published = await git.publish({ number, head, issue, assertCurrent: async () => { await gates(); await assertCurrent(); }, status });
+      published = await git.publish({ number, head, issue, workflowFile, assertCurrent: async () => { await gates(); await assertCurrent(); }, status });
     }
     const { tag, commit } = published;
     process.env.STAGE_PR = previouslyTagged ?
@@ -425,7 +437,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
     process.env.STAGING_TAG = tag;
     process.env.STAGE_DEPLOY = '⏳ Checking for existing staging CI/CD run';
     await status(previouslyTagged ? '⏳ Existing staging tag found; checking deployment' : '⏳ Staging ready; preparing CI/CD');
-    const deployments = () => pages('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', { workflow_id: WORKFLOW, branch: tag, event: 'workflow_dispatch', head_sha: commit });
+    const deployments = () => pages('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', { workflow_id: workflowFile, branch: tag, event: 'workflow_dispatch', head_sha: commit });
     let deployment = newest((await deployments()).filter(r => r.head_sha === commit && r.head_branch === tag && r.event === 'workflow_dispatch'));
     if (deployment?.status === 'completed' && deployment.conclusion === 'success') {
       await assertCurrent();
@@ -437,7 +449,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       await git.assertStaging(commit);
       if (!deployment || deployment.status === 'completed') {
         const previous = deployment?.id || 0;
-        await request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', { workflow_id: WORKFLOW, ref: tag });
+        await request('POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches', { workflow_id: workflowFile, ref: tag });
         deployment = undefined;
         const deadline = now() + 120000;
         do {
