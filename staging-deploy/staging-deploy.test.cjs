@@ -307,7 +307,7 @@ test('integration: create promotion PR, App-admin merge, verify ancestry, publis
     throw Error('Unexpected git command: '+args.join(' '));
   };
   let currentCalls=0;
-  const result=await subject.publish({number:466,head,issue:'7064',
+  const result=await subject.publish({number:466,head,issue:'7064',workflowFile:'ci-cd.yml',
     assertCurrent:async()=>{currentCalls++;},status:async()=>{}});
   assert.deepEqual(result,{tag:'dev-v1.0.1',commit:mergedSha});
   assert.ok(currentCalls>=3);
@@ -331,7 +331,7 @@ test('integration: already-merged head publishes only a tag, without another PR'
     if(args[0]==='push'){events.push(args.slice(1).join(' '));return '';}
     throw Error('Unexpected git command: '+args.join(' '));
   };
-  const result=await subject.publish({number:466,head,assertCurrent:async()=>{}});
+  const result=await subject.publish({number:466,head,workflowFile:'ci-cd.yml',assertCurrent:async()=>{}});
   assert.deepEqual(result,{tag:'dev-v1.0.2',commit:staging});
   assert.ok(events.includes('remote staging verified'));
   assert.ok(events.some(e=>e.includes('refs/tags/dev-v1.0.2')));
@@ -352,4 +352,16 @@ test('final successful staging comment mentions original PR author, never on fai
   assert.ok(source.includes("staging deployment succeeded; please verify the application."));
   assert.ok(source.includes("PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}"));
   assert.ok(!source.includes("POST /repos/{owner}/{repo}/issues/comments"));
+});
+
+test('internal-apps ci-cd.yml and standard cicd.yml are both detected', () => {
+  const main = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  const promotion = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.ok(main.includes("['cicd.yml', 'ci-cd.yml']"));
+  assert.ok(main.includes('const workflowFile = available[0]'));
+  assert.ok(main.includes('workflow_id: workflowFile'));
+  assert.ok(main.includes('workflowFile, assertCurrent'));
+  assert.ok(promotion.includes("['cicd.yml','ci-cd.yml'].includes(workflowFile)"));
+  assert.ok(promotion.includes("' :.github/workflows/'")===false);
+  assert.ok(promotion.includes("tree + ':.github/workflows/' + workflowFile"));
 });
