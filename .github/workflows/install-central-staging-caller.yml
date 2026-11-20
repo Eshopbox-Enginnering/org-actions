@@ -49,6 +49,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
+      has_targets: ${{ steps.discover.outputs.has_targets }}
     steps:
       - name: Checkout trusted org-actions main
         uses: actions/checkout@v4
@@ -94,6 +95,7 @@ jobs:
             --repositories "$REPOSITORIES" \
             --output rollout-matrix.json --report rollout-report.json
           echo "matrix=$(cat rollout-matrix.json)" >> "$GITHUB_OUTPUT"
+          python3 -c 'import json; print("has_targets=" + str(bool(json.load(open("rollout-matrix.json"))["include"])).lower())' >> "$GITHUB_OUTPUT"
           echo "### Central caller rollout plan: $OPERATION / $TARGET" >> "$GITHUB_STEP_SUMMARY"
           echo 'See rollout-report artifact for per-repository eligibility.' >> "$GITHUB_STEP_SUMMARY"
           cat rollout-report.json
@@ -107,7 +109,7 @@ jobs:
 
   install:
     needs: plan
-    if: ${{ inputs.operation == 'APPLY' && needs.plan.result == 'success' }}
+    if: ${{ inputs.operation == 'APPLY' && needs.plan.result == 'success' && needs.plan.outputs.has_targets == 'true' }}
     strategy:
       fail-fast: false
       max-parallel: 3
