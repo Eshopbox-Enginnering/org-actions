@@ -216,3 +216,15 @@ test('structured current-head Codex rate-limit receipt remains supported', () =>
   assert.equal(hasCodexQuotaEvidence({comments:[evidence],head:'b'.repeat(40)}),false);
 });
 
+
+test('temporary staging PR waits for mergeability calculation, not its checks', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.match(source,/current\.mergeable === true/);
+  assert.match(source,/current\.mergeable === false/);
+  assert.match(source,/current\.mergeable !== true/);
+  assert.match(source,/attempt < 10/);
+  assert.match(source,/await assertCurrent\(\)/);
+  assert.match(source,/beforeMerge\.head\.sha !== commit/);
+  assert.match(source,/beforeMerge\.base\.sha !== expectedStagingBase/);
+  assert.doesNotMatch(source,/promotionReadiness|listForRef|getCombinedStatusForRef/);
+});
