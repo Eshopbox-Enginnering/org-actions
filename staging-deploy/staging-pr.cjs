@@ -12,7 +12,9 @@ class StagingPR extends StagingGit {
     this.repo = repository;
   }
 
-  async publish({number, head, issue, assertCurrent, status}) {
+  async publish({number, head, issue, workflowFile, assertCurrent, status}) {
+    if (!['cicd.yml','ci-cd.yml'].includes(workflowFile))
+      throw new Error('Unsupported CI/CD workflow for staging promotion');
     // If this exact reviewed head is already in staging (e.g. prior promotion
     // merged, but tag or dispatch failed), resume at tagging instead of
     // creating another PR.
@@ -39,9 +41,9 @@ class StagingPR extends StagingGit {
       throw new Error('Staging merge conflict. Create a conflict-resolution PR from staging; merge it after review and retry /deploy-staging.\n' + detail);
     }
     if (!/^[0-9a-f]{40,64}$/.test(tree)) throw new Error('Git merge-tree did not produce a valid tree.');
-    const stagedWorkflow = await this.git('show', tree + ':.github/workflows/cicd.yml').catch(() => '');
+    const stagedWorkflow = await this.git('show', tree + ':.github/workflows/' + workflowFile).catch(() => '');
     if (!/^\s+workflow_dispatch\s*:/m.test(stagedWorkflow))
-      throw new Error('The staging snapshot lacks workflow_dispatch in .github/workflows/cicd.yml. No staging PR created.');
+      throw new Error('The staging snapshot lacks workflow_dispatch in .github/workflows/' + workflowFile + '. No staging PR created.');
 
     // The merge commit has staging first and the reviewed main PR head second.
     // The main PR head therefore remains an ancestor of the eventual staging result.
