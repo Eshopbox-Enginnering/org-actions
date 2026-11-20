@@ -38,7 +38,7 @@ test('staging PR implementation replaces direct promotion', () => {
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   assert.match(s,/this\.app\.rest\.pulls\.merge/);
   assert.match(s,/sha: commit/);
-  assert.match(s,/appAuth:true/);
+  assert.match(s,/merge_method: 'merge'/);
   assert.doesNotMatch(s,/mergeable_state === 'clean'/);
   assert.match(s,/commit-tree/);
   assert.doesNotMatch(s,/refs\/heads\/staging'\]/);
