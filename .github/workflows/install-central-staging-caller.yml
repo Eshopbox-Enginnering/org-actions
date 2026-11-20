@@ -4,14 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: DRY_RUN validates the target; APPLY installs via staging then main PRs
+        description: Preview eligibility or install through staging then main
         type: choice
         required: true
         options: [DRY_RUN, APPLY]
         default: DRY_RUN
-      repository:
-        description: One repository name, e.g. eshopbox-internal-apps
+      target:
+        description: Which repositories to install into
+        type: choice
         required: true
+        options: [single, selected, backend, all]
+        default: single
+      repository:
+        description: Repository name when target=single
+        required: false
+        type: string
+      repositories:
+        description: Comma-separated names when target=selected (max 25)
+        required: false
         type: string
       central_backlog_issue:
         description: Central-Backlog ticket number
@@ -28,9 +38,80 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    # Trusted manual operator, same environment and App as guideline sync.
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
+    environment: agents-org-production
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - name: Checkout trusted org-actions main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Validate inputs and regression tests
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ISSUE: ${{ inputs.central_backlog_issue }}
+        run: |
+          set -euo pipefail
+          if [ "$OPERATION" = APPLY ] && [ "$CONFIRMATION" != APPLY ]; then
+            echo 'APPLY requires exact confirmation APPLY'; exit 1
+          fi
+          if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
+            echo 'Central backlog issue must be numeric'; exit 1
+          fi
+          python3 -m py_compile staging-deploy/install-caller.py staging-deploy/plan-rollout.py
+          python3 -m unittest discover -s tests -p 'test_staging_caller_installer.py' -v
+      - name: Mint organization App discovery token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Discover and check repository eligibility (no writes)
+        id: discover
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          TARGET: ${{ inputs.target }}
+          REPOSITORY: ${{ inputs.repository }}
+          REPOSITORIES: ${{ inputs.repositories }}
+          OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+          python3 staging-deploy/plan-rollout.py \
+            --target "$TARGET" --repository "$REPOSITORY" \
+            --repositories "$REPOSITORIES" \
+            --output rollout-matrix.json --report rollout-report.json
+          echo "matrix=$(cat rollout-matrix.json)" >> "$GITHUB_OUTPUT"
+          echo "### Central caller rollout plan: $OPERATION / $TARGET" >> "$GITHUB_STEP_SUMMARY"
+          echo 'See rollout-report artifact for per-repository eligibility.' >> "$GITHUB_STEP_SUMMARY"
+          cat rollout-report.json
+      - name: Upload full eligibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: central-staging-rollout-report
+          path: rollout-report.json
+          if-no-files-found: ignore
+
   install:
-    # Same trusted/App-operator environment and merge pathway as
-    # Sync Engineering Guidelines; not triggered by untrusted PR events.
+    needs: plan
+    if: ${{ inputs.operation == 'APPLY' && needs.plan.result == 'success' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on:
       group: checks-runners
       labels: checks-runner
@@ -44,47 +125,30 @@ jobs:
         with:
           ref: main
           persist-credentials: false
-      - name: Validate inputs and script
-        shell: bash
-        env:
-          OPERATION: ${{ inputs.operation }}
-          CONFIRMATION: ${{ inputs.confirmation }}
-          REPOSITORY: ${{ inputs.repository }}
-        run: |
-          set -euo pipefail
-          if [ "$OPERATION" = APPLY ] && [ "$CONFIRMATION" != APPLY ]; then
-            echo 'APPLY requires confirmation APPLY'; exit 1
-          fi
-          if ! [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+$ ]]; then
-            echo 'Provide exactly one repository name'; exit 1
-          fi
-          python3 -m py_compile staging-deploy/install-caller.py
-          python3 -m unittest discover -s tests -p 'test_staging_caller_installer.py' -v
-      - name: Mint organization App token
+      - name: Mint organization App installation token
         id: app
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.ORG_AGENTS_APP_ID }}
           private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ inputs.repository }}
+          repositories: ${{ matrix.repository }}
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
       - name: Configure Git CLI App identity
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-        shell: bash
         run: gh auth setup-git
-      - name: Install caller using verified staging-first auto-merge sequence
+      - name: Install one caller via verified staging-first PR merges
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           CONFIRMATION: ${{ inputs.confirmation }}
-          REPOSITORY: ${{ inputs.repository }}
-          OPERATION: ${{ inputs.operation }}
+          REPOSITORY: ${{ matrix.repository }}
           ISSUE: ${{ inputs.central_backlog_issue }}
         shell: bash
         run: |
           set -euo pipefail
           python3 staging-deploy/install-caller.py \
-            --repository "$REPOSITORY" --operation "$OPERATION" --issue "$ISSUE"
+            --repository "$REPOSITORY" --operation APPLY --issue "$ISSUE"
+          echo "Installed and verified: $REPOSITORY" >> "$GITHUB_STEP_SUMMARY"
