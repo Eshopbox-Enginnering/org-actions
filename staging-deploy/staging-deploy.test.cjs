@@ -36,9 +36,9 @@ test('versioning retains numeric patch ordering', () => {
 test('staging PR implementation replaces direct promotion', () => {
   assert.ok(StagingPR.prototype instanceof StagingGit);
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(s,/this\.app\.rest\.pulls\.merge/);
-  assert.match(s,/sha: commit/);
-  assert.match(s,/merge_method: 'merge'/);
+  assert.match(s,/this\.run\('gh'/);
+  assert.match(s,/--match-head-commit/);
+  assert.match(s,/--merge/);
   assert.doesNotMatch(s,/mergeable_state === 'clean'/);
   assert.match(s,/commit-tree/);
   assert.doesNotMatch(s,/refs\/heads\/staging'\]/);
@@ -68,9 +68,9 @@ test('expected staging-presence failure is exempt during pre-promotion', () => {
 });
 test('temporary staging promotion uses app merge and verifies resulting merge before tagging', () => {
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(s,/sha: commit/);
-  assert.match(s,/this\.app\.rest\.pulls\.merge/);
-  assert.match(s,/merge_method: 'merge'/);
+  assert.match(s,/--match-head-commit/);
+  assert.match(s,/this\.run\('gh'/);
+  assert.match(s,/--merge/);
   assert.match(s,/expectedStagingBase/);
   assert.match(s,/finalPR\.merged/);
   assert.match(s,/mergedMeta\.startsWith/);
@@ -141,7 +141,7 @@ test('auto staging merge uses approved App token and refuses missing credentials
   const staging = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   assert.match(source,/env\.GH_TOKEN = env\.STAGING_DEPLOY_APP_TOKEN/);
   assert.match(source,/Organization App token is missing/);
-  assert.match(staging,/sha: commit/);
+  assert.match(staging,/--match-head-commit/);
   assert.doesNotMatch(staging,/promotionReadiness|readiness\.pending/);
   assert.match(staging,/current\.base\.sha !== expectedStagingBase/);
   assert.doesNotMatch(staging,/refs\/heads\/staging'\]/);
@@ -154,15 +154,15 @@ test('temporary staging promotion never waits on its own CI checks', () => {
   assert.match(source,/await assertCurrent\(\)/);
   assert.match(source,/current\.head\.sha !== commit/);
   assert.match(source,/current\.base\.sha !== expectedStagingBase/);
-  assert.match(source,/sha: commit/);
-  assert.match(source,/this\.app\.rest\.pulls\.merge/);
+  assert.match(source,/--match-head-commit/);
+  assert.match(source,/this\.run\('gh'/);
 });
 test('staging App REST merge verifies exact base tree and handles API errors', () => {
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(source,/sha: commit/);
+  assert.match(source,/--match-head-commit/);
   assert.match(source,/expectedStagingBase/);
   assert.match(source,/mergedMeta\.startsWith/);
-  assert.match(source,/Automatic staging PR merge API failed/);
+  assert.match(source,/Automatic staging PR merge failed/);
   assert.doesNotMatch(source,/lastMergeError/);
 });
 
@@ -229,12 +229,16 @@ test('temporary staging PR waits for mergeability calculation, not its checks', 
   assert.doesNotMatch(source,/promotionReadiness|listForRef|getCombinedStatusForRef/);
 });
 
-test('staging merge uses App REST API, preserves head SHA and avoids gh executable', () => {
+test('staging merge reuses App-authenticated gh CLI on proven checks runner', () => {
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(source,/this\.app\.rest\.pulls\.merge/);
-  assert.match(source,/pull_number: pr\.number/);
-  assert.match(source,/sha: commit/);
-  assert.match(source,/merge_method: 'merge'/);
-  assert.match(source,/merged\.data\.merged/);
-  assert.doesNotMatch(source,/this\.run\('gh'/);
+  const workflow = fs.readFileSync(path.join(__dirname,'../.github/workflows/reusable-staging-deploy.yml'),'utf8');
+  assert.match(source,/this\\.run\\('gh'/);
+  assert.match(source,/--merge/);
+  assert.match(source,/--admin/);
+  assert.match(source,/--match-head-commit/);
+  assert.match(source,/appAuth: true/);
+  assert.doesNotMatch(source,/this\\.app\\.rest\\.pulls\\.merge/);
+  assert.match(workflow,/group: checks-runners[\\s\\S]*labels: checks-runner/);
+  assert.match(workflow,/command -v gh/);
+  assert.match(workflow,/gh --version/);
 });
