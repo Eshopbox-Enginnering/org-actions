@@ -74,7 +74,7 @@ test('temporary staging promotion uses app merge and verifies resulting merge be
   assert.match(s,/expectedStagingBase/);
   assert.match(s,/finalPR\.merged/);
   assert.match(s,/mergedMeta\.startsWith/);
-  assert.match(s,/--atomic/);
+  assert.match(s,/await this\.assertStaging\(this\.staging\)/);
 });
 test('quota fallback has a head-bound structured proof, not prose substring matching', () => {
   const s = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
@@ -229,7 +229,7 @@ test('temporary staging PR waits for mergeability calculation, not its checks', 
   assert.doesNotMatch(source,/promotionReadiness|listForRef|getCombinedStatusForRef/);
 });
 
-test('staging merge reuses App-authenticated gh CLI on proven checks runner', () => {
+test('staging merge uses authenticated gh on an isolated self-hosted runner', () => {
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   const workflow = fs.readFileSync(path.join(__dirname,'../.github/workflows/reusable-staging-deploy.yml'),'utf8');
   assert.ok(source.includes("this.run('gh'"));
@@ -238,8 +238,26 @@ test('staging merge reuses App-authenticated gh CLI on proven checks runner', ()
   assert.ok(source.includes("'--match-head-commit'"));
   assert.ok(source.includes('appAuth: true'));
   assert.ok(!source.includes('this.app.rest.pulls.merge'));
-  assert.ok(workflow.includes('group: checks-runners'));
-  assert.ok(workflow.includes('labels: checks-runner'));
+  assert.ok(workflow.includes('runs-on: self-hosted'));
+  assert.ok(workflow.includes('Install pinned GitHub CLI for App-admin merge'));
+  assert.ok(workflow.includes('expected_sha256='));
+  assert.ok(workflow.includes('sha256sum --check --status'));
   assert.ok(workflow.includes('command -v gh'));
   assert.ok(workflow.includes('gh --version'));
+});
+
+test('temporary staging PR tag publication never re-pushes protected staging', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.ok(!source.includes("'--atomic','origin'"));
+  assert.ok(!source.includes("this.staging + ':refs/heads/staging'"));
+  assert.equal((source.match(/await this\.assertStaging\(this\.staging\)/g)||[]).length,2);
+  assert.equal((source.match(/this\.git\('push','origin','refs\/tags\/'/g)||[]).length,2);
+});
+test('PR-controlled workflow code never executes on a persistent checks runner', () => {
+  const tests = fs.readFileSync(path.join(__dirname,'../.github/workflows/test-central-staging.yml'),'utf8');
+  assert.ok(!tests.includes('runner-toolchain:'));
+  assert.ok(tests.includes('runs-on: ubuntu-latest'));
+  const deploy = fs.readFileSync(path.join(__dirname,'../.github/workflows/reusable-staging-deploy.yml'),'utf8');
+  assert.ok(deploy.includes('runs-on: self-hosted'));
+  assert.ok(deploy.includes('group: checks-runners')); // acknowledgment only
 });
