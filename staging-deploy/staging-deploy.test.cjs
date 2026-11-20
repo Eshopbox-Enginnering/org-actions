@@ -139,8 +139,7 @@ test('auto staging merge uses approved App token and refuses missing credentials
   assert.match(source,/env\.GH_TOKEN = env\.STAGING_DEPLOY_APP_TOKEN/);
   assert.match(source,/Organization App token is missing/);
   assert.match(staging,/--match-head-commit/);
-  assert.match(staging,/readiness\.errors\.length/);
-  assert.match(staging,/!readiness\.pending\.length/);
+  assert.doesNotMatch(staging,/promotionReadiness|readiness\.pending/);
   assert.match(staging,/current\.base\.sha !== this\.staging/);
   assert.doesNotMatch(staging,/refs\/heads\/staging'\]/);
 });
