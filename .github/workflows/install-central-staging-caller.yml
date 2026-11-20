@@ -79,6 +79,8 @@ jobs:
           app-id: ${{ vars.ORG_AGENTS_APP_ID }}
           private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-actions: read
       - name: Discover and check repository eligibility (no writes)
         id: discover
         shell: bash
