@@ -337,3 +337,9 @@ test('integration: already-merged head publishes only a tag, without another PR'
   assert.ok(events.some(e=>e.includes('refs/tags/dev-v1.0.2')));
   assert.ok(!events.some(e=>e.includes('refs/heads/staging')));
 });
+
+test('staging PR link label does not claim the promotion PR is open', () => {
+  const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.ok(source.includes('[View PR]'));
+  assert.ok(!source.includes('[Open staging PR]'));
+});
