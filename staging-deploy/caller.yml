@@ -19,6 +19,7 @@ jobs:
     if: >-
       github.event.issue.pull_request &&
       (github.event.comment.body == '/deploy-staging' ||
-       startsWith(github.event.comment.body, '/force-deploy-staging'))
+       (github.event.comment.body == '/force-deploy-staging' ||
+       startsWith(github.event.comment.body, '/force-deploy-staging ')))
     uses: Eshopbox-Enginnering/org-actions/.github/workflows/reusable-staging-deploy.yml@main
     secrets: inherit
