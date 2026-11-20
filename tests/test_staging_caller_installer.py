@@ -23,6 +23,7 @@ class InstallerTests(unittest.TestCase):
             return "staging" if args[-1] == ".name" else ""
 
         with mock.patch.object(installer, "phase", side_effect=phase), \
+             mock.patch.object(installer, "assert_eligible"), \
              mock.patch.object(installer, "gh_json", return_value={
                  "defaultBranchRef": {"name": "main"},
                  "isArchived": False, "isFork": False
@@ -39,6 +40,7 @@ class InstallerTests(unittest.TestCase):
             if target == "staging":
                 raise RuntimeError("staging merge verification failed")
         with mock.patch.object(installer, "phase", side_effect=phase), \
+             mock.patch.object(installer, "assert_eligible"), \
              mock.patch.object(installer, "gh_json", return_value={
                  "defaultBranchRef": {"name": "main"},
                  "isArchived": False, "isFork": False
@@ -126,11 +128,15 @@ class InstallerTests(unittest.TestCase):
         planner = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(planner)
         info = {"archived":False,"fork":False,"disabled":False,"default_branch":"main"}
-        with mock.patch.object(planner, "api_json", return_value=info), \
+        def api(path):
+            if "/actions/workflows/" in path:
+                return {"state": "active"}
+            return info
+        with mock.patch.object(planner, "api_json", side_effect=api), \
              mock.patch.object(planner, "file_at", return_value=b"on:\\n  workflow_dispatch:\\n"):
             state, reason = planner.inspect("testrepo","all")
             self.assertEqual(state,"skipped")
-            self.assertIn("expected one",reason)
+            self.assertIn("exactly one active",reason)
 
     def test_bulk_workflow_limits_concurrency_and_preserves_workflow_permission(self):
         source = (ROOT / ".github/workflows/install-central-staging-caller.yml").read_text()
@@ -142,6 +148,82 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("rollout-report.json",source)
         self.assertIn("operation == 'APPLY'",source)
         self.assertIn("fromJSON(needs.plan.outputs.matrix)",source)
+
+
+    def test_names_reject_case_insensitive_duplicates(self):
+        from argparse import Namespace
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("plan_case",ROOT/"staging-deploy/plan-rollout.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        with self.assertRaisesRegex(ValueError,"duplicate"):
+            planner.names(Namespace(target="selected",repository="",repositories="Service,service"))
+
+    def test_bulk_listing_includes_archived_and_forked_for_reporting(self):
+        from argparse import Namespace
+        import importlib.util
+        import json
+        spec = importlib.util.spec_from_file_location("plan_all",ROOT/"staging-deploy/plan-rollout.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        records = [
+            {"name":"forked","isArchived":False,"isFork":True},
+            {"name":"archived","isArchived":True,"isFork":False},
+            {"name":"active","isArchived":False,"isFork":False},
+        ]
+        with mock.patch.object(planner,"gh",return_value=json.dumps(records)):
+            self.assertEqual(planner.names(Namespace(target="all",repository="",repositories="")),
+                             ["active","archived","forked"])
+
+    def test_planner_requires_one_active_and_dispatchable_workflow(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("plan_active",ROOT/"staging-deploy/plan-rollout.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        info = {"archived":False,"fork":False,"disabled":False,"default_branch":"main"}
+        def api(path):
+            if "/actions/workflows/" in path:
+                return {"state":"active" if path.endswith("ci-cd.yml") else "disabled_manually"}
+            return info
+        def file_at(repo,path,ref):
+            if path.endswith("ci-cd.yml"):
+                return b"on:\n  workflow_dispatch:\n"
+            return None
+        with mock.patch.object(planner,"api_json",side_effect=api), \
+             mock.patch.object(planner,"file_at",side_effect=file_at):
+            self.assertEqual(planner.inspect("myrepo","all")[0],"eligible")
+        with mock.patch.object(planner,"api_json",side_effect=api), \
+             mock.patch.object(planner,"file_at",return_value=b"on: push"):
+            state,reason = planner.inspect("myrepo","all")
+            self.assertEqual(state,"skipped")
+            self.assertIn("lacks workflow_dispatch",reason)
+
+    def test_revalidates_before_both_apply_phases_and_blocks_stale_plan(self):
+        checks=[]
+        phases=[]
+        def check(repo):
+            checks.append(repo)
+            if len(checks)==2:
+                raise ValueError("Repository no longer eligible")
+        with mock.patch.object(installer,"gh_json",return_value={
+                 "defaultBranchRef":{"name":"main"},"isArchived":False,"isFork":False
+             }), \
+             mock.patch.object(installer,"cmd",return_value="staging"), \
+             mock.patch.object(installer,"assert_eligible",side_effect=check), \
+             mock.patch.object(installer,"phase",side_effect=lambda full,target,issue,op: phases.append(target)), \
+             mock.patch.dict(installer.os.environ,{"CONFIRMATION":"APPLY"}):
+            with self.assertRaisesRegex(ValueError,"no longer eligible"):
+                installer.rollout("service","APPLY","7064")
+        self.assertEqual(phases,["staging"])
+        self.assertEqual(len(checks),2)
+
+    def test_discovery_token_is_read_only(self):
+        source=(ROOT/".github/workflows/install-central-staging-caller.yml").read_text()
+        discovery=source.split("name: Mint organization App discovery token",1)[1].split(
+            "name: Discover and check repository eligibility",1)[0]
+        self.assertIn("permission-contents: read",discovery)
+        self.assertIn("permission-actions: read",discovery)
+        self.assertNotIn("permission-workflows: write",discovery)
 
 
 if __name__ == "__main__":
