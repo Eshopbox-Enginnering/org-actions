@@ -25,9 +25,10 @@ class StagingPR extends StagingGit {
       await this.git('-c','user.name=github-actions[bot]',
         '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
         'tag','-a',tag,this.staging,'-m','auto-staging-deploy:v1 ' + JSON.stringify({pr:number,head}));
-      await this.git('push','--atomic','origin',
-        this.staging + ':refs/heads/staging',
-        'refs/tags/' + tag + ':refs/tags/' + tag);
+      // The staging PR has already merged (or the reviewed head is present).
+    // Never attempt to re-push the protected staging branch via GITHUB_TOKEN.
+    await this.assertStaging(this.staging);
+    await this.git('push','origin','refs/tags/' + tag + ':refs/tags/' + tag);
       return {tag,commit:this.staging};
     }
     let tree;
@@ -149,9 +150,10 @@ class StagingPR extends StagingGit {
       '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
       'tag','-a',tag,this.staging,'-m','auto-staging-deploy:v1 ' + JSON.stringify({pr:number,head}));
     // GITHUB_TOKEN is deliberately used for the tag to avoid duplicate tag-push deploys.
-    await this.git('push','--atomic','origin',
-        this.staging + ':refs/heads/staging',
-        'refs/tags/' + tag + ':refs/tags/' + tag);
+    // The staging PR has already merged (or the reviewed head is present).
+    // Never attempt to re-push the protected staging branch via GITHUB_TOKEN.
+    await this.assertStaging(this.staging);
+    await this.git('push','origin','refs/tags/' + tag + ':refs/tags/' + tag);
     return {tag,commit:this.staging};
   }
 }
