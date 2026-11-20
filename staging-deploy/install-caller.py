@@ -6,6 +6,7 @@ organization App token. No direct writes to protected branches.
 """
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -115,6 +116,21 @@ def phase(full, target, issue, operation):
         return "merged"
 
 
+def assert_eligible(repository):
+    """Repeat live CI/CD compatibility checks with the scoped App token.
+
+    Queued bulk jobs must not act on eligibility determined minutes earlier.
+    This also protects standalone single-repository APPLY executions.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "staging_caller_plan", ROOT / "plan-rollout.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    state, reason = module.inspect(repository, "all")
+    if state not in ("eligible", "current"):
+        raise ValueError(f"Repository no longer eligible: {reason}")
+
+
 def rollout(repository, operation, issue):
     if not REPO_NAME.fullmatch(repository):
         raise ValueError("Repository must be a single repository name, not owner/name or URL")
@@ -133,7 +149,11 @@ def rollout(repository, operation, issue):
     for target in ("staging", "main"):
         cmd("gh", "api", f"repos/{full}/branches/{target}", "--jq", ".name")
     # Important: staging is merged and verified BEFORE independently cloning main.
+    if operation == "APPLY":
+        assert_eligible(repository)
     staging = phase(full, "staging", issue, operation)
+    if operation == "APPLY":
+        assert_eligible(repository)
     main = phase(full, "main", issue, operation)
     print(f"SUMMARY {full}: staging={staging} main={main}", flush=True)
 
