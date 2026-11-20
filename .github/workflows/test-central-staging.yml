@@ -6,6 +6,8 @@ on:
       - '.github/workflows/reusable-staging-deploy.yml'
       - '.github/workflows/test-central-staging.yml'
       - 'staging-deploy/**'
+      - '.github/workflows/install-central-staging-caller.yml'
+      - 'tests/test_staging_caller_installer.py'
   workflow_dispatch:
 
 permissions:
@@ -26,6 +28,10 @@ jobs:
           node --check staging-deploy/staging-deploy.test.cjs
       - name: Run staging automation tests
         run: node --test staging-deploy/staging-deploy.test.cjs
+      - name: Validate central caller rollout installer
+        run: |
+          python3 -m py_compile staging-deploy/install-caller.py
+          python3 -m unittest discover -s tests -p 'test_staging_caller_installer.py' -v
 
 
   cli-install:

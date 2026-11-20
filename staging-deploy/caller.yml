@@ -1,0 +1,25 @@
+name: Deploy PR to staging
+
+# Central org-actions handles source PR gates, staging promotion PR,
+# authorized automatic merge, tag, CI/CD and per-run status comment.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  checks: read
+  statuses: read
+  actions: write
+
+jobs:
+  deploy:
+    if: >-
+      github.event.issue.pull_request &&
+      (github.event.comment.body == '/deploy-staging' ||
+       (github.event.comment.body == '/force-deploy-staging' ||
+       startsWith(github.event.comment.body, '/force-deploy-staging ')))
+    uses: Eshopbox-Enginnering/org-actions/.github/workflows/reusable-staging-deploy.yml@main
+    secrets: inherit

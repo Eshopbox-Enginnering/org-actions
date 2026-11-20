@@ -250,7 +250,7 @@ test('temporary staging PR tag publication never re-pushes protected staging', (
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   assert.ok(!source.includes("'--atomic','origin'"));
   assert.ok(!source.includes("this.staging + ':refs/heads/staging'"));
-  assert.equal((source.match(/await this\.assertStaging\(this\.staging\)/g)||[]).length,2);
+  assert.equal((source.match(/await this\.assertStaging\(this\.staging\)/g)||[]).length,3);
   assert.equal((source.match(/this\.git\('push','origin','refs\/tags\/'/g)||[]).length,2);
 });
 test('PR-controlled workflow code never executes on a persistent checks runner', () => {
@@ -307,7 +307,7 @@ test('integration: create promotion PR, App-admin merge, verify ancestry, publis
     throw Error('Unexpected git command: '+args.join(' '));
   };
   let currentCalls=0;
-  const result=await subject.publish({number:466,head,issue:'7064',
+  const result=await subject.publish({number:466,head,issue:'7064',workflowFile:'ci-cd.yml',
     assertCurrent:async()=>{currentCalls++;},status:async()=>{}});
   assert.deepEqual(result,{tag:'dev-v1.0.1',commit:mergedSha});
   assert.ok(currentCalls>=3);
@@ -326,12 +326,13 @@ test('integration: already-merged head publishes only a tag, without another PR'
   subject.assertStaging=async()=>events.push('remote staging verified');
   subject.git=async(...args)=>{
     if(args[0]==='merge-base')return '';
+    if(args[0]==='show')return 'on:\n  workflow_dispatch:\n';
     if(args[0]==='tag')return 'dev-v1.0.1';
     if(args[0]==='-c'&&args.includes('tag')){events.push('tag created');return '';}
     if(args[0]==='push'){events.push(args.slice(1).join(' '));return '';}
     throw Error('Unexpected git command: '+args.join(' '));
   };
-  const result=await subject.publish({number:466,head,assertCurrent:async()=>{}});
+  const result=await subject.publish({number:466,head,workflowFile:'ci-cd.yml',assertCurrent:async()=>{}});
   assert.deepEqual(result,{tag:'dev-v1.0.2',commit:staging});
   assert.ok(events.includes('remote staging verified'));
   assert.ok(events.some(e=>e.includes('refs/tags/dev-v1.0.2')));
@@ -352,4 +353,55 @@ test('final successful staging comment mentions original PR author, never on fai
   assert.ok(source.includes("staging deployment succeeded; please verify the application."));
   assert.ok(source.includes("PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}"));
   assert.ok(!source.includes("POST /repos/{owner}/{repo}/issues/comments"));
+});
+
+test('internal-apps ci-cd.yml and standard cicd.yml are both detected', () => {
+  const main = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  const promotion = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.ok(main.includes("['cicd.yml', 'ci-cd.yml']"));
+  assert.ok(main.includes('const workflowFile = available[0]'));
+  assert.ok(main.includes('workflow_id: workflowFile'));
+  assert.ok(main.includes('workflowFile, assertCurrent'));
+  assert.ok(promotion.includes("['cicd.yml','ci-cd.yml'].includes(workflowFile)"));
+  assert.ok(promotion.includes("' :.github/workflows/'")===false);
+  assert.ok(promotion.includes("tree + ':.github/workflows/' + workflowFile"));
+});
+
+test('force staging command trigger is exact or followed by a space, never an arbitrary prefix', () => {
+  for (const file of [
+    '../.github/workflows/reusable-staging-deploy.yml',
+    'caller.yml'
+  ]) {
+    const source = fs.readFileSync(path.join(__dirname,file),'utf8');
+    assert.ok(source.includes("github.event.comment.body == '/force-deploy-staging'"));
+    assert.ok(source.includes("startsWith(github.event.comment.body, '/force-deploy-staging '"));
+    assert.ok(!source.includes("startsWith(github.event.comment.body, '/force-deploy-staging')"));
+  }
+  const eligible = body => body === '/force-deploy-staging' ||
+    body.startsWith('/force-deploy-staging ');
+  for (const invalid of ['/force-deploy-stagingoops','/force-deploy-staging-x','/force-deploy-stagingfoo']) {
+    assert.equal(eligible(invalid),false);
+  }
+  assert.equal(eligible('/force-deploy-staging reason'),true);
+  assert.equal(eligible('/force-deploy-staging'),true);
+});
+
+test('already-merged snapshot without dispatchable ci-cd.yml never creates a tag',async()=>{
+  const staging='7'.repeat(40),head='8'.repeat(40);
+  const events=[];
+  const subject=new StagingPR(async()=>{throw Error('unexpected CLI')},{},{},{owner:'test',repo:'repo'});
+  subject.staging=staging;
+  subject.assertStaging=async()=>events.push('staging verified');
+  subject.git=async(...args)=>{
+    events.push(args.join(' '));
+    if(args[0]==='merge-base')return '';
+    if(args[0]==='show')throw new Error('Missing selected CI/CD workflow');
+    throw Error('Unexpected call after missing workflow: '+args.join(' '));
+  };
+  await assert.rejects(
+    subject.publish({number:466,head,workflowFile:'ci-cd.yml',assertCurrent:async()=>{}}),
+    /existing staging snapshot lacks workflow_dispatch.*ci-cd\.yml/);
+  assert.ok(events.some(x=>x.includes(':.github/workflows/ci-cd.yml')));
+  assert.ok(!events.some(x=>x.includes('tag')));
+  assert.ok(!events.some(x=>x.startsWith('push')));
 });

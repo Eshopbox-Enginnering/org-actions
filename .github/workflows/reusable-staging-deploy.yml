@@ -18,7 +18,8 @@ jobs:
       github.event.action == 'created' &&
       github.event.issue.pull_request &&
       (github.event.comment.body == '/deploy-staging' ||
-       startsWith(github.event.comment.body, '/force-deploy-staging'))
+       (github.event.comment.body == '/force-deploy-staging' ||
+       startsWith(github.event.comment.body, '/force-deploy-staging ')))
     runs-on:
       group: checks-runners
       labels: checks-runner
@@ -58,7 +59,8 @@ jobs:
       github.event.action == 'created' &&
       github.event.issue.pull_request &&
       (github.event.comment.body == '/deploy-staging' ||
-       startsWith(github.event.comment.body, '/force-deploy-staging'))
+       (github.event.comment.body == '/force-deploy-staging' ||
+       startsWith(github.event.comment.body, '/force-deploy-staging ')))
     # Long-running CI/CD polling must not block the dedicated PR-check runner.
     runs-on: self-hosted
     timeout-minutes: 120
