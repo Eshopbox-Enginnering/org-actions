@@ -36,8 +36,8 @@ test('versioning retains numeric patch ordering', () => {
 test('staging PR implementation replaces direct promotion', () => {
   assert.ok(StagingPR.prototype instanceof StagingGit);
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(s,/--admin/);
-  assert.match(s,/--match-head-commit/);
+  assert.match(s,/this\.app\.rest\.pulls\.merge/);
+  assert.match(s,/sha: commit/);
   assert.match(s,/appAuth:true/);
   assert.doesNotMatch(s,/mergeable_state === 'clean'/);
   assert.match(s,/commit-tree/);
@@ -68,9 +68,9 @@ test('expected staging-presence failure is exempt during pre-promotion', () => {
 });
 test('temporary staging promotion uses app merge and verifies resulting merge before tagging', () => {
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(s,/--match-head-commit/);
-  assert.match(s,/--admin/);
-  assert.match(s,/--merge/);
+  assert.match(s,/sha: commit/);
+  assert.match(s,/this\.app\.rest\.pulls\.merge/);
+  assert.match(s,/merge_method: 'merge'/);
   assert.match(s,/expectedStagingBase/);
   assert.match(s,/finalPR\.merged/);
   assert.match(s,/mergedMeta\.startsWith/);
@@ -141,7 +141,7 @@ test('auto staging merge uses approved App token and refuses missing credentials
   const staging = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   assert.match(source,/env\.GH_TOKEN = env\.STAGING_DEPLOY_APP_TOKEN/);
   assert.match(source,/Organization App token is missing/);
-  assert.match(staging,/--match-head-commit/);
+  assert.match(staging,/sha: commit/);
   assert.doesNotMatch(staging,/promotionReadiness|readiness\.pending/);
   assert.match(staging,/current\.base\.sha !== expectedStagingBase/);
   assert.doesNotMatch(staging,/refs\/heads\/staging'\]/);
@@ -154,15 +154,15 @@ test('temporary staging promotion never waits on its own CI checks', () => {
   assert.match(source,/await assertCurrent\(\)/);
   assert.match(source,/current\.head\.sha !== commit/);
   assert.match(source,/current\.base\.sha !== expectedStagingBase/);
-  assert.match(source,/--match-head-commit/);
-  assert.match(source,/--admin/);
+  assert.match(source,/sha: commit/);
+  assert.match(source,/this\.app\.rest\.pulls\.merge/);
 });
-test('staging admin-merge verifies exact base tree and handles gh failures by stderr', () => {
+test('staging App REST merge verifies exact base tree and handles API errors', () => {
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(source,/--match-head-commit/);
+  assert.match(source,/sha: commit/);
   assert.match(source,/expectedStagingBase/);
   assert.match(source,/mergedMeta\.startsWith/);
-  assert.match(source,/error\.stderr \|\| error\.stdout \|\| error\.message/);
+  assert.match(source,/Automatic staging PR merge API failed/);
   assert.doesNotMatch(source,/lastMergeError/);
 });
 
@@ -227,4 +227,14 @@ test('temporary staging PR waits for mergeability calculation, not its checks', 
   assert.match(source,/beforeMerge\.head\.sha !== commit/);
   assert.match(source,/beforeMerge\.base\.sha !== expectedStagingBase/);
   assert.doesNotMatch(source,/promotionReadiness|listForRef|getCombinedStatusForRef/);
+});
+
+test('staging merge uses App REST API, preserves head SHA and avoids gh executable', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.match(source,/this\.app\.rest\.pulls\.merge/);
+  assert.match(source,/pull_number: pr\.number/);
+  assert.match(source,/sha: commit/);
+  assert.match(source,/merge_method: 'merge'/);
+  assert.match(source,/merged\.data\.merged/);
+  assert.doesNotMatch(source,/this\.run\('gh'/);
 });
