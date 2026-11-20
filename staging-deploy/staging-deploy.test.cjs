@@ -294,14 +294,14 @@ test('integration: create promotion PR, App-admin merge, verify ancestry, publis
       return '';
     }
     if(cmd==='merge-tree')return tree;
-    if(cmd==='show')return 'on:\\n  workflow_dispatch:\\n';
+    if(cmd==='show')return 'on:\n  workflow_dispatch:\n';
     if(cmd==='-c'&&args.includes('commit-tree'))return promotion;
     if(cmd==='push'){
       events.push('push '+args.slice(1).join(' '));return '';
     }
     if(cmd==='fetch')return '';
     if(cmd==='rev-parse')return mergedSha;
-    if(cmd==='cat-file')return 'tree '+tree+'\\nparent '+base+'\\nparent '+promotion+'\\n';
+    if(cmd==='cat-file')return 'tree '+tree+'\nparent '+base+'\nparent '+promotion+'\n';
     if(cmd==='tag')return 'dev-v1.0.0';
     if(cmd==='-c'&&args.includes('tag')){events.push('tag created');return '';}
     throw Error('Unexpected git command: '+args.join(' '));
