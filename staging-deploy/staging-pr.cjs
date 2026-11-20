@@ -156,13 +156,33 @@ class StagingPR extends StagingGit {
     // AGENTS/guidelines rollout, the organization-approved App merges the
     // bot-created staging PR without requesting a manual reviewer.
     // Never bypass a failing or pending observed CI check.
-    const settings = (await this.app.rest.repos.get(this.repo)).data;
+    const settings = (await this.app.rest.repos.get(this.repo)
+      .catch(error => { throw new Error('Could not read repository merge settings with App token: ' + error.message); })).data;
     if (!settings.allow_merge_commit)
       throw new Error('Staging repository disallows ancestry-preserving merge commits: ' + pr.html_url);
     const activeRules = await this.api.paginate(this.api.rest.repos.getBranchRules, {...this.repo, branch:'staging', per_page:100})
       .catch(error => { throw new Error('Could not read staging branch rules: ' + error.message); });
-    const branchProtection = await this.api.rest.repos.getBranchProtection({...this.repo,branch:'staging'})
-      .then(result => result.data).catch(error => { if (error.status === 404) return null; throw error; });
+    // REST getBranchProtection requires Administration:read, which the caller's
+    // least-privilege GITHUB_TOKEN does not have. Use the same GraphQL
+    // branchProtectionRule query that the source-PR gate already relies on.
+    const protectionResult = await this.api.graphql(`query($owner:String!,$repo:String!) {
+      repository(owner:$owner,name:$repo) {
+        ref(qualifiedName:"refs/heads/staging") {
+          ... on Ref { branchProtectionRule {
+            requiresStatusChecks
+            requiredStatusChecks { context app { databaseId } }
+          } }
+        }
+      }
+    }`,this.repo).catch(error => {
+      throw new Error('Could not read staging branch protection through GraphQL: ' + error.message);
+    });
+    const protectionRule = protectionResult.repository?.ref?.branchProtectionRule;
+    const branchProtection = protectionRule?.requiresStatusChecks ? {
+      required_status_checks: { checks: (protectionRule.requiredStatusChecks || []).map(check => ({
+        context: check.context, app_id: check.app?.databaseId ?? -1
+      })) }
+    } : null;
     if (activeRules.some(rule => rule.type === 'merge_queue'))
       throw new Error('Staging requires a merge queue. Automated admin merge is not supported: ' + pr.html_url);
 
@@ -185,11 +205,17 @@ class StagingPR extends StagingGit {
       // Never silently fall back to head checks if a merge SHA exists.
       const checkedSha = current.merge_commit_sha || commit;
       const observed = await this.api.paginate(this.api.rest.checks.listForRef,
-        {...this.repo, ref:checkedSha, per_page:100});
+        {...this.repo, ref:checkedSha, per_page:100}).catch(error => {
+          throw new Error('Could not read staging PR check runs: ' + error.message);
+        });
       const statuses = (await this.api.rest.repos.getCombinedStatusForRef(
-        {...this.repo,ref:checkedSha})).data;
+        {...this.repo,ref:checkedSha}).catch(error => {
+          throw new Error('Could not read staging PR combined statuses: ' + error.message);
+        })).data;
       const runs = await this.api.paginate(this.api.rest.actions.listWorkflowRunsForRepo,
-        {...this.repo,head_sha:commit,event:'pull_request',per_page:100});
+        {...this.repo,head_sha:commit,event:'pull_request',per_page:100}).catch(error => {
+          throw new Error('Could not read staging PR workflow runs: ' + error.message);
+        });
       const readiness = promotionReadiness({
         checks:observed,statuses,rules:activeRules,protection:branchProtection,
         runs,sha:checkedSha,head:commit,number:pr.number
