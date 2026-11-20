@@ -232,13 +232,14 @@ test('temporary staging PR waits for mergeability calculation, not its checks', 
 test('staging merge reuses App-authenticated gh CLI on proven checks runner', () => {
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   const workflow = fs.readFileSync(path.join(__dirname,'../.github/workflows/reusable-staging-deploy.yml'),'utf8');
-  assert.match(source,/this\\.run\\('gh'/);
-  assert.match(source,/--merge/);
-  assert.match(source,/--admin/);
-  assert.match(source,/--match-head-commit/);
-  assert.match(source,/appAuth: true/);
-  assert.doesNotMatch(source,/this\\.app\\.rest\\.pulls\\.merge/);
-  assert.match(workflow,/group: checks-runners[\\s\\S]*labels: checks-runner/);
-  assert.match(workflow,/command -v gh/);
-  assert.match(workflow,/gh --version/);
+  assert.ok(source.includes("this.run('gh'"));
+  assert.ok(source.includes("'--merge'"));
+  assert.ok(source.includes("'--admin'"));
+  assert.ok(source.includes("'--match-head-commit'"));
+  assert.ok(source.includes('appAuth: true'));
+  assert.ok(!source.includes('this.app.rest.pulls.merge'));
+  assert.ok(workflow.includes('group: checks-runners'));
+  assert.ok(workflow.includes('labels: checks-runner'));
+  assert.ok(workflow.includes('command -v gh'));
+  assert.ok(workflow.includes('gh --version'));
 });
