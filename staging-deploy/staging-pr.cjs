@@ -23,6 +23,14 @@ class StagingPR extends StagingGit {
     catch {}
     if (headAlreadyMerged) {
       await assertCurrent();
+      // An earlier or manual promotion can bypass the merge-tree validation
+      // below. Never create a tag unless this exact staging commit contains
+      // the selected, dispatchable service CI/CD workflow.
+      const existingWorkflow = await this.git('show',
+        this.staging + ':.github/workflows/' + workflowFile).catch(() => '');
+      if (!/^\s+workflow_dispatch\s*:/m.test(existingWorkflow))
+        throw new Error('The existing staging snapshot lacks workflow_dispatch in .github/workflows/' + workflowFile + '. No staging tag created.');
+      await this.assertStaging(this.staging);
       const tag = nextTag((await this.git('tag', '--list', 'dev-v*')).trim().split('\n'));
       await this.git('-c','user.name=github-actions[bot]',
         '-c','user.email=41898282+github-actions[bot]@users.noreply.github.com',
