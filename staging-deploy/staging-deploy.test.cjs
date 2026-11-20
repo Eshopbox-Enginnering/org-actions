@@ -234,3 +234,20 @@ test('structured current-head Codex rate-limit receipt remains supported', () =>
   assert.equal(hasCodexQuotaEvidence({comments:[evidence],head:SHA}),true);
   assert.equal(hasCodexQuotaEvidence({comments:[evidence],head:'b'.repeat(40)}),false);
 });
+
+test('staging promotion reads required classic protection checks using GraphQL without admin REST API', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  assert.match(source,/branchProtectionRule/);
+  assert.match(source,/requiredStatusChecks \{ context app \{ databaseId \} \}/);
+  assert.match(source,/check\.app\?\.databaseId \?\? -1/);
+  assert.doesNotMatch(source,/rest\.repos\.getBranchProtection/);
+});
+test('staging promotion labels individual API permission failures', () => {
+  const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
+  for (const message of [
+    'Could not read staging branch protection through GraphQL',
+    'Could not read staging PR check runs',
+    'Could not read staging PR combined statuses',
+    'Could not read staging PR workflow runs'
+  ]) assert.ok(source.includes(message),message);
+});
