@@ -118,12 +118,22 @@ class StagingPR extends StagingGit {
           beforeMerge.base.sha !== expectedStagingBase || beforeMerge.mergeable === false)
         throw new Error('Staging promotion PR changed before automatic merge: ' + pr.html_url);
       try {
-        await this.run('gh', ['pr','merge',String(pr.number),'--repo',
-          this.repo.owner + '/' + this.repo.repo,'--merge','--admin',
-          '--match-head-commit',commit], {appAuth:true});
+        // The approved organization App has the staging merge bypass.
+        // Use its authenticated REST API directly; self-hosted runners may
+        // not have the GitHub CLI installed.
+        const merged = await this.app.rest.pulls.merge({
+          ...this.repo,
+          pull_number: pr.number,
+          sha: commit,
+          merge_method: 'merge',
+          commit_title: 'Merge reviewed promotion PR #' + pr.number + ' into staging'
+        });
+        if (!merged.data.merged)
+          throw new Error(merged.data.message || 'GitHub did not confirm the merge');
       } catch (error) {
-        const detail = String(error.stderr || error.stdout || error.message || '').trim();
-        throw new Error('Automatic staging PR merge failed: ' + detail + '. ' + pr.html_url);
+        throw new Error('Automatic staging PR merge API failed: ' +
+          (error.status ? 'HTTP ' + error.status + ': ' : '') + error.message +
+          '. ' + pr.html_url);
       }
     }
     const finalPR = (await this.app.rest.pulls.get({...this.repo, pull_number:pr.number})).data;
