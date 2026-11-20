@@ -59,6 +59,7 @@ jobs:
       github.event.issue.pull_request &&
       (github.event.comment.body == '/deploy-staging' ||
        startsWith(github.event.comment.body, '/force-deploy-staging'))
+    # Long-running CI/CD polling must not block the dedicated PR-check runner.
     runs-on: self-hosted
     timeout-minutes: 120
     concurrency:
@@ -105,6 +106,21 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
+
+      # Install only the integrity-checked CLI from protected org-actions/main.
+      # Do not run PR-authored scripts on a persistent deployment host.
+      - name: Install pinned GitHub CLI for App-admin merge
+        shell: bash
+        run: bash .central-deploy-code/staging-deploy/install-gh.sh
+
+      - name: Verify staging merge toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gh
+          command -v git
+          gh --version
+          git --version
 
       - name: Validate, promote through staging PR and report
         uses: actions/github-script@v7

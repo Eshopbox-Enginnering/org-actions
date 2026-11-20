@@ -26,3 +26,20 @@ jobs:
           node --check staging-deploy/staging-deploy.test.cjs
       - name: Run staging automation tests
         run: node --test staging-deploy/staging-deploy.test.cjs
+
+
+  cli-install:
+    name: Verify pinned GitHub CLI download and SHA-256 on hosted runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install CLI with the same trusted script used by staging
+        shell: bash
+        run: bash staging-deploy/install-gh.sh
+      - name: Verify installed CLI is executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh --version
+          gh pr merge --help > /dev/null
