@@ -88,5 +88,61 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn("pull_request:", source)
 
 
+    def test_planner_rejects_bad_selection_and_duplicate_repositories(self):
+        import importlib.util
+        from argparse import Namespace
+        spec = importlib.util.spec_from_file_location("rollout_plan", ROOT / "staging-deploy/plan-rollout.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        with self.assertRaises(ValueError):
+            planner.names(Namespace(target="selected",repository="",repositories="one,one"))
+        with self.assertRaises(ValueError):
+            planner.names(Namespace(target="single",repository="repo",repositories="another"))
+        self.assertEqual(planner.names(Namespace(target="selected",repository="",repositories="one,two")),["one","two"])
+
+    def test_planner_skips_existing_and_unsupported_targets(self):
+        import importlib.util
+        from argparse import Namespace
+        import json
+        from tempfile import TemporaryDirectory
+        spec = importlib.util.spec_from_file_location("rollout_plan2", ROOT / "staging-deploy/plan-rollout.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            args = Namespace(target="selected",repository="",repositories="new,current,unsupported",
+                             output=str(out/"matrix.json"),report=str(out/"report.json"))
+            outcomes = {"new":("eligible","ready"),"current":("current","installed"),"unsupported":("skipped","no staging")}
+            with mock.patch.object(planner, "inspect", side_effect=lambda repo, target: outcomes[repo]):
+                with self.assertRaisesRegex(RuntimeError,"ineligible"):
+                    planner.plan(args)
+            matrix = json.loads((out/"matrix.json").read_text())
+            self.assertEqual(matrix["include"],[{"repository":"new"}])
+            self.assertEqual(len(json.loads((out/"report.json").read_text())),3)
+
+    def test_planner_fails_closed_on_ambiguous_workflows(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("rollout_plan3", ROOT / "staging-deploy/plan-rollout.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        info = {"archived":False,"fork":False,"disabled":False,"default_branch":"main"}
+        with mock.patch.object(planner, "api_json", return_value=info), \
+             mock.patch.object(planner, "file_at", return_value=b"on:\\n  workflow_dispatch:\\n"):
+            state, reason = planner.inspect("testrepo","all")
+            self.assertEqual(state,"skipped")
+            self.assertIn("expected one",reason)
+
+    def test_bulk_workflow_limits_concurrency_and_preserves_workflow_permission(self):
+        source = (ROOT / ".github/workflows/install-central-staging-caller.yml").read_text()
+        for target in ("single","selected","backend","all"):
+            self.assertIn(target,source)
+        self.assertIn("max-parallel: 3",source)
+        self.assertIn("fail-fast: false",source)
+        self.assertIn("permission-workflows: write",source)
+        self.assertIn("rollout-report.json",source)
+        self.assertIn("operation == 'APPLY'",source)
+        self.assertIn("fromJSON(needs.plan.outputs.matrix)",source)
+
+
 if __name__ == "__main__":
     unittest.main()
