@@ -343,3 +343,13 @@ test('staging PR link label does not claim the promotion PR is open', () => {
   assert.ok(source.includes('[View PR]'));
   assert.ok(!source.includes('[Open staging PR]'));
 });
+
+test('final successful staging comment mentions original PR author, never on failures', () => {
+  const source = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
+  assert.ok(source.includes("process.env.STAGING_PR_AUTHOR = pr.user?.login || ''"));
+  assert.ok(source.includes("!failed && process.env.STAGE_DEPLOY?.startsWith('✅')"));
+  assert.ok(source.includes("**PR author:** @${process.env.STAGING_PR_AUTHOR}"));
+  assert.ok(source.includes("staging deployment succeeded; please verify the application."));
+  assert.ok(source.includes("PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}"));
+  assert.ok(!source.includes("POST /repos/{owner}/{repo}/issues/comments"));
+});
