@@ -131,7 +131,7 @@ jobs:
           mkdir -p "$dir"
           curl --fail --location --retry 3 --retry-delay 2 --silent --show-error \
             "$base/$file" -o "$dir/$file"
-          printf '%s  %s\\n' "$expected_sha256" "$dir/$file" | sha256sum --check --status
+          printf '%s  %s\n' "$expected_sha256" "$dir/$file" | sha256sum --check --status
           tar -xzf "$dir/$file" -C "$dir"
           cli="$dir/gh_${version}_linux_${arch}/bin/gh"
           test -x "$cli"
