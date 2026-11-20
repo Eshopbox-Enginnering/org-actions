@@ -70,6 +70,7 @@ jobs:
           repositories: ${{ inputs.repository }}
           permission-contents: write
           permission-pull-requests: write
+          permission-workflows: write
       - name: Configure Git CLI App identity
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
