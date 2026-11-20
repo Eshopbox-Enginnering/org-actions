@@ -1,0 +1,89 @@
+name: Install Central Staging Deployment Caller
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: DRY_RUN validates the target; APPLY installs via staging then main PRs
+        type: choice
+        required: true
+        options: [DRY_RUN, APPLY]
+        default: DRY_RUN
+      repository:
+        description: One repository name, e.g. eshopbox-internal-apps
+        required: true
+        type: string
+      central_backlog_issue:
+        description: Central-Backlog ticket number
+        required: true
+        type: string
+        default: '7064'
+      confirmation:
+        description: Enter APPLY to permit creating and merging PRs
+        required: false
+        type: string
+
+concurrency:
+  group: install-central-staging-caller
+  cancel-in-progress: false
+
+jobs:
+  install:
+    # Same trusted/App-operator environment and merge pathway as
+    # Sync Engineering Guidelines; not triggered by untrusted PR events.
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
+    environment: agents-org-production
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - name: Checkout trusted org-actions main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Validate inputs and script
+        shell: bash
+        env:
+          OPERATION: ${{ inputs.operation }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          REPOSITORY: ${{ inputs.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$OPERATION" = APPLY ] && [ "$CONFIRMATION" != APPLY ]; then
+            echo 'APPLY requires confirmation APPLY'; exit 1
+          fi
+          if ! [[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            echo 'Provide exactly one repository name'; exit 1
+          fi
+          python3 -m py_compile staging-deploy/install-caller.py
+          python3 -m unittest discover -s tests -p 'test_staging_caller_installer.py' -v
+      - name: Mint organization App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.ORG_AGENTS_APP_ID }}
+          private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ inputs.repository }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Configure Git CLI App identity
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        shell: bash
+        run: gh auth setup-git
+      - name: Install caller using verified staging-first auto-merge sequence
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          REPOSITORY: ${{ inputs.repository }}
+          OPERATION: ${{ inputs.operation }}
+          ISSUE: ${{ inputs.central_backlog_issue }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 staging-deploy/install-caller.py \
+            --repository "$REPOSITORY" --operation "$OPERATION" --issue "$ISSUE"
