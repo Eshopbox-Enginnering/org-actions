@@ -66,12 +66,15 @@ test('expected staging-presence failure is exempt during pre-promotion', () => {
   assert.doesNotThrow(() => verifyChecks({...base,checks:[{...stagingCheck,check_suite:{id:99}}],
     protection:{requiresStatusChecks:true,requiredStatusChecks:[{context:'check-commits-in-staging'}]}}));
 });
-test('staging PR promotion fails closed without merge support or queue support', () => {
+test('temporary staging promotion uses app merge and verifies resulting merge before tagging', () => {
   const s = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
-  assert.match(s,/allow_merge_commit/);
-  assert.match(s,/merge_queue/);
+  assert.match(s,/--match-head-commit/);
+  assert.match(s,/--admin/);
+  assert.match(s,/--merge/);
+  assert.match(s,/expectedStagingBase/);
+  assert.match(s,/finalPR\.merged/);
+  assert.match(s,/mergedMeta\.startsWith/);
   assert.match(s,/--atomic/);
-  assert.match(s,/refs\/heads\/staging/);
 });
 test('quota fallback has a head-bound structured proof, not prose substring matching', () => {
   const s = fs.readFileSync(path.join(__dirname,'auto-staging-deploy.cjs'),'utf8');
