@@ -365,3 +365,22 @@ test('internal-apps ci-cd.yml and standard cicd.yml are both detected', () => {
   assert.ok(promotion.includes("' :.github/workflows/'")===false);
   assert.ok(promotion.includes("tree + ':.github/workflows/' + workflowFile"));
 });
+
+test('force staging command trigger is exact or followed by a space, never an arbitrary prefix', () => {
+  for (const file of [
+    '../.github/workflows/reusable-staging-deploy.yml',
+    'caller.yml'
+  ]) {
+    const source = fs.readFileSync(path.join(__dirname,file),'utf8');
+    assert.ok(source.includes("github.event.comment.body == '/force-deploy-staging'"));
+    assert.ok(source.includes("startsWith(github.event.comment.body, '/force-deploy-staging '"));
+    assert.ok(!source.includes("startsWith(github.event.comment.body, '/force-deploy-staging')"));
+  }
+  const eligible = body => body === '/force-deploy-staging' ||
+    body.startsWith('/force-deploy-staging ');
+  for (const invalid of ['/force-deploy-stagingoops','/force-deploy-staging-x','/force-deploy-stagingfoo']) {
+    assert.equal(eligible(invalid),false);
+  }
+  assert.equal(eligible('/force-deploy-staging reason'),true);
+  assert.equal(eligible('/force-deploy-staging'),true);
+});
