@@ -326,6 +326,7 @@ test('integration: already-merged head publishes only a tag, without another PR'
   subject.assertStaging=async()=>events.push('remote staging verified');
   subject.git=async(...args)=>{
     if(args[0]==='merge-base')return '';
+    if(args[0]==='show')return 'on:\\n  workflow_dispatch:\\n';
     if(args[0]==='tag')return 'dev-v1.0.1';
     if(args[0]==='-c'&&args.includes('tag')){events.push('tag created');return '';}
     if(args[0]==='push'){events.push(args.slice(1).join(' '));return '';}
@@ -383,4 +384,24 @@ test('force staging command trigger is exact or followed by a space, never an ar
   }
   assert.equal(eligible('/force-deploy-staging reason'),true);
   assert.equal(eligible('/force-deploy-staging'),true);
+});
+
+test('already-merged snapshot without dispatchable ci-cd.yml never creates a tag',async()=>{
+  const staging='7'.repeat(40),head='8'.repeat(40);
+  const events=[];
+  const subject=new StagingPR(async()=>{throw Error('unexpected CLI')},{},{},{owner:'test',repo:'repo'});
+  subject.staging=staging;
+  subject.assertStaging=async()=>events.push('staging verified');
+  subject.git=async(...args)=>{
+    events.push(args.join(' '));
+    if(args[0]==='merge-base')return '';
+    if(args[0]==='show')throw new Error('Missing selected CI/CD workflow');
+    throw Error('Unexpected call after missing workflow: '+args.join(' '));
+  };
+  await assert.rejects(
+    subject.publish({number:466,head,workflowFile:'ci-cd.yml',assertCurrent:async()=>{}}),
+    /existing staging snapshot lacks workflow_dispatch.*ci-cd\.yml/);
+  assert.ok(events.some(x=>x.includes(':.github/workflows/ci-cd.yml')));
+  assert.ok(!events.some(x=>x.includes('tag')));
+  assert.ok(!events.some(x=>x.startsWith('push')));
 });
