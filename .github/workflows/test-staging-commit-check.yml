@@ -1,0 +1,27 @@
+name: Test staging commit check
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/check-commits-in-staging.yml'
+      - '.github/workflows/test-staging-commit-check.yml'
+      - 'tests/test_check_commits_in_staging.py'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/check-commits-in-staging.yml'
+      - '.github/workflows/test-staging-commit-check.yml'
+      - 'tests/test_check_commits_in_staging.py'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise the workflow against local Git histories
+        run: python3 -m unittest discover -s tests -p 'test_check_commits_in_staging.py' -v
