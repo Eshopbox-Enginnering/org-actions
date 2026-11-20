@@ -59,9 +59,8 @@ jobs:
       github.event.issue.pull_request &&
       (github.event.comment.body == '/deploy-staging' ||
        startsWith(github.event.comment.body, '/force-deploy-staging'))
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    # Long-running CI/CD polling must not block the dedicated PR-check runner.
+    runs-on: self-hosted
     timeout-minutes: 120
     concurrency:
       group: central-staging-${{ github.repository }}
@@ -108,7 +107,34 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Verify proven rollout toolchain
+      # This job intentionally stays off checks-runners; use an isolated,
+      # pinned GitHub CLI because generic deployment runners may not have gh.
+      - name: Install pinned GitHub CLI for App-admin merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=2.79.0
+          case "$(uname -m)" in
+            x86_64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "Unsupported GitHub CLI architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          file="gh_${version}_linux_${arch}.tar.gz"
+          base="https://github.com/cli/cli/releases/download/v${version}"
+          dir="$RUNNER_TEMP/gh-cli-v${version}"
+          mkdir -p "$dir"
+          curl --fail --location --retry 3 --retry-delay 2 --silent --show-error \
+            "$base/$file" -o "$dir/$file"
+          curl --fail --location --retry 3 --retry-delay 2 --silent --show-error \
+            "$base/gh_${version}_checksums.txt" -o "$dir/checksums.txt"
+          (cd "$dir" && grep -F "  $file" checksums.txt | sha256sum --check --status)
+          tar -xzf "$dir/$file" -C "$dir"
+          cli="$dir/gh_${version}_linux_${arch}/bin/gh"
+          test -x "$cli"
+          "$cli" --version
+          echo "$(dirname "$cli")" >> "$GITHUB_PATH"
+
+      - name: Verify staging merge toolchain
         shell: bash
         run: |
           set -euo pipefail
