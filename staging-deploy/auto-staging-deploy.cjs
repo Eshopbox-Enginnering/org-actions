@@ -294,7 +294,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
 
 **Workflow run:** [View execution](${statusUrl}/actions/runs/${context.runId})
 ${process.env.STAGING_PR_URL ? `**Staging PR:** [View PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** ${process.env.STAGING_RUN_URL ? `[${process.env.STAGING_TAG} — View deployment](${process.env.STAGING_RUN_URL})` : `\`${process.env.STAGING_TAG}\` (awaiting CI/CD run)`}\n` : ''}${process.env.STAGING_RUN_URL ? `**CI/CD:** [View staging run](${process.env.STAGING_RUN_URL})\n` : ''}
-${!failed && process.env.STAGE_DEPLOY?.startsWith('✅') && /^[A-Za-z0-9-]+$/.test(process.env.STAGING_PR_AUTHOR || '') ? `**PR author:** @${process.env.STAGING_PR_AUTHOR} — staging deployment succeeded; please verify the application.\\n` : ''}
+${!failed && process.env.STAGE_DEPLOY?.startsWith('✅') && /^[A-Za-z0-9-]+$/.test(process.env.STAGING_PR_AUTHOR || '') ? `**PR author:** @${process.env.STAGING_PR_AUTHOR} — staging deployment succeeded; please verify the application.\n` : ''}
 ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
     await request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', { comment_id: statusId, body });
   };
