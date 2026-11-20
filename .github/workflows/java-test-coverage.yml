@@ -160,6 +160,33 @@ jobs:
         # Keep both results even when Maven fails. The final gate checks exit codes
         # AND test XML; ignoring test failures here lets Maven finish all tests.
         run: |
+          if [[ "$GITHUB_REPOSITORY" == "Eshopbox-Enginnering/building-blocks" && -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
+            # The mocked Cloud Tasks tests still initialize the SDK in both revisions.
+            test_adc=$(mktemp "$RUNNER_TEMP/building-blocks-test-adc.XXXXXXXX")
+            trap 'rm -f -- "$test_adc"' EXIT
+            python3 - "$test_adc" <<'PYTHON'
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          key = subprocess.check_output(
+              ['openssl', 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048'],
+              stderr=subprocess.DEVNULL, text=True,
+          )
+          Path(sys.argv[1]).write_text(json.dumps({
+              'type': 'service_account',
+              'project_id': 'local-test',
+              'client_id': '100000000000000000000',
+              'client_email': 'local-test@example.invalid',
+              'private_key_id': 'local-test',
+              'private_key': key,
+              'token_uri': 'http://127.0.0.1:1/token',
+          }))
+          PYTHON
+            export GOOGLE_APPLICATION_CREDENTIALS="$test_adc"
+          fi
+
           set +e
           for revision in base pr; do
             (
