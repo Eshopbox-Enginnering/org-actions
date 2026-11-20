@@ -250,7 +250,7 @@ test('temporary staging PR tag publication never re-pushes protected staging', (
   const source = fs.readFileSync(path.join(__dirname,'staging-pr.cjs'),'utf8');
   assert.ok(!source.includes("'--atomic','origin'"));
   assert.ok(!source.includes("this.staging + ':refs/heads/staging'"));
-  assert.equal((source.match(/await this\.assertStaging\(this\.staging\)/g)||[]).length,2);
+  assert.equal((source.match(/await this\.assertStaging\(this\.staging\)/g)||[]).length,3);
   assert.equal((source.match(/this\.git\('push','origin','refs\/tags\/'/g)||[]).length,2);
 });
 test('PR-controlled workflow code never executes on a persistent checks runner', () => {
@@ -326,7 +326,7 @@ test('integration: already-merged head publishes only a tag, without another PR'
   subject.assertStaging=async()=>events.push('remote staging verified');
   subject.git=async(...args)=>{
     if(args[0]==='merge-base')return '';
-    if(args[0]==='show')return 'on:\\n  workflow_dispatch:\\n';
+    if(args[0]==='show')return 'on:\n  workflow_dispatch:\n';
     if(args[0]==='tag')return 'dev-v1.0.1';
     if(args[0]==='-c'&&args.includes('tag')){events.push('tag created');return '';}
     if(args[0]==='push'){events.push(args.slice(1).join(' '));return '';}
