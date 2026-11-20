@@ -59,7 +59,9 @@ jobs:
       github.event.issue.pull_request &&
       (github.event.comment.body == '/deploy-staging' ||
        startsWith(github.event.comment.body, '/force-deploy-staging'))
-    runs-on: self-hosted
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     timeout-minutes: 120
     concurrency:
       group: central-staging-${{ github.repository }}
@@ -105,6 +107,15 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
           permission-pull-requests: write
+
+      - name: Verify proven rollout toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gh
+          command -v git
+          gh --version
+          git --version
 
       - name: Validate, promote through staging PR and report
         uses: actions/github-script@v7
