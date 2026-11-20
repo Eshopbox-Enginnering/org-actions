@@ -26,3 +26,19 @@ jobs:
           node --check staging-deploy/staging-deploy.test.cjs
       - name: Run staging automation tests
         run: node --test staging-deploy/staging-deploy.test.cjs
+
+  runner-toolchain:
+    name: Verify staging rollout runner toolchain
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
+    timeout-minutes: 10
+    steps:
+      - name: Verify GitHub CLI and Git on the actual staging runner group
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v gh
+          gh --version
+          command -v git
+          git --version
