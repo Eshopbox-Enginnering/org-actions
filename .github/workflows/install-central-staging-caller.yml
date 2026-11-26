@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  plan:
+  plan-and-install:
     # Trusted manual operator, same environment and App as guideline sync.
     runs-on:
       group: checks-runners
@@ -67,7 +67,7 @@ jobs:
           if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
             echo 'Central backlog issue must be numeric'; exit 1
           fi
-          python3 -m py_compile staging-deploy/install-caller.py staging-deploy/plan-rollout.py
+          python3 -m py_compile staging-deploy/install-caller.py staging-deploy/plan-rollout.py staging-deploy/install-batch.py
           python3 -m unittest discover -s tests -p 'test_staging_caller_installer.py' -v
       - name: Mint organization App discovery token
         id: app
