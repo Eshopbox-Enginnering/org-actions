@@ -133,7 +133,7 @@ class InstallerTests(unittest.TestCase):
                 return {"state": "active"}
             return info
         with mock.patch.object(planner, "api_json", side_effect=api), \
-             mock.patch.object(planner, "file_at", return_value=b"on:\\n  workflow_dispatch:\\n"):
+             mock.patch.object(planner, "file_at", return_value=b"on:\n  workflow_dispatch:\n"):
             state, reason = planner.inspect("testrepo","all")
             self.assertEqual(state,"skipped")
             self.assertIn("exactly one active",reason)
