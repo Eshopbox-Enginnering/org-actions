@@ -7,7 +7,7 @@ const STAGING_CHECK = 'Check PR commits exist in staging';
 const STAGING_WORKFLOW = '.github/workflows/check-commits-in-staging.yml';
 const CODEX_AUTHORS = new Set(['chatgpt-codex-connector[bot]', 'codex[agent]']);
 const WORKFLOW = 'cicd.yml'; // Legacy StagingGit.publish default.
-const DEPLOY_WORKFLOWS = ['cicd.yml', 'ci-cd.yml'];
+const DEPLOY_WORKFLOWS = ['cicd.yml', 'ci-cd.yml', 'cicd.yaml', 'ci-cd.yaml'];
 const time = value => Date.parse(value || '') || 0;
 // GitHub supplies the authenticated login. Codex agent identities need not have
 // the same REST user.type as the connector bot.
@@ -172,7 +172,7 @@ class StagingGit {
     const remote = (await this.git('ls-remote', 'origin', 'refs/heads/staging')).trim().split(/\s+/)[0];
     if (remote !== commit) throw new Error('Staging advanced before dispatch. Retry /deploy-staging to tag its current snapshot instead of deploying an older one.');
   }
-  async publish({ number, head, issue, assertCurrent }) {
+  async publish({ number, head, issue, assertCurrent, workflowFile = WORKFLOW }) {
     let tree;
     try {
       tree = (await this.git('merge-tree', '--write-tree', '--name-only', '-z', this.staging, head)).split('\0')[0].trim();
@@ -185,9 +185,9 @@ class StagingGit {
     }
     if (!/^[a-f0-9]{40,64}$/.test(tree)) throw new Error('Git did not return a valid merge tree.');
     let workflow;
-    try { workflow = await this.git('show', `${tree}:.github/workflows/${WORKFLOW}`); }
-    catch { throw new Error(`The staging merge does not contain .github/workflows/${WORKFLOW}. No refs were pushed.`); }
-    if (!/^\s+workflow_dispatch\s*:/m.test(workflow)) throw new Error(`${WORKFLOW} on the staging merge must enable workflow_dispatch. No refs were pushed.`);
+    try { workflow = await this.git('show', `${tree}:.github/workflows/${workflowFile}`); }
+    catch { throw new Error(`The staging merge does not contain .github/workflows/${workflowFile}. No refs were pushed.`); }
+    if (!/^\s+workflow_dispatch\s*:/m.test(workflow)) throw new Error(`${workflowFile} on the staging merge must enable workflow_dispatch. No refs were pushed.`);
     let commit = this.staging;
     try { await this.git('merge-base', '--is-ancestor', head, this.staging); }
     catch {
@@ -411,7 +411,7 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       } catch (error) { if (error.status !== 404) throw error; }
     }
     if (available.length !== 1)
-      throw new Error('Expected exactly one active staging CI/CD workflow (cicd.yml or ci-cd.yml); found: ' + available.join(', '));
+      throw new Error('Expected exactly one active staging CI/CD workflow (cicd.yml, ci-cd.yml, cicd.yaml, ci-cd.yaml); found: ' + available.join(', '));
     const workflowFile = available[0];
     await git.prepare(number, head);
     await assertCurrent();
