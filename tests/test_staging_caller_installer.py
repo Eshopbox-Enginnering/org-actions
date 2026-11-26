@@ -236,7 +236,7 @@ class InstallerTests(unittest.TestCase):
                     if "/actions/workflows/" in path:
                         return {"state": "active" if path.endswith(filename) else "disabled_manually"}
                     return {"default_branch": "main"}
-                with mock.patch.object(planner, "api_json", side_effect=api), mock.patch.object(planner, "file_at", side_effect=lambda repo,path,ref: b"on:\\n  workflow_dispatch:\\n" if path.endswith(filename) else None):
+                with mock.patch.object(planner, "api_json", side_effect=api), mock.patch.object(planner, "file_at", side_effect=lambda repo,path,ref: b"on:\n  workflow_dispatch:\n" if path.endswith(filename) else None):
                     self.assertEqual(planner.inspect("service", "all")[0], "eligible")
 
 if __name__ == "__main__":
