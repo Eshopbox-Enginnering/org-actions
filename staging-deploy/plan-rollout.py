@@ -17,13 +17,13 @@ MAX_BATCH = 250
 NAME = re.compile(r"[A-Za-z0-9_.-]+\Z")
 CALLER = (Path(__file__).resolve().parent / "caller.yml").read_bytes()
 DEST = ".github/workflows/auto-staging-deploy.yml"
-DEPLOY = ("cicd.yml", "ci-cd.yml")
+DEPLOY = ("cicd.yml", "ci-cd.yml", "cicd.yaml", "ci-cd.yaml")
 
 
 def gh(*args):
     p = subprocess.run(["gh", *args], capture_output=True, text=True)
     if p.returncode:
-        raise RuntimeError(p.stderr.strip()[-700:] or "GitHub CLI request failed")
+        raise RuntimeError(f"gh {' '.join(args)}: {p.stderr.strip()[-700:] or 'GitHub CLI request failed'}")
     return p.stdout.strip()
 
 
@@ -99,7 +99,7 @@ def inspect(repo, target):
         if workflow.get("state") == "active":
             active.append(filename)
     if len(active) != 1:
-        return "skipped", f"expected exactly one active cicd.yml or ci-cd.yml, found {active}"
+        return "skipped", f"expected exactly one active CI/CD workflow from {DEPLOY}, found {active}"
     workflow_file = active[0]
     for ref in ("staging", "main"):
         content = file_at(repo, f".github/workflows/{workflow_file}", ref)

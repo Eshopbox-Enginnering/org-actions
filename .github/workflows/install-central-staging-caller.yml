@@ -38,7 +38,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  plan:
+  plan-and-install:
     # Trusted manual operator, same environment and App as guideline sync.
     runs-on:
       group: checks-runners
@@ -46,10 +46,7 @@ jobs:
     environment: agents-org-production
     permissions:
       contents: read
-    timeout-minutes: 30
-    outputs:
-      matrix: ${{ steps.discover.outputs.matrix }}
-      has_targets: ${{ steps.discover.outputs.has_targets }}
+    timeout-minutes: 120
     steps:
       - name: Checkout trusted org-actions main
         uses: actions/checkout@v4
@@ -70,7 +67,7 @@ jobs:
           if ! [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
             echo 'Central backlog issue must be numeric'; exit 1
           fi
-          python3 -m py_compile staging-deploy/install-caller.py staging-deploy/plan-rollout.py
+          python3 -m py_compile staging-deploy/install-caller.py staging-deploy/plan-rollout.py staging-deploy/install-batch.py
           python3 -m unittest discover -s tests -p 'test_staging_caller_installer.py' -v
       - name: Mint organization App discovery token
         id: app
@@ -96,7 +93,7 @@ jobs:
             --target "$TARGET" --repository "$REPOSITORY" \
             --repositories "$REPOSITORIES" \
             --output rollout-matrix.json --report rollout-report.json
-          echo "matrix=$(cat rollout-matrix.json)" >> "$GITHUB_OUTPUT"
+          python3 -c 'import json; print("repositories=" + ",".join(x["repository"] for x in json.load(open("rollout-matrix.json"))["include"]))' >> "$GITHUB_OUTPUT"
           python3 -c 'import json; print("has_targets=" + str(bool(json.load(open("rollout-matrix.json"))["include"])).lower())' >> "$GITHUB_OUTPUT"
           echo "### Central caller rollout plan: $OPERATION / $TARGET" >> "$GITHUB_STEP_SUMMARY"
           echo 'See rollout-report artifact for per-repository eligibility.' >> "$GITHUB_STEP_SUMMARY"
@@ -109,50 +106,27 @@ jobs:
           path: rollout-report.json
           if-no-files-found: ignore
 
-  install:
-    needs: plan
-    if: ${{ inputs.operation == 'APPLY' && needs.plan.result == 'success' && needs.plan.outputs.has_targets == 'true' }}
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
-    environment: agents-org-production
-    permissions:
-      contents: read
-    timeout-minutes: 30
-    steps:
-      - name: Checkout trusted org-actions main
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          persist-credentials: false
       - name: Mint organization App installation token
-        id: app
+        if: ${{ inputs.operation == 'APPLY' && steps.discover.outputs.has_targets == 'true' }}
+        id: install_app
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ vars.ORG_AGENTS_APP_ID }}
           private-key: ${{ secrets.ORG_AGENTS_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: ${{ matrix.repository }}
+          repositories: ${{ steps.discover.outputs.repositories }}
           permission-contents: write
           permission-pull-requests: write
           permission-workflows: write
-      - name: Configure Git CLI App identity
+          permission-actions: read
+      - name: Install callers with bounded concurrency
+        if: ${{ inputs.operation == 'APPLY' && steps.discover.outputs.has_targets == 'true' }}
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-        run: gh auth setup-git
-      - name: Install one caller via verified staging-first PR merges
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_TOKEN: ${{ steps.install_app.outputs.token }}
           CONFIRMATION: ${{ inputs.confirmation }}
-          REPOSITORY: ${{ matrix.repository }}
           ISSUE: ${{ inputs.central_backlog_issue }}
         shell: bash
         run: |
           set -euo pipefail
-          python3 staging-deploy/install-caller.py \
-            --repository "$REPOSITORY" --operation APPLY --issue "$ISSUE"
-          echo "Installed and verified: $REPOSITORY" >> "$GITHUB_STEP_SUMMARY"
+          gh auth setup-git
+          python3 staging-deploy/install-batch.py --matrix rollout-matrix.json --issue "$ISSUE"

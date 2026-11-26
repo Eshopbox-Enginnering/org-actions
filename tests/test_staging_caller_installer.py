@@ -142,12 +142,13 @@ class InstallerTests(unittest.TestCase):
         source = (ROOT / ".github/workflows/install-central-staging-caller.yml").read_text()
         for target in ("single","selected","backend","all"):
             self.assertIn(target,source)
-        self.assertIn("max-parallel: 3",source)
-        self.assertIn("fail-fast: false",source)
+        self.assertEqual(source.count("environment: agents-org-production"), 1)
+        self.assertIn("install-batch.py",source)
         self.assertIn("permission-workflows: write",source)
         self.assertIn("rollout-report.json",source)
         self.assertIn("operation == 'APPLY'",source)
-        self.assertIn("fromJSON(needs.plan.outputs.matrix)",source)
+        self.assertIn("steps.discover.outputs.repositories",source)
+        self.assertEqual(source.count("permission-actions: read"), 2)
 
 
     def test_names_reject_case_insensitive_duplicates(self):
@@ -225,6 +226,18 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("permission-actions: read",discovery)
         self.assertNotIn("permission-workflows: write",discovery)
 
+    def test_yaml_workflow_names_supported(self):
+        spec = importlib.util.spec_from_file_location("plan_yaml", ROOT / "staging-deploy/plan-rollout.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        for filename in ("ci-cd.yaml", "cicd.yaml"):
+            with self.subTest(filename=filename):
+                def api(path):
+                    if "/actions/workflows/" in path:
+                        return {"state": "active" if path.endswith(filename) else "disabled_manually"}
+                    return {"default_branch": "main"}
+                with mock.patch.object(planner, "api_json", side_effect=api), mock.patch.object(planner, "file_at", side_effect=lambda repo,path,ref: b"on:\\n  workflow_dispatch:\\n" if path.endswith(filename) else None):
+                    self.assertEqual(planner.inspect("service", "all")[0], "eligible")
 
 if __name__ == "__main__":
     unittest.main()
