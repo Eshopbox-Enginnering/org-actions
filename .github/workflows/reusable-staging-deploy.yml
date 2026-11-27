@@ -20,9 +20,9 @@ jobs:
       (github.event.comment.body == '/deploy-staging' ||
        (github.event.comment.body == '/force-deploy-staging' ||
        startsWith(github.event.comment.body, '/force-deploy-staging ')))
-    runs-on:
-      group: checks-runners
-      labels: checks-runner
+    # Acknowledge independently of the self-hosted deployment queue.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       comment_id: ${{ steps.ack.outputs.comment_id }}
     steps:
@@ -36,7 +36,7 @@ jobs:
               '<!-- central-staging-deploy:v1 -->',
               `<!-- central-staging-run:${context.runId} -->`,
               '## 🚀 Staging deployment',
-              '**Status:** ⏳ Command received; preparing deployment',
+              '**Status:** ⏳ Command received; deployment queued',
               '',
               '| Step | Result |',
               '|---|---|',
@@ -68,6 +68,20 @@ jobs:
       group: central-staging-${{ github.repository }}
       cancel-in-progress: false
     steps:
+      - name: Report deployment runner started
+        uses: actions/github-script@v7
+        env:
+          STAGING_ACK_COMMENT_ID: ${{ needs.acknowledge.outputs.comment_id }}
+        with:
+          script: |
+            const commentId = Number(process.env.STAGING_ACK_COMMENT_ID);
+            if (!Number.isSafeInteger(commentId) || commentId <= 0) throw new Error('Missing staging acknowledgement comment ID.');
+            const { data: comment } = await github.rest.issues.getComment({ ...context.repo, comment_id: commentId });
+            await github.rest.issues.updateComment({
+              ...context.repo, comment_id: commentId,
+              body: comment.body.replace('⏳ Command received; deployment queued', '🔄 Deployment runner started; initializing')
+            });
+
       - name: Checkout trusted target repository
         uses: actions/checkout@v4
         with:
