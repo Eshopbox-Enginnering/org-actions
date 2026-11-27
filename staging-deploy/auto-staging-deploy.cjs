@@ -245,6 +245,30 @@ function hasCodexQuotaEvidence({comments, head, latestRequestAt = 0, prCreatedAt
   });
 }
 
+async function refreshStagingCheck({ pages, request, head, number }) {
+  const findRun = async () => newest((await pages('GET /repos/{owner}/{repo}/actions/runs', { head_sha: head }))
+    .filter(r => stagingWorkflow(r) && r.head_sha === head && (r.pull_requests || []).some(p => p.number === number)));
+  const staging = await findRun();
+  if (!staging) throw new Error('Staging-presence workflow not found for this PR head.');
+  if (staging.status !== 'completed') return '⏳ Staging-presence check already queued or running';
+  if (staging.conclusion === 'success') return '✅ Staging-presence check passed';
+  const jobs = await pages('GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs', { run_id: staging.id, filter: 'latest' });
+  const job = newest(jobs.filter(j => j.name === 'check-commits' || j.name === STAGING_CHECK));
+  if (!job) throw new Error('Staging-presence check job not found.');
+  if (job.status !== 'completed') return '⏳ Staging-presence check already queued or running';
+  try {
+    await request('POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun', { job_id: job.id });
+  } catch (error) {
+    // Another actor may have started a rerun between the read and POST.
+    if (error.status !== 409 && error.status !== 422 && error.status !== 403) throw error;
+    const current = await findRun();
+    if (current && current.status !== 'completed') return '⏳ Staging-presence check already queued or running';
+    if (current?.conclusion === 'success') return '✅ Staging-presence check passed';
+    throw error;
+  }
+  return '⏳ Staging-presence check rerun requested';
+}
+
 async function deploy({ github, context, core, git, command: run, forceDeployUsers = process.env.FORCE_DEPLOY_USERS || '', sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now }) {
   const event = context.payload;
   if (context.eventName !== 'issue_comment' || event.action !== 'created' || !event.issue?.pull_request) return;
@@ -265,6 +289,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
   if (!Number.isSafeInteger(statusId) || statusId <= 0)
     throw new Error('Missing staging deployment acknowledgment comment ID.');
   let stage = '⏳ Initializing';
+  let postDeployCheck = '';
   const status = async (message) => {
     const previousStage = stage;
     stage = message;
@@ -296,6 +321,7 @@ async function deploy({ github, context, core, git, command: run, forceDeployUse
 **Workflow run:** [View execution](${statusUrl}/actions/runs/${context.runId})
 ${process.env.STAGING_PR_URL ? `**Staging PR:** [View PR](${process.env.STAGING_PR_URL})\n` : ''}${process.env.STAGING_TAG ? `**Tag:** ${process.env.STAGING_RUN_URL ? `[${process.env.STAGING_TAG} — View deployment](${process.env.STAGING_RUN_URL})` : `\`${process.env.STAGING_TAG}\` (awaiting CI/CD run)`}\n` : ''}${process.env.STAGING_RUN_URL ? `**CI/CD:** [View staging run](${process.env.STAGING_RUN_URL})\n` : ''}
 ${!failed && process.env.STAGE_DEPLOY?.startsWith('✅') && /^[A-Za-z0-9-]+$/.test(process.env.STAGING_PR_AUTHOR || '') ? `**PR author:** @${process.env.STAGING_PR_AUTHOR} — staging deployment succeeded; please verify the application.\n` : ''}
+${postDeployCheck ? `**Post-deployment validation:** ${postDeployCheck}\n` : ''}
 ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\` after fixing it.' : ''}`;
     await request('PATCH /repos/{owner}/{repo}/issues/comments/{comment_id}', { comment_id: statusId, body });
   };
@@ -492,13 +518,14 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
       await request('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', { issue_number: number, labels: ['force-deployed'] });
       await comment(`⚠️ Force-deployed by @${actor}: ${reason}, skipped: Codex review, human-decision threads`);
     }
-    const runs = await pages('GET /repos/{owner}/{repo}/actions/runs', { head_sha: head });
-    const staging = newest(runs.filter(r => stagingWorkflow(r) && r.head_sha === head && (r.pull_requests || []).some(p => p.number === number)));
-    if (!staging) throw new Error(`Deployment succeeded, but no ${STAGING_CHECK} workflow run exists for this PR head.`);
-    const jobs = await pages('GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs', { run_id: staging.id, filter: 'latest' });
-    const job = newest(jobs.filter(j => j.name === 'check-commits' || j.name === STAGING_CHECK));
-    if (!job) throw new Error(`Deployment succeeded, but the ${STAGING_CHECK} job could not be found.`);
-    await request('POST /repos/{owner}/{repo}/actions/jobs/{job_id}/rerun', { job_id: job.id });
+    // Deployment is already confirmed. Follow-up check errors must not overwrite it.
+    try {
+      postDeployCheck = await refreshStagingCheck({ pages, request, head, number });
+    } catch (error) {
+      postDeployCheck = '⚠️ Staging-presence check refresh failed; rerun the check manually: ' + error.message;
+      core.warning(postDeployCheck);
+    }
+    await status(stage);
   } catch (error) {
     const location = published ? `\n\nStaging tag: ${published.tag}, commit: ${published.commit}.` : '';
     await comment(`Staging deployment stopped: ${error.message}${location}`);
@@ -508,4 +535,4 @@ ${failed ? '**Action required:** Review the failure and retry \`/deploy-staging\
   }
 }
 
-module.exports = { deploy, command, StagingGit, verifyCodex, verifyChecks, nextTag, hasCodexQuotaEvidence };
+module.exports = { refreshStagingCheck, deploy, command, StagingGit, verifyCodex, verifyChecks, nextTag, hasCodexQuotaEvidence };
