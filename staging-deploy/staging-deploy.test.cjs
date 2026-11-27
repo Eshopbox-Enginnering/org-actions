@@ -405,3 +405,38 @@ test('already-merged snapshot without dispatchable ci-cd.yml never creates a tag
   assert.ok(!events.some(x=>x.includes('tag')));
   assert.ok(!events.some(x=>x.startsWith('push')));
 });
+
+const {refreshStagingCheck} = require('./auto-staging-deploy.cjs');
+function stagingCheckFixture(status, conclusion) {
+  return {id:10, path:'.github/workflows/check-commits-in-staging.yml', head_sha:SHA,
+    pull_requests:[{number:1}], status, conclusion};
+}
+test('post-deployment check skips already successful or running workflow', async () => {
+  for (const [status, conclusion, expected] of [
+    ['completed','success',/passed/], ['queued',null,/already queued/], ['in_progress',null,/already queued/]
+  ]) {
+    const result = await refreshStagingCheck({head:SHA,number:1,
+      pages:async()=>[stagingCheckFixture(status,conclusion)],
+      request:async()=>assert.fail('must not rerun')});
+    assert.match(result,expected);
+  }
+});
+test('post-deployment check reruns completed failed check', async () => {
+  const result = await refreshStagingCheck({head:SHA,number:1,
+    pages:async route=>route.endsWith('/jobs')?[{id:11,name:'check-commits',status:'completed'}]:[stagingCheckFixture('completed','failure')],
+    request:async (route,args)=>{assert.match(route,/rerun$/);assert.equal(args.job_id,11);}});
+  assert.match(result,/rerun requested/);
+});
+test('concurrent check rerun rejection is reconciled against fresh workflow status', async () => {
+  let reads=0;
+  const result = await refreshStagingCheck({head:SHA,number:1,
+    pages:async route=>route.endsWith('/jobs')?[{id:11,name:'check-commits',status:'completed'}]:
+      [++reads===1?stagingCheckFixture('completed','failure'):stagingCheckFixture('in_progress',null)],
+    request:async()=>{throw Object.assign(new Error('The workflow run containing this job is already running'),{status:403});}});
+  assert.match(result,/already queued/);
+});
+test('unrelated rerun rejection is not reported as queued', async () => {
+  await assert.rejects(refreshStagingCheck({head:SHA,number:1,
+    pages:async route=>route.endsWith('/jobs')?[{id:11,name:'check-commits',status:'completed'}]:[stagingCheckFixture('completed','failure')],
+    request:async()=>{throw Object.assign(new Error('Forbidden'),{status:403});}}),/Forbidden/);
+});
