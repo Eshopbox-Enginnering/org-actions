@@ -20,8 +20,10 @@ jobs:
       (github.event.comment.body == '/deploy-staging' ||
        (github.event.comment.body == '/force-deploy-staging' ||
        startsWith(github.event.comment.body, '/force-deploy-staging ')))
-    # Acknowledge independently of the self-hosted deployment queue.
-    runs-on: ubuntu-latest
+    # Keep acknowledgement on the existing dedicated checks runner.
+    runs-on:
+      group: checks-runners
+      labels: checks-runner
     timeout-minutes: 5
     outputs:
       comment_id: ${{ steps.ack.outputs.comment_id }}
